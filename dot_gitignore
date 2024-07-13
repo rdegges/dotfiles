@@ -1,0 +1,17 @@
+# Annoying Mac file.
+.DS_Store
+
+# `asdf` package manager configs.
+.tool-versions
+
+# Node packages.
+node_modules
+
+# Sensitive environment variable files.
+.env
+
+# Python bytecode.
+*.py[co]
+
+# Swap files.
+.*.swp
