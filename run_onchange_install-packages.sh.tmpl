@@ -1,3 +1,4 @@
+{{- if eq .chezmoi.os "darwin" -}}
 #!/bin/bash
 # ~/.brew/Brewfile hash: {{ include "dot_brew/Brewfile" | sha256sum }}
 
@@ -8,3 +9,4 @@ if command -v brew &> /dev/null; then
 else
     echo "Homebrew not found. Skipping Brewfile installation."
 fi
+{{ end -}}
