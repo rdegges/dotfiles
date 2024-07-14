@@ -1,6 +1,6 @@
 tap "homebrew/bundle"
 tap "snyk/tap"
-brew "chezmoi"
+#brew "chezmoi"
 brew "coreutils"
 brew "openssl@3"
 brew "xz"
