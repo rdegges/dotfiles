@@ -9,4 +9,25 @@ if command -v brew &> /dev/null; then
 else
     echo "Homebrew not found. Skipping Brewfile installation."
 fi
+
+# Install oh-my-zsh
+function is_zsh_shell {
+  [ "$SHELL" == "/bin/zsh" ]
+}
+
+function is_oh_my_zsh_installed {
+  [ -d "$HOME/.oh-my-zsh" ]
+}
+
+if is_zsh_shell; then
+  if ! is_oh_my_zsh_installed; then
+    echo "Installing oh-my-zsh..."
+    /bin/sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)"
+    echo "oh-my-zsh installed successfully."
+  else
+    echo "oh-my-zsh is already installed."
+  fi
+else
+  echo "zsh is not the current shell. Please change your shell to zsh and try again."
+fi
 {{ end -}}
