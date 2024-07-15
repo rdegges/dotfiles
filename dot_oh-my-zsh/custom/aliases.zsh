@@ -36,11 +36,18 @@ alias pyc="rm *.pyc"
 # Node helpers.
 alias nt="npm test"
 
+# asdf helpers.
+alias aa="asdf latest --all"
+alias ai="asdf install"
+alias ap="asdf plugin list all"
+
+
 # Dotfile helpers.
 alias ca="chezmoi add"
 alias ce="chezmoi edit"
 alias ci="echo 'chezmoi init --apply git@github.com:<GITHUB_USERNAME>/dotfiles.git'"
 alias cu="chezmoi update --force"
+alias cy="chezmoi apply"
 
 # Brew helpers.
 alias bd="brew bundle dump --force --file=~/.brew/Brewfile; chezmoi add ~/.brew/Brewfile"
