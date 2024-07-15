@@ -41,7 +41,6 @@ alias aa="asdf latest --all"
 alias ai="asdf install"
 alias ap="asdf plugin list all"
 
-
 # Dotfile helpers.
 alias ca="chezmoi add"
 alias ce="chezmoi edit"
@@ -52,3 +51,6 @@ alias cy="chezmoi apply"
 # Brew helpers.
 alias bd="brew bundle dump --force --file=~/.brew/Brewfile; chezmoi add ~/.brew/Brewfile"
 alias bi="brew install"
+
+# Mac helpers.
+alias dstore="find . -name '.DS_Store' -delete"
