@@ -41,6 +41,7 @@ alias aa="asdf latest --all"
 alias aa="asdf current"
 alias ai="asdf install"
 alias ap="asdf plugin list all"
+alias api="asdf plugin add"
 
 # Dotfile helpers.
 alias ca="chezmoi add"
