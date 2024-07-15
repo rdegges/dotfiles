@@ -38,6 +38,7 @@ alias nt="npm test"
 
 # asdf helpers.
 alias aa="asdf latest --all"
+alias aa="asdf current"
 alias ai="asdf install"
 alias ap="asdf plugin list all"
 
