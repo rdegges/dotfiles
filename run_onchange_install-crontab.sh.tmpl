@@ -1,0 +1,9 @@
+{{- if eq .chezmoi.os "darwin" -}}
+#!/bin/bash
+# ~/.cron/crontab hash: {{ include "dot_cron/crontab" | sha256sum }}
+
+# Install crontab.
+echo "Installing crontab..."
+crontab ~/.cron/crontab
+echo "crontab installed."
+{{ end -}}
