@@ -1,2 +1,5 @@
 # Keep `brew` packages up-to-date.
 0 10 * * * brew update --force --quiet; brew upgrade --greedy --quiet
+
+# Keep dotfiles updated with `chezmoi`.
+0 * * * * chezmoi update --force
