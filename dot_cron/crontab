@@ -1,0 +1,2 @@
+# Keep `brew` packages up-to-date.
+0 10 * * * brew update --force --quiet; brew upgrade --greedy --quiet
