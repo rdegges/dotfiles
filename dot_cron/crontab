@@ -2,4 +2,4 @@
 0 10 * * * brew update --force --quiet; brew upgrade --greedy --quiet
 
 # Keep dotfiles updated with `chezmoi`.
-0 * * * * chezmoi update --force
+0 * * * * /opt/homebrew/bin/chezmoi update --force
