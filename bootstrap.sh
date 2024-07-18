@@ -37,3 +37,15 @@ echo "chezmoi installed!"
 echo "Syncing Homebrew packages and dotfiles..."
 chezmoi init --apply git@github.com:rdegges/dotfiles.git
 echo "Homebrew packages and dotfiles installed!"
+
+echo "Installing development tools..."
+asdf plugin add python
+asdf plugin add nodejs
+asdf plugin add golang
+asdf install python latest
+asdf install nodejs latest
+asdf install golang latest
+asdf global python latest
+asdf global nodejs latest
+asdf global golang latest
+echo "Development tools installed!"
