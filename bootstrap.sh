@@ -42,10 +42,13 @@ echo "Installing development tools..."
 asdf plugin add python
 asdf plugin add nodejs
 asdf plugin add golang
+asdf plugin add pipx
 asdf install python latest
 asdf install nodejs latest
 asdf install golang latest
+asdf install pipx latest
 asdf global python latest
 asdf global nodejs latest
 asdf global golang latest
+asdf global pipx latest
 echo "Development tools installed!"
