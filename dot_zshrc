@@ -108,3 +108,6 @@ source $ZSH/oh-my-zsh.sh
 
 # Set up `pipx` so all installed packages can run.
 export PATH="/Users/rdegges/.local/bin:$PATH"
+
+# Set up `go` so all installed tools can run.
+. ~/.asdf/plugins/golang/set-env.zsh
