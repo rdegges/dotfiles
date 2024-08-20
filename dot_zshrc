@@ -111,3 +111,4 @@ export PATH="/Users/rdegges/.local/bin:$PATH"
 
 # Set up `go` so all installed tools can run.
 . ~/.asdf/plugins/golang/set-env.zsh
+export PATH=$PATH:$GOPATH/bin
