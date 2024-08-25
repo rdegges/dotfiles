@@ -6,3 +6,6 @@
 
 # Keep `asdf` package maner updated.
 0 * * * * asdf plugin update --all
+
+# Keep all `pipx` packages updated.
+0 * * * * /Users/rdegges/.asdf/shims/pipx upgrade-all
