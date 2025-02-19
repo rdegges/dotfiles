@@ -115,3 +115,6 @@ source ~/.asdf/plugins/golang/set-env.zsh
 # Configure `aider` settings.
 export AIDER_MODEL=anthropic/claude-3-sonnet-20240229
 export AIDER_MAP_TOKENS=1024
+
+# Set up `jj` completions
+source <(COMPLETE=zsh jj)
