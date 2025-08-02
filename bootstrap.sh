@@ -16,6 +16,11 @@ echo "Installing Git..."
 brew install git
 echo "Git installed!"
 
+# Install Starship.
+echo "Installing Starship..."
+brew install starship
+echo "Starship installed!"
+
 echo "Creating SSH key..."
 ssh-keygen -t rsa -C "r@rdegges.com" -f ~/.ssh/id_rsa -N ""
 echo "SSH key created!"
