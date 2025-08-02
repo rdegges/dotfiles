@@ -113,4 +113,4 @@ export PATH="/Users/rdegges/.local/bin:$PATH"
 source ~/.asdf/plugins/golang/set-env.zsh
 
 # Set up `starship` prompt.
-eval "$(starship init bash)"
+eval "$(starship init zsh)"
