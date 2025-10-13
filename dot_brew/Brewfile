@@ -1,4 +1,5 @@
 tap "snyk/tap"
+brew "asdf"
 brew "xz"
 brew "openssl@3"
 brew "readline"
