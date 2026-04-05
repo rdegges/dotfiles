@@ -50,6 +50,7 @@ These rules are **global defaults**. If any project-specific `CLAUDE.md` or inst
 
 - I use Obsidian to store all of my personal notes and knowledge.
 - My Obsidian vault should be located at ~/Vault and is always synced. You can reference files in this folder and sub-folders as needed to pull detailed info and knowledge.
+- If you're working on a new project for me (like an actual coding project), please ensure I have a note created for it in Obsidian, and that it includes high-level info about the project's purpose, when I started working on it, when I last worked on it, and all the other relevant metadata that makese sense: is it open source? Is it a paid app? Is it for personal stuff? Work stuff? Link to the GitHub repo, etc. Additionally, ensure that any new projects are linked to a master "Projects" note so I can look at that page to see everything.
 
 ## Explanations and Documentation
 
