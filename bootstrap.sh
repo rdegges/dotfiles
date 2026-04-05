@@ -49,17 +49,20 @@ asdf plugin add nodejs
 asdf plugin add golang
 asdf plugin add pipx
 asdf plugin add uv
+asdf plugin add bun
 
 asdf install python latest
 asdf install nodejs latest
 asdf install golang latest
 asdf install pipx latest
 asdf install uv latest
+asdf install bun latest
 
 asdf set python latest --home
 asdf set nodejs latest --home
 asdf set golang latest --home
 asdf set pipx latest --home
 asdf set uv latest --home
+asdf set bun latest --home
 
 echo "Development tools installed!"
