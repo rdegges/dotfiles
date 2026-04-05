@@ -9,3 +9,9 @@
 
 # Keep all `pipx` packages updated.
 0 * * * * /Users/rdegges/.asdf/shims/pipx upgrade-all
+
+# Clean up old `brew` package versions.
+0 11 * * 6 /opt/homebrew/bin/brew cleanup --prune=30 -q
+
+# Keep Oh My Zsh updated.
+0 10 * * 6 /usr/bin/env zsh -c 'cd $HOME/.oh-my-zsh && git pull -q'
