@@ -4,7 +4,7 @@
 # Keep dotfiles updated with `chezmoi`.
 0 * * * * /opt/homebrew/bin/chezmoi update --force
 
-# Keep `asdf` package maner updated.
+# Keep `asdf` package manager updated.
 0 * * * * asdf plugin update --all
 
 # Keep all `pipx` packages updated.
