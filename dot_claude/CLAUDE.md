@@ -46,11 +46,43 @@ These rules are **global defaults**. If any project-specific `CLAUDE.md` or inst
 - I use the `asdf` package manager to manage all of my developer dependencies. You can use this to install certain version of Python, Node, Bun, Go, etc. if needed.
 - I use chezmoi to manage my dotfiles, and my dotfiles repo is at https://github.com/rdegges/dotfiles
 
-## Notes and Knowledge
+## Notes and Knowledge (Obsidian Vault)
 
-- I use Obsidian to store all of my personal notes and knowledge.
-- My Obsidian vault should be located at ~/Vault and is always synced. You can reference files in this folder and sub-folders as needed to pull detailed info and knowledge.
-- If you're working on a new project for me (like an actual coding project), please ensure I have a note created for it in Obsidian, and that it includes high-level info about the project's purpose, when I started working on it, when I last worked on it, and all the other relevant metadata that makese sense: is it open source? Is it a paid app? Is it for personal stuff? Work stuff? Link to the GitHub repo, etc. Additionally, ensure that any new projects are linked to a master "Projects" note so I can look at that page to see everything.
+My Obsidian vault is at `~/Vault` and is always synced via Obsidian Sync. This is my personal knowledge base and your primary source of context about me, my work, and my thinking.
+
+### Automatic Context Pulling
+
+**At the start of every session or task**, proactively read these key files from my vault to ground yourself in what I'm currently working on:
+
+1. `~/Vault/Personal/Now.md` — My current priorities and active work. Read this first.
+2. `~/Vault/Personal/Preferences.md` — How I like things done (code, writing, communication).
+3. `~/Vault/Personal/Projects.md` — Master index of all projects with links.
+
+**When I reference a specific project or topic**, check if there's a matching note in `~/Vault/Personal/` before asking me for context. For example, if I say "help me with the Shellkode thing," read `~/Vault/Personal/Shellkode.md` first.
+
+**When the topic is ambiguous**, scan the vault directory listing (`ls ~/Vault/Personal/`) to see if any note titles match, then read the relevant ones.
+
+### Keeping the Vault Updated
+
+- **New projects:** When I start a new coding or writing project, create a note for it in Obsidian with: purpose, start date, last worked on date, status, whether it's open source/paid/personal/work, link to the GitHub repo, and any other relevant metadata. Link it from `Projects.md`.
+- **Decisions and context:** If we make an important decision during a session (architecture choice, tool selection, strategy change), append a brief entry to the relevant project note so future sessions have that context.
+- **Now page:** If my priorities visibly shift during our work (e.g., I say "I'm dropping X to focus on Y"), offer to update `Now.md`.
+- **People:** If I mention someone new in a working context (new report, stakeholder, collaborator), offer to add them to `People.md`.
+
+### Vault Structure
+
+```
+~/Vault/Personal/
+├── Now.md              # Current week's priorities and focus
+├── Preferences.md      # How I like things done
+├── Projects.md         # Master project index
+├── People.md           # Team, stakeholders, contacts
+├── Weekly Planner.md   # Weekly planning template
+├── <project>.md        # One note per project/initiative
+└── ...
+```
+
+Do not create subfolders without asking — I prefer a flat structure for now.
 
 ## Explanations and Documentation
 
