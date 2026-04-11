@@ -48,41 +48,119 @@ These rules are **global defaults**. If any project-specific `CLAUDE.md` or inst
 
 ## Notes and Knowledge (Obsidian Vault)
 
-My Obsidian vault is at `~/Vault` and is always synced via Obsidian Sync. This is my personal knowledge base and your primary source of context about me, my work, and my thinking.
+My Obsidian vault is at `~/Vault/Personal` and is always synced via Obsidian Sync. It is my personal knowledge base and your primary source of context about me, my work, and my thinking. The vault follows a PARA layout (Projects / Areas / Resources / Archive) with a **Snyk/Personal split** at every level, plus top-level `People/` and `Meetings/` folders that also split Snyk from Personal.
 
 ### Automatic Context Pulling
 
-**At the start of every session or task**, proactively read these key files from my vault to ground yourself in what I'm currently working on:
+**At the start of every session or task**, proactively read these baseline files to ground yourself in what I'm currently working on:
 
-1. `~/Vault/Personal/Now.md` — My current priorities and active work. Read this first.
+1. `~/Vault/Personal/Now.md` — Current priorities and active work. Read this first.
 2. `~/Vault/Personal/Preferences.md` — How I like things done (code, writing, communication).
-3. `~/Vault/Personal/Projects.md` — Master index of all projects with links.
+3. `~/Vault/Personal/Projects.md` — Master index of projects with links.
 
-**When I reference a specific project or topic**, check if there's a matching note in `~/Vault/Personal/` before asking me for context. For example, if I say "help me with the Shellkode thing," read `~/Vault/Personal/Shellkode.md` first.
+**For any work-related request**, also check the Snyk side of PARA for relevant context before asking me:
 
-**When the topic is ambiguous**, scan the vault directory listing (`ls ~/Vault/Personal/`) to see if any note titles match, then read the relevant ones.
+- `~/Vault/Personal/Projects/Snyk/` — Active Snyk initiatives and projects.
+- `~/Vault/Personal/Areas/Snyk/` — Ongoing Snyk responsibilities (GTM AI, DevRel, SecRel, Community, Content, etc.).
+- `~/Vault/Personal/Resources/Snyk/` — Reference material. Start with `Snyk Institutional Knowledge.md` — it's the canonical brain-dump of how things work at Snyk.
+
+For personal requests, mirror the same pattern against `Projects/Personal/`, `Areas/Personal/`, and `Resources/Personal/`.
+
+**When I mention someone by name**, look them up in `~/Vault/Personal/People/Snyk/<Name>.md` (fall back to `People/Personal/` if not found). Fuzzy match the filename — first name, last name, or partial matches are all fine. If multiple files match, disambiguate by the `last_met` field in the frontmatter (prefer the most recently met person unless context makes another choice obvious). Read both the frontmatter and the `## Meeting History` section to get relationship context before responding.
+
+**For recent meeting context**, look in `~/Vault/Personal/Meetings/Snyk/YYYY/MM/DD/`. Files are named `HHMM - Title.md` (e.g. `0900 - SteerCo GTM AI Transformation.md`). The `Meetings/Personal/` tree mirrors the same convention for non-work meetings.
+
+### File Formats
+
+**People files** (`People/Snyk/<Name>.md`) use this frontmatter and structure:
+
+    ---
+    last_met: 2026-02-11
+    meeting_count: 1
+    topics:
+      - ga-launch-strategy
+      - pr-communications
+    ---
+    ## Meta
+    - **Title**: ...
+    - **Email**: ...
+    - **Company**: ...
+    - **Type**: External contact
+    - **Last Updated**: 2026-04-10
+    ## Relationship
+    ## Meeting History
+    - **2026-02-11** — [[0900 - Marketing weekly]] — summary
+
+**Meeting files** (`Meetings/Snyk/YYYY/MM/DD/HHMM - Title.md`) look like:
+
+    ---
+    date: 2026-04-08
+    time: "09:00 - 09:30"
+    duration: 30
+    type: meeting
+    has_transcript: true
+    attendees:
+      - "[[Michaela Doyle]]"
+      - "[[Tim Smith]]"
+    tags:
+      - meeting
+      - snyk
+    ---
+    ## Attendees
+    ## Summary
+    ## Key Decisions
+
+Attendees in meeting files are Obsidian wiki-links (`[[Name]]`) that resolve to `People/Snyk/<Name>.md`. When you see an attendee link, you can read the corresponding people file directly to get their context.
+
+### Searching the Vault
+
+Use grep/find against the structured tree when you need to pull context quickly:
+
+- Find a person by fuzzy name: `find ~/Vault/Personal/People -iname "*smith*"`
+- Find all meetings with someone: `grep -rl "\[\[Tim Smith\]\]" ~/Vault/Personal/Meetings/Snyk/`
+- Most recent meetings: `ls -1 ~/Vault/Personal/Meetings/Snyk/2026/*/*/ | tail`
+- All meetings on a topic: `grep -rli "ga launch" ~/Vault/Personal/Meetings/Snyk/`
+- People I met recently: `grep -rl "last_met: 2026-04" ~/Vault/Personal/People/Snyk/`
+- Search project notes: `grep -rli "<keyword>" ~/Vault/Personal/Projects/Snyk/ ~/Vault/Personal/Areas/Snyk/`
 
 ### Keeping the Vault Updated
 
-- **New projects:** When I start a new coding or writing project, create a note for it in Obsidian with: purpose, start date, last worked on date, status, whether it's open source/paid/personal/work, link to the GitHub repo, and any other relevant metadata. Link it from `Projects.md`.
-- **Decisions and context:** If we make an important decision during a session (architecture choice, tool selection, strategy change), append a brief entry to the relevant project note so future sessions have that context.
-- **Now page:** If my priorities visibly shift during our work (e.g., I say "I'm dropping X to focus on Y"), offer to update `Now.md`.
-- **People:** If I mention someone new in a working context (new report, stakeholder, collaborator), offer to add them to `People.md`.
+- **New work projects:** create the note in `~/Vault/Personal/Projects/Snyk/<Project>.md` with purpose, start date, last worked on date, status, links to the GitHub repo (if any), and other relevant metadata. Link it from `Projects.md`. New personal projects go in `Projects/Personal/`.
+- **New people:** add them to `~/Vault/Personal/People/Snyk/<Full Name>.md` (or `People/Personal/` for non-work contacts) using the frontmatter format above.
+- **New meetings:** create the note at `~/Vault/Personal/Meetings/Snyk/YYYY/MM/DD/HHMM - Title.md` using the meeting frontmatter format, and wiki-link attendees as `[[Full Name]]` so they resolve to their People file.
+- **Decisions and context:** if we make an important decision during a session (architecture choice, tool selection, strategy change), append a brief entry to the relevant project or area note so future sessions have that context.
+- **Now page:** if my priorities visibly shift during our work (e.g., "I'm dropping X to focus on Y"), offer to update `Now.md`.
 
 ### Vault Structure
 
 ```
 ~/Vault/Personal/
-├── Now.md              # Current week's priorities and focus
-├── Preferences.md      # How I like things done
-├── Projects.md         # Master project index
-├── People.md           # Team, stakeholders, contacts
-├── Weekly Planner.md   # Weekly planning template
-├── <project>.md        # One note per project/initiative
-└── ...
+├── Now.md                    # Current priorities and focus
+├── Preferences.md            # How I like things done
+├── Projects.md               # Master project index
+├── People.md                 # People index / overview
+├── Weekly Planner.md         # Weekly planning template
+├── Projects/
+│   ├── Snyk/                 # Active work projects
+│   └── Personal/             # Active personal projects
+├── Areas/
+│   ├── Snyk/                 # Ongoing work responsibilities
+│   └── Personal/             # Ongoing personal responsibilities
+├── Resources/
+│   ├── Snyk/                 # Work reference (incl. Snyk Institutional Knowledge.md)
+│   └── Personal/             # Personal reference
+├── Archive/
+│   ├── Snyk/                 # Archived work
+│   └── Personal/             # Archived personal
+├── People/
+│   ├── Snyk/                 # Work contacts (frontmatter-based)
+│   └── Personal/             # Personal contacts
+└── Meetings/
+    ├── Snyk/YYYY/MM/DD/      # Work meetings, filename: "HHMM - Title.md"
+    └── Personal/             # Personal meetings
 ```
 
-Do not create subfolders without asking — I prefer a flat structure for now.
+**Do not create new top-level folders** in the vault — stick with the PARA + People + Meetings structure above. Within those folders, use the Snyk/Personal split and follow the filename and frontmatter conventions.
 
 ## Explanations and Documentation
 
