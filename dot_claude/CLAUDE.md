@@ -235,7 +235,7 @@ Use grep/find against the structured tree when you need to pull context quickly:
   3. Update any related `People/Snyk/` files if the article mentions tracked people (add to their topics list)
   4. Update any related Project pages if relevant to active work
   5. Move the raw clip from `Inbox/` to `Resources/Clips/Processed/`
-  6. Append an entry to `~/Vault/Personal/log.md`
+  6. Prepend an entry to `~/Vault/Personal/log.md` (right after the header)
   7. Update `~/Vault/Personal/index.md` with the new summary page
 - If an article is actionable (spawns a task), create or update a Project page in `Projects/Snyk/` or `Projects/Personal/` and link back to the summary
 
@@ -251,7 +251,7 @@ Use grep/find against the structured tree when you need to pull context quickly:
 
 ### Index and Log
 - `~/Vault/Personal/index.md` is the master catalog — read it first when searching for context, update it when creating/modifying pages
-- `~/Vault/Personal/log.md` is the chronological record — append to it after any ingest, lint, or significant wiki update
+- `~/Vault/Personal/log.md` is the reverse-chronological record — prepend new entries (right after the header) after any ingest, lint, or significant wiki update
 - Log entry format: `## [YYYY-MM-DD] action | Title` where action is one of: ingest, lint, update, create, archive
 
 ### Filing Query Results
