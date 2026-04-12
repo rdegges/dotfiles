@@ -14,11 +14,44 @@ These rules are **global defaults**. If any project-specific `CLAUDE.md` or inst
 
 ## Coding Style
 
-- Follow the existing style and conventions of the files you are editing.
+*Core principles inspired by Andrej Karpathy's observations on LLM coding pitfalls.*
+
+### Think Before Coding
+- State assumptions explicitly before writing code. If uncertain, ask.
+- If multiple interpretations exist, present them — don't pick silently.
+- If a simpler approach exists, say so. Push back when warranted.
+- If something is unclear, stop. Name what's confusing. Ask.
+
+### Simplicity First
+- Write the minimum code that solves the problem. Nothing speculative.
+- No features beyond what was asked. No abstractions for single-use code.
+- No "flexibility" or "configurability" that wasn't requested.
+- No error handling for impossible scenarios.
+- If you write 200 lines and it could be 50, rewrite it.
+- Gut check: would a senior engineer say this is overcomplicated? If yes, simplify.
+
+### Surgical Changes
+- Touch only what you must. Don't "improve" adjacent code, comments, or formatting.
+- Don't refactor things that aren't broken.
+- Follow the existing style and conventions of the files you are editing, even if you'd do it differently.
 - If there is a linter or formatter configured (ESLint, Prettier, black, gofmt, etc.), write code that would pass it.
+- If you notice unrelated dead code, mention it — don't delete it.
+- Remove imports/variables/functions that your changes made unused, but leave pre-existing dead code alone unless asked.
+- The test: every changed line should trace directly to the request.
+
+### Goal-Driven Execution
+- Define success criteria before starting. Loop until verified.
+- Transform vague tasks into verifiable goals:
+  - "Add validation" → "Write tests for invalid inputs, then make them pass."
+  - "Fix the bug" → "Write a test that reproduces it, then make it pass."
+  - "Refactor X" → "Ensure tests pass before and after."
+- For multi-step tasks, state a brief plan with verify steps up front.
+- Strong success criteria let you loop independently. Weak criteria ("make it work") require clarification — ask for it.
+
+### General
 - Prefer small, composable functions over large ones.
 - Name things descriptively; avoid overly clever abstractions.
-
+- These guidelines bias toward caution over speed. For trivial tasks, use judgment.
 ## Writing Style
 
 - If you're going to write an article or social media-type stuff, try to do it in my voice so the draft is more useful to me.
