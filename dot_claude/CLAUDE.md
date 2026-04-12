@@ -227,6 +227,36 @@ Use grep/find against the structured tree when you need to pull context quickly:
 
 **Do not create new top-level folders** in the vault — stick with the PARA + People + Meetings structure above. Within those folders, use the Snyk/Personal split and follow the filename and frontmatter conventions.
 
+### Ingest Workflow (Web Clipper → Wiki)
+- Raw article clips land in `~/Vault/Personal/Resources/Clips/Inbox/`
+- When asked to "process my inbox" or "ingest clips", read each clip in Inbox/:
+  1. Read the raw article markdown
+  2. Write a wiki-style summary page in `Resources/Snyk/` or `Resources/Personal/` based on content (work-related = Snyk, personal = Personal). Summary should have frontmatter: `source_url`, `date_clipped`, `topics` (list), `related_people` (wiki-links), `related_projects` (wiki-links), `tags`
+  3. Update any related `People/Snyk/` files if the article mentions tracked people (add to their topics list)
+  4. Update any related Project pages if relevant to active work
+  5. Move the raw clip from `Inbox/` to `Resources/Clips/Processed/`
+  6. Append an entry to `~/Vault/Personal/log.md`
+  7. Update `~/Vault/Personal/index.md` with the new summary page
+- If an article is actionable (spawns a task), create or update a Project page in `Projects/Snyk/` or `Projects/Personal/` and link back to the summary
+
+### Wiki Maintenance (Lint)
+- When asked to "lint the vault" or "health-check the wiki", check for:
+  - People files with stale `last_met` dates (>30 days old)
+  - Meeting files with empty Summary or Key Decisions sections
+  - Projects that look completed and should move to Archive
+  - Orphan pages with no inbound wiki-links
+  - Missing cross-references (names mentioned in meetings but no People file exists)
+  - Contradictions between pages
+- Report findings and ask before making changes
+
+### Index and Log
+- `~/Vault/Personal/index.md` is the master catalog — read it first when searching for context, update it when creating/modifying pages
+- `~/Vault/Personal/log.md` is the chronological record — append to it after any ingest, lint, or significant wiki update
+- Log entry format: `## [YYYY-MM-DD] action | Title` where action is one of: ingest, lint, update, create, archive
+
+### Filing Query Results
+- When Claude produces a valuable synthesis (comparison, analysis, meeting prep, strategy doc), offer to file it in the vault under `Resources/Snyk/` or `Resources/Personal/` rather than letting it vanish into chat history
+
 ## Explanations and Documentation
 
 - Default to short explanations with just enough detail for me to follow the reasoning.
