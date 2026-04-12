@@ -46,6 +46,38 @@ These rules are **global defaults**. If any project-specific `CLAUDE.md` or inst
 - I use the `asdf` package manager to manage all of my developer dependencies. You can use this to install certain version of Python, Node, Bun, Go, etc. if needed.
 - I use chezmoi to manage my dotfiles, and my dotfiles repo is at https://github.com/rdegges/dotfiles
 
+### Code Project Locations
+
+All of my code lives under `~/Code`, organized so that the on-disk path mirrors the GitHub org. Use these conventions whenever you clone, create, or look up a repo on my machine.
+
+Canonical layout:
+
+```
+~/Code/
+├── work/                    # All work (Snyk) code, one subfolder per GitHub org
+│   ├── snyk/                # github.com/snyk/*           — official Snyk projects
+│   ├── snyk-labs/           # github.com/snyk-labs/*      — Snyk experimental projects
+│   └── snyk-marketing/      # github.com/snyk-marketing/* — marketing-only projects
+├── rdegges/                 # github.com/rdegges/*        — my personal projects
+└── forks/                   # forks of other people's projects I contribute to
+```
+
+**When cloning a new repo, put it in the right place:**
+
+- Work repos go under `~/Code/work/<org>/<repo>` (e.g. `git clone git@github.com:snyk/snyk-big-fix.git ~/Code/work/snyk/snyk-big-fix`).
+- My personal repos go under `~/Code/rdegges/<repo>`.
+- Forks of other people's projects go under `~/Code/forks/<repo>`.
+- The work layout is **one subdirectory per GitHub org**. If a new work org appears (e.g. `snyk-security`), create `~/Code/work/snyk-security/` and clone into it — never mix multiple orgs in the same folder.
+
+**When I reference an existing project by name** (e.g. "work on the snyk-big-fix repo"), look for it on disk before asking me where it lives. Search in this order:
+
+1. `~/Code/work/snyk/<name>`
+2. Other `~/Code/work/<org>/<name>` subdirectories (snyk-labs, snyk-marketing, and any other org folders that exist)
+3. `~/Code/rdegges/<name>`
+4. `~/Code/forks/<name>`
+
+If it's not in any of those, then ask me where it is or whether you should clone it fresh.
+
 ## Notes and Knowledge (Obsidian Vault)
 
 My Obsidian vault is at `~/Vault/Personal` and is always synced via Obsidian Sync. It is my personal knowledge base and your primary source of context about me, my work, and my thinking. The vault follows a PARA layout (Projects / Areas / Resources / Archive) with a **Snyk/Personal split** at every level, plus top-level `People/` and `Meetings/` folders that also split Snyk from Personal.
