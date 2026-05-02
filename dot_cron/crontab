@@ -8,7 +8,7 @@
 0 * * * * asdf plugin update --all
 
 # Keep all `pipx` packages updated.
-0 * * * * /Users/rdegges/.asdf/shims/pipx upgrade-all
+0 * * * * $HOME/.asdf/shims/pipx upgrade-all
 
 # Clean up old `brew` package versions.
 0 11 * * 6 /opt/homebrew/bin/brew cleanup --prune=30 -q
