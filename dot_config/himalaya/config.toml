@@ -1,0 +1,47 @@
+# Himalaya CLI — iCloud Mail config
+# Docs: https://github.com/pimalaya/himalaya
+#
+# Password is fetched from the macOS Keychain at runtime via `security(1)`.
+# Store it once with:
+#   read -rs "?Paste app password: " PW; \
+#     security add-generic-password -U -s himalaya-icloud -a r@rdegges.com -w "$PW"; \
+#     unset PW
+
+[accounts.icloud]
+default = true
+email = "r@rdegges.com"
+display-name = "Randall Degges"
+
+# Folder aliases — map himalaya's logical names to iCloud's IMAP folder names.
+folder.aliases.inbox = "INBOX"
+folder.aliases.sent = "Sent Messages"
+folder.aliases.drafts = "Drafts"
+folder.aliases.trash = "Deleted Messages"
+
+# ----- Receiving (IMAP) -----
+backend.type = "imap"
+backend.host = "imap.mail.me.com"
+backend.port = 993
+backend.encryption.type = "tls"
+backend.login = "r@rdegges.com"
+backend.auth.type = "password"
+backend.auth.cmd = "security find-generic-password -s himalaya-icloud -a r@rdegges.com -w"
+
+# ----- Sending (SMTP) -----
+message.send.backend.type = "smtp"
+message.send.backend.host = "smtp.mail.me.com"
+message.send.backend.port = 587
+message.send.backend.encryption.type = "start-tls"
+message.send.backend.login = "r@rdegges.com"
+message.send.backend.auth.type = "password"
+message.send.backend.auth.cmd = "security find-generic-password -s himalaya-icloud -a r@rdegges.com -w"
+
+# Save a copy of every sent message to Sent Messages on the server.
+message.send.save-copy = true
+
+# Signature — appended to all outgoing messages (new, reply, reply-all, forward).
+# Himalaya prepends the standard "-- " sig delimiter (RFC 3676) automatically.
+signature = """
+Randall Degges
+https://rdegges.com
+"""

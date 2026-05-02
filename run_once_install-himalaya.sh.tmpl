@@ -1,0 +1,21 @@
+{{- if eq .chezmoi.os "darwin" -}}
+#!/bin/bash
+# Install Himalaya CLI (https://github.com/pimalaya/himalaya) to ~/.local/bin
+# using the official installer. Runs once per machine on `chezmoi apply`.
+#
+# To re-install / upgrade later, just rerun the installer:
+#   curl -sSL https://raw.githubusercontent.com/pimalaya/himalaya/master/install.sh | PREFIX=~/.local sh
+
+set -euo pipefail
+
+if [ -x "$HOME/.local/bin/himalaya" ]; then
+    echo "Himalaya already installed at ~/.local/bin/himalaya — skipping."
+    "$HOME/.local/bin/himalaya" --version 2>/dev/null | head -1 || true
+    exit 0
+fi
+
+echo "Installing Himalaya CLI to ~/.local/bin..."
+mkdir -p "$HOME/.local/bin"
+curl -sSL https://raw.githubusercontent.com/pimalaya/himalaya/master/install.sh | PREFIX="$HOME/.local" sh
+echo "Himalaya installed: $($HOME/.local/bin/himalaya --version 2>/dev/null | head -1)"
+{{ end -}}
