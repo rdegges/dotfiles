@@ -1,0 +1,92 @@
+# Himalaya CLI config
+# Docs: https://github.com/pimalaya/himalaya
+#
+# This file is a chezmoi template. The Snyk account is gated behind the
+# `work` data variable so it only renders on the work laptop. To enable
+# on a machine, add `work = true` under `[data]` in
+# ~/.config/chezmoi/chezmoi.toml (chezmoi's local config — not synced).
+#
+# Passwords are fetched from the macOS Keychain at runtime via `security(1)`.
+# Store them once with:
+#   read -rs "?Paste app password: " PW; \
+#     security add-generic-password -U -s <service> -a <account> -w "$PW"; \
+#     unset PW
+
+[accounts.icloud]
+default = true
+email = "r@rdegges.com"
+display-name = "Randall Degges"
+
+# Folder aliases — map himalaya's logical names to iCloud's IMAP folder names.
+folder.aliases.inbox = "INBOX"
+folder.aliases.sent = "Sent Messages"
+folder.aliases.drafts = "Drafts"
+folder.aliases.trash = "Deleted Messages"
+
+# ----- Receiving (IMAP) -----
+backend.type = "imap"
+backend.host = "imap.mail.me.com"
+backend.port = 993
+backend.encryption.type = "tls"
+backend.login = "r@rdegges.com"
+backend.auth.type = "password"
+backend.auth.cmd = "security find-generic-password -s himalaya-icloud -a r@rdegges.com -w"
+
+# ----- Sending (SMTP) -----
+message.send.backend.type = "smtp"
+message.send.backend.host = "smtp.mail.me.com"
+message.send.backend.port = 587
+message.send.backend.encryption.type = "start-tls"
+message.send.backend.login = "r@rdegges.com"
+message.send.backend.auth.type = "password"
+message.send.backend.auth.cmd = "security find-generic-password -s himalaya-icloud -a r@rdegges.com -w"
+
+# Save a copy of every sent message to Sent Messages on the server.
+message.send.save-copy = true
+
+# Signature — appended to all outgoing messages (new, reply, reply-all, forward).
+# Himalaya prepends the standard "-- " sig delimiter (RFC 3676) automatically.
+signature = """
+Randall Degges
+https://rdegges.com
+"""
+
+{{ if .work -}}
+# ===== Snyk Gmail (work laptop only) =====
+
+[accounts.snyk]
+email = "randall.degges@snyk.io"
+display-name = "Randall Degges"
+
+# Folder aliases — Gmail uses the [Gmail]/* namespace for system folders.
+folder.aliases.inbox = "INBOX"
+folder.aliases.sent = "[Gmail]/Sent Mail"
+folder.aliases.drafts = "[Gmail]/Drafts"
+folder.aliases.trash = "[Gmail]/Trash"
+
+# ----- Receiving (IMAP) -----
+backend.type = "imap"
+backend.host = "imap.gmail.com"
+backend.port = 993
+backend.encryption.type = "tls"
+backend.login = "randall.degges@snyk.io"
+backend.auth.type = "password"
+backend.auth.cmd = "security find-generic-password -s himalaya-snyk -a randall.degges@snyk.io -w"
+
+# ----- Sending (SMTP) -----
+message.send.backend.type = "smtp"
+message.send.backend.host = "smtp.gmail.com"
+message.send.backend.port = 587
+message.send.backend.encryption.type = "start-tls"
+message.send.backend.login = "randall.degges@snyk.io"
+message.send.backend.auth.type = "password"
+message.send.backend.auth.cmd = "security find-generic-password -s himalaya-snyk -a randall.degges@snyk.io -w"
+
+message.send.save-copy = true
+
+signature = """
+Randall Degges
+VP, GTM AI Engineering & DevRel
+https://snyk.io
+"""
+{{- end }}
