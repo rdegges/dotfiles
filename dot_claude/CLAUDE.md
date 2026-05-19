@@ -11,6 +11,10 @@ These rules are **global defaults**. If any project-specific `CLAUDE.md` or inst
 - When something is ambiguous, ask one targeted clarifying question before making big assumptions.
 - If you notice a likely mistake in my request (typo, wrong path, missing step), call it out and propose a fix.
 - When presenting options, briefly compare trade-offs and then **recommend one**.
+- Treat each request as if you are pairing with a senior engineer who wants signal, not noise.
+- Default to short explanations with just enough detail for me to follow the reasoning. When something is complex, a short bulleted list is fine.
+- In new or changed files, keep docstrings and comments focused on *why* rather than *what*.
+- If you hit a limitation (missing context, unclear requirements), say so explicitly and suggest what information you need next.
 
 ## Coding Style
 
@@ -57,20 +61,16 @@ These rules are **global defaults**. If any project-specific `CLAUDE.md` or inst
 - If you're going to write an article or social media-type stuff, try to do it in my voice so the draft is more useful to me.
 - You can view examples of my personal writing on my website: https://rdegges.com
 
-## Tests and Safety
-
-- Assume tests should be added or updated for any non-trivial behavior change.
-- When adding or changing code, mention:
-  - Which tests should be updated or added.
-  - How to run the test suite (based on what you can infer from the repo).
-- If you are unsure about behavior, propose a test that would clarify the intended outcome.
-
-
 ## Verification
 
 *Inspired by the Superpowers project's verification-before-completion methodology.*
 
 Never claim work is done without fresh evidence. "Should work now" and "looks correct" are not verification.
+
+### Testing
+- Assume tests should be added or updated for any non-trivial behavior change.
+- When adding or changing code, identify which tests need updating and how to run the suite.
+- If you are unsure about behavior, propose a test that would clarify the intended outcome.
 
 ### The Rule
 - Before claiming tests pass: run the test command, read the output, confirm zero failures.
@@ -329,50 +329,17 @@ Use grep/find against the structured tree when you need to pull context quickly:
 ### Filing Query Results
 - When Claude produces a valuable synthesis (comparison, analysis, meeting prep, strategy doc), offer to file it in the vault under `Resources/Snyk/` or `Resources/Personal/` rather than letting it vanish into chat history
 
-## Explanations and Documentation
-
-- Default to short explanations with just enough detail for me to follow the reasoning.
-- When something is complex or has important trade-offs, use a short bulleted list.
-- In new or changed files, keep docstrings and comments focused on *why* rather than *what*.
-
-## Collaboration Style
-
-- Treat each request as if you are pairing with a senior engineer who wants signal, not noise.
-- If there are multiple viable approaches, briefly list them and pick one, explaining why.
-- If you hit a limitation (missing context, unclear requirements), say so explicitly and suggest what information you need next.
-
 ## gstack
 
-- Use the /browse skill from gstack for all web browsing, never use mcp__claude-in-chrome__* tools
-- You have access to the following gstack skills:
-  - /office-hours
-  - /plan-ceo-review
-  - /plan-eng-review
-  - /plan-design-review
-  - /design-consultation
-  - /design-shotgun
-  - /design-html
-  - /review
-  - /ship
-  - /land-and-deploy
-  - /canary
-  - /benchmark
-  - /browse
-  - /connect-chrome
-  - /qa
-  - /qa-only
-  - /design-review
-  - /setup-browser-cookies
-  - /setup-deploy
-  - /retro
-  - /investigate
-  - /document-release
-  - /codex
-  - /cso
-  - /autoplan
-  - /careful
-  - /freeze
-  - /guard
-  - /unfreeze
-  - /gstack-upgrade
-  - /learn
+- In Claude Code, use the /browse skill from gstack for web browsing. In Cowork or other contexts with native browser tools, use the platform's browser capabilities instead.
+- Available gstack skills:
+  - /office-hours, /plan-ceo-review, /plan-eng-review, /plan-design-review, /plan-devex-review
+  - /design-consultation, /design-shotgun, /design-html, /design-review, /devex-review
+  - /review, /ship, /land-and-deploy, /canary, /benchmark
+  - /browse, /open-gstack-browser, /setup-browser-cookies, /pair-agent
+  - /qa, /qa-only, /cso
+  - /autoplan, /careful, /freeze, /guard, /unfreeze
+  - /investigate, /retro, /codex
+  - /document-release, /document-generate
+  - /setup-deploy, /setup-gbrain, /sync-gbrain
+  - /gstack-upgrade, /learn
