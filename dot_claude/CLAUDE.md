@@ -65,6 +65,78 @@ These rules are **global defaults**. If any project-specific `CLAUDE.md` or inst
   - How to run the test suite (based on what you can infer from the repo).
 - If you are unsure about behavior, propose a test that would clarify the intended outcome.
 
+
+## Verification
+
+*Inspired by the Superpowers project's verification-before-completion methodology.*
+
+Never claim work is done without fresh evidence. "Should work now" and "looks correct" are not verification.
+
+### The Rule
+- Before claiming tests pass: run the test command, read the output, confirm zero failures.
+- Before claiming a build succeeds: run the build, check the exit code.
+- Before claiming a bug is fixed: run the reproduction case, confirm it no longer reproduces.
+- Before claiming requirements are met: re-read the requirements and check each one against what was actually built.
+
+### Red Flags — Stop and Verify
+- About to say "should", "probably", or "seems to" about whether something works.
+- About to express satisfaction ("Done!", "All good!") before running a command.
+- About to commit, push, or open a PR without running the full test suite.
+- Trusting a subagent's success report without independently checking.
+- Relying on a linter passing as proof that a build works.
+
+### Pattern
+```
+✅  [Run test command] → [Read: 47/47 pass] → "All 47 tests pass."
+❌  "Tests should pass now."
+
+✅  [Run build] → [Read: exit 0, no warnings] → "Build succeeds."
+❌  "Linter passed, so the build is fine."
+
+✅  [Re-read plan] → [Check each item] → "All 5 requirements met. Here's the mapping: ..."
+❌  "Tests pass, so the phase is complete."
+```
+
+No shortcuts. Run the command, read the output, then state the result.
+
+## Debugging
+
+*Inspired by the Superpowers project's systematic-debugging methodology.*
+
+Random fixes waste time and create new bugs. Always find the root cause before attempting a fix.
+
+### Phase 1: Investigate Before Fixing
+- Read error messages and stack traces completely — they often contain the answer.
+- Reproduce the issue consistently. If you can't reproduce it, gather more data instead of guessing.
+- Check what changed recently: git diff, new dependencies, config changes, environment differences.
+- In multi-component systems, add diagnostic logging at each component boundary to identify *where* it breaks before guessing *why*.
+
+### Phase 2: Find the Pattern
+- Locate similar working code in the same codebase. What's different?
+- If implementing a known pattern, read the reference implementation completely — don't skim.
+- List every difference between what works and what's broken, no matter how small.
+
+### Phase 3: Hypothesize and Test
+- State a single hypothesis clearly: "I think X is the root cause because Y."
+- Make the smallest possible change to test that hypothesis. One variable at a time.
+- If it didn't work, form a *new* hypothesis. Don't stack fixes on top of each other.
+
+### Phase 4: Fix With a Test
+- Write a failing test that reproduces the bug before writing the fix.
+- Implement a single fix addressing the root cause, not the symptom.
+- Verify the test passes and no other tests broke.
+
+### The Three-Strike Rule
+If you've tried 3 fixes and none worked, **stop fixing and question the architecture.** Three failed attempts usually means the problem isn't a bug — it's a design issue. Discuss with me before attempting fix #4.
+
+### Red Flags — You're Guessing, Not Debugging
+- "Let me just try changing X and see if it works."
+- "Quick fix for now, investigate later."
+- Proposing solutions before tracing the data flow.
+- Adding multiple changes at once and running tests.
+- "I don't fully understand, but this might work."
+- Each fix reveals a new problem in a different place (architecture smell).
+
 ## Tools, Commands, and Environment
 
 - Prefer safe, idempotent commands (e.g., `npm test`, `pnpm test`, `go test ./...`, `pytest`) over destructive ones.
