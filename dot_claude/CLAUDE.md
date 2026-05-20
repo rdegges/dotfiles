@@ -327,7 +327,7 @@ Use grep/find against the structured tree when you need to pull context quickly:
 - Log entry format: `## [YYYY-MM-DD] action | Title` where action is one of: ingest, lint, update, create, archive
 
 ### Content-Type Filing Rules
-- **Recipes** (cooking videos, food blogs, meal prep) → `Resources/Personal/Recipes/<Title>.md`
+- **Recipes** (cooking videos, food blogs, meal prep) → `Resources/Personal/Recipes/<Title>.md`. Follow the template and frontmatter conventions defined in `Resources/Personal/Recipes/Recipes.md`. Always estimate calories and macros per serving (calories, protein, carbs, fat) when the source doesn’t provide them — mark `macros_estimated: true` in the frontmatter. After creating the recipe, add a wiki-link to the "By course" index in `Recipes.md` and bump `recipe_count`.
 - **Work reference material** → `Resources/Snyk/<Title>.md`
 - **Personal reference material** → `Resources/Personal/<Title>.md`
 
