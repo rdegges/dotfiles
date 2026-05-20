@@ -326,7 +326,13 @@ Use grep/find against the structured tree when you need to pull context quickly:
 - `~/Vault/Personal/log.md` is the reverse-chronological record — prepend new entries (right after the header) after any ingest, lint, or significant wiki update
 - Log entry format: `## [YYYY-MM-DD] action | Title` where action is one of: ingest, lint, update, create, archive
 
+### Content-Type Filing Rules
+- **Recipes** (cooking videos, food blogs, meal prep) → `Resources/Personal/Recipes/<Title>.md`
+- **Work reference material** → `Resources/Snyk/<Title>.md`
+- **Personal reference material** → `Resources/Personal/<Title>.md`
+
 ### Filing Query Results
+
 - When Claude produces a valuable synthesis (comparison, analysis, meeting prep, strategy doc), offer to file it in the vault under `Resources/Snyk/` or `Resources/Personal/` rather than letting it vanish into chat history
 
 ## gstack
