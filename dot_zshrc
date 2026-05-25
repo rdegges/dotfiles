@@ -114,3 +114,7 @@ source ~/.asdf/plugins/golang/set-env.zsh
 
 # Set up `starship` prompt.
 eval "$(starship init zsh)"
+
+# >>> railway initialize >>>
+source "$HOME/.railway/env"
+# <<< railway initialize <<<
