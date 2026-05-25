@@ -1,0 +1,21 @@
+{{- if eq .chezmoi.os "darwin" -}}
+#!/bin/bash
+# Install Railway CLI (https://docs.railway.com/cli) to ~/.railway/bin using the
+# official installer with agent tooling enabled. Runs once per machine on
+# `chezmoi apply`.
+#
+# To re-install / upgrade later, just rerun the installer:
+#   curl -fsSL https://railway.com/install.sh | bash -s -- --agents -y
+
+set -euo pipefail
+
+if [ -x "$HOME/.railway/bin/railway" ]; then
+    echo "Railway CLI already installed at ~/.railway/bin/railway — skipping."
+    "$HOME/.railway/bin/railway" --version 2>/dev/null | head -1 || true
+    exit 0
+fi
+
+echo "Installing Railway CLI to ~/.railway/bin..."
+curl -fsSL https://railway.com/install.sh | bash -s -- --agents -y
+echo "Railway CLI installed: $($HOME/.railway/bin/railway --version 2>/dev/null | head -1)"
+{{ end -}}
