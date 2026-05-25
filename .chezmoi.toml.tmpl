@@ -1,5 +1,13 @@
+{{- $work := promptBoolOnce . "work" "Is this a work (Snyk) machine" false -}}
 # Allow chezmoi to automatically handle Git `commit` and `push` operations
 # to simplify dotfile management.
 [git]
   autoCommit = true
   autoPush = true
+
+# Per-machine flags, stored in this machine's local config (never synced to the
+# dotfiles repo). `work` is true only on the work laptop; it gates work-specific
+# config and tooling, e.g. the Snyk account in the himalaya template. Asked once
+# at `chezmoi init` time -- re-run `chezmoi init` to change the answer.
+[data]
+  work = {{ $work }}
