@@ -78,6 +78,21 @@ Never claim work is done without fresh evidence. "Should work now" and "looks co
 - Before claiming a bug is fixed: run the reproduction case, confirm it no longer reproduces.
 - Before claiming requirements are met: re-read the requirements and check each one against what was actually built.
 
+### Adversarial Review (Codex)
+
+Before declaring any coding task complete, check whether `codex` is installed and
+authenticated (`command -v codex` succeeds and `~/.codex/auth.json` exists). If it is:
+
+- Run an **adversarial review** of your changes via the `/codex` skill in *challenge*
+  mode — have it actively try to break the code and surface bugs, edge cases, and
+  security issues in the diff.
+- Triage the findings: fix every genuine issue. For anything that's a false positive
+  or out of scope, note it briefly rather than blindly applying the suggestion.
+- Re-run the relevant tests/build after fixing, then end the run.
+
+If `codex` is not installed or not authenticated, skip this step silently — never
+block a task on its absence.
+
 ### Red Flags — Stop and Verify
 - About to say "should", "probably", or "seems to" about whether something works.
 - About to express satisfaction ("Done!", "All good!") before running a command.
