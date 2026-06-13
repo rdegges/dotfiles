@@ -16,46 +16,16 @@ These rules are **global defaults**. If any project-specific `CLAUDE.md` or inst
 - In new or changed files, keep docstrings and comments focused on *why* rather than *what*.
 - If you hit a limitation (missing context, unclear requirements), say so explicitly and suggest what information you need next.
 
-## Coding Style
+## Coding Style — Gotchas
 
-*Core principles inspired by Andrej Karpathy's observations on LLM coding pitfalls.*
+These are environment-specific gotchas and guard rails. You already know how to write clean code — these catch the failure modes that actually bite in practice.
 
-### Think Before Coding
-- State assumptions explicitly before writing code. If uncertain, ask.
-- If multiple interpretations exist, present them — don't pick silently.
-- If a simpler approach exists, say so. Push back when warranted.
-- If something is unclear, stop. Name what's confusing. Ask.
+- **Surgical changes only.** Touch only what the request requires. Don't "improve" adjacent code, comments, or formatting. Every changed line should trace directly to the request.
+- **Follow existing style.** Match the conventions of the files you're editing, even if you'd do it differently. If a linter or formatter is configured (ESLint, Prettier, black, gofmt, etc.), write code that passes it.
+- **No speculative features.** No abstractions for single-use code, no "flexibility" or "configurability" that wasn't requested, no error handling for impossible scenarios.
+- **Clean up after yourself.** Remove imports/variables/functions that your changes made unused, but leave pre-existing dead code alone unless asked. If you notice unrelated dead code, mention it — don't delete it.
+- **Three-strike rule for debugging.** If you've tried 3 fixes and none worked, stop and question the architecture. Three failed attempts usually means it's a design issue, not a bug. Discuss with me before attempting fix #4.
 
-### Simplicity First
-- Write the minimum code that solves the problem. Nothing speculative.
-- No features beyond what was asked. No abstractions for single-use code.
-- No "flexibility" or "configurability" that wasn't requested.
-- No error handling for impossible scenarios.
-- If you write 200 lines and it could be 50, rewrite it.
-- Gut check: would a senior engineer say this is overcomplicated? If yes, simplify.
-
-### Surgical Changes
-- Touch only what you must. Don't "improve" adjacent code, comments, or formatting.
-- Don't refactor things that aren't broken.
-- Follow the existing style and conventions of the files you are editing, even if you'd do it differently.
-- If there is a linter or formatter configured (ESLint, Prettier, black, gofmt, etc.), write code that would pass it.
-- If you notice unrelated dead code, mention it — don't delete it.
-- Remove imports/variables/functions that your changes made unused, but leave pre-existing dead code alone unless asked.
-- The test: every changed line should trace directly to the request.
-
-### Goal-Driven Execution
-- Define success criteria before starting. Loop until verified.
-- Transform vague tasks into verifiable goals:
-  - "Add validation" → "Write tests for invalid inputs, then make them pass."
-  - "Fix the bug" → "Write a test that reproduces it, then make it pass."
-  - "Refactor X" → "Ensure tests pass before and after."
-- For multi-step tasks, state a brief plan with verify steps up front.
-- Strong success criteria let you loop independently. Weak criteria ("make it work") require clarification — ask for it.
-
-### General
-- Prefer small, composable functions over large ones.
-- Name things descriptively; avoid overly clever abstractions.
-- These guidelines bias toward caution over speed. For trivial tasks, use judgment.
 ## Writing Style
 
 - If you're going to write an article or social media-type stuff, try to do it in my voice so the draft is more useful to me.
@@ -97,7 +67,7 @@ block a task on its absence.
 - About to say "should", "probably", or "seems to" about whether something works.
 - About to express satisfaction ("Done!", "All good!") before running a command.
 - About to commit, push, or open a PR without running the full test suite.
-- Trusting a subagent's success report without independently checking.
+- Trusting a subagent's success report without indepently checking.
 - Relying on a linter passing as proof that a build works.
 
 ### Pattern
@@ -113,44 +83,6 @@ block a task on its absence.
 ```
 
 No shortcuts. Run the command, read the output, then state the result.
-
-## Debugging
-
-*Inspired by the Superpowers project's systematic-debugging methodology.*
-
-Random fixes waste time and create new bugs. Always find the root cause before attempting a fix.
-
-### Phase 1: Investigate Before Fixing
-- Read error messages and stack traces completely — they often contain the answer.
-- Reproduce the issue consistently. If you can't reproduce it, gather more data instead of guessing.
-- Check what changed recently: git diff, new dependencies, config changes, environment differences.
-- In multi-component systems, add diagnostic logging at each component boundary to identify *where* it breaks before guessing *why*.
-
-### Phase 2: Find the Pattern
-- Locate similar working code in the same codebase. What's different?
-- If implementing a known pattern, read the reference implementation completely — don't skim.
-- List every difference between what works and what's broken, no matter how small.
-
-### Phase 3: Hypothesize and Test
-- State a single hypothesis clearly: "I think X is the root cause because Y."
-- Make the smallest possible change to test that hypothesis. One variable at a time.
-- If it didn't work, form a *new* hypothesis. Don't stack fixes on top of each other.
-
-### Phase 4: Fix With a Test
-- Write a failing test that reproduces the bug before writing the fix.
-- Implement a single fix addressing the root cause, not the symptom.
-- Verify the test passes and no other tests broke.
-
-### The Three-Strike Rule
-If you've tried 3 fixes and none worked, **stop fixing and question the architecture.** Three failed attempts usually means the problem isn't a bug — it's a design issue. Discuss with me before attempting fix #4.
-
-### Red Flags — You're Guessing, Not Debugging
-- "Let me just try changing X and see if it works."
-- "Quick fix for now, investigate later."
-- Proposing solutions before tracing the data flow.
-- Adding multiple changes at once and running tests.
-- "I don't fully understand, but this might work."
-- Each fix reveals a new problem in a different place (architecture smell).
 
 ## Tools, Commands, and Environment
 
@@ -342,7 +274,7 @@ Use grep/find against the structured tree when you need to pull context quickly:
 - Log entry format: `## [YYYY-MM-DD] action | Title` where action is one of: ingest, lint, update, create, archive
 
 ### Content-Type Filing Rules
-- **Recipes** (cooking videos, food blogs, meal prep) → `Resources/Personal/Recipes/<Title>.md`. Follow the template and frontmatter conventions defined in `Resources/Personal/Recipes/Recipes.md`. Always estimate calories and macros per serving (calories, protein, carbs, fat) when the source doesn’t provide them — mark `macros_estimated: true` in the frontmatter. After creating the recipe, add a wiki-link to the "By course" index in `Recipes.md` and bump `recipe_count`.
+- **Recipes** (cooking videos, food blogs, meal prep) → `Resources/Personal/Recipes/<Title>.md`. Follow the template and frontmatter conventions defined in `Resources/Personal/Recipes/Recipes.md`. Always estimate calories and macros per serving (calories, protein, carbs, fat) when the source doesn't provide them — mark `macros_estimated: true` in the frontmatter. After creating the recipe, add a wiki-link to the "By course" index in `Recipes.md` and bump `recipe_count`.
 - **Work reference material** → `Resources/Snyk/<Title>.md`
 - **Personal reference material** → `Resources/Personal/<Title>.md`
 
