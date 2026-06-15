@@ -25,6 +25,7 @@ These are environment-specific gotchas and guard rails. You already know how to 
 - **No speculative features.** No abstractions for single-use code, no "flexibility" or "configurability" that wasn't requested, no error handling for impossible scenarios.
 - **Clean up after yourself.** Remove imports/variables/functions that your changes made unused, but leave pre-existing dead code alone unless asked. If you notice unrelated dead code, mention it — don't delete it.
 - **Three-strike rule for debugging.** If you've tried 3 fixes and none worked, stop and question the architecture. Three failed attempts usually means it's a design issue, not a bug. Discuss with me before attempting fix #4.
+- **Exhaustive exploration for performance work.** When the task is performance optimization or architecture evaluation, suspend the "surgical changes" rule. Define measurable success criteria, then systematically explore the full solution space â test every viable alternative, compute the matrix of combinations, and recommend based on data. Don't suggest the first reasonable-looking solution.
 
 ## Writing Style
 
@@ -41,6 +42,17 @@ Never claim work is done without fresh evidence. "Should work now" and "looks co
 - Assume tests should be added or updated for any non-trivial behavior change.
 - When adding or changing code, identify which tests need updating and how to run the suite.
 - If you are unsure about behavior, propose a test that would clarify the intended outcome.
+
+### Eval-Driven AI Work
+- When modifying prompts, AI pipelines, or model behavior: define binary pass/fail
+  criteria against a dataset of real-world inputs before shipping. "Looked good on
+  3 examples" is not verification.
+- When debugging AI output quality: sample real traces, annotate errors with
+  one-sentence notes, categorize, frequency-count to prioritize. Fix in priority
+  order, not vibes order.
+- After automated checks reach ~90% quality, do a human vibe check. When the vibe
+  check catches something, encode that feedback as a new eval criterion so it's
+  caught automatically next time.
 
 ### The Rule
 - Before claiming tests pass: run the test command, read the output, confirm zero failures.
@@ -62,6 +74,14 @@ authenticated (`command -v codex` succeeds and `~/.codex/auth.json` exists). If 
 
 If `codex` is not installed or not authenticated, skip this step silently — never
 block a task on its absence.
+
+### Self-Improving Patterns
+- When fixing a class of recurring issues (flaky tests, lint errors, similar bugs):
+  after fixing one instance, search for and fix all sibling instances affected by
+  the same root cause.
+- If you discover a novel failure pattern while fixing something, update the
+  relevant skill file, checklist, or CLAUDE.md section to capture the learning.
+  Don't fix and forget â encode it so it's caught automatically next time.
 
 ### Red Flags — Stop and Verify
 - About to say "should", "probably", or "seems to" about whether something works.
