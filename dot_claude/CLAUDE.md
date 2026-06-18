@@ -316,3 +316,12 @@ Use grep/find against the structured tree when you need to pull context quickly:
   - /document-release, /document-generate
   - /setup-deploy, /setup-gbrain, /sync-gbrain
   - /gstack-upgrade, /learn
+
+
+## visualplanner
+
+- Use the `visualplanner` skill (installed at `~/.claude/skills/visualplanner/`) to turn any planning document into a visual, interactive HTML breakdown.
+- **When to use visualplanner vs gstack planning:**
+  - **gstack** (`/autoplan`, `/plan-ceo-review`, `/plan-eng-review`, `/plan-design-review`, `/plan-devex-review`) — for **writing and reviewing** plans. Use these to draft, refine, and get structured feedback on plan content.
+  - **visualplanner** — for **presenting** plans visually. Use this after a plan is written to generate a self-contained HTML walkthrough with scroll-based navigation, flow diagrams, expandable cards, and review toolbars.
+- Typical workflow: write the plan with gstack → visualize it with visualplanner for sharing or async review.
