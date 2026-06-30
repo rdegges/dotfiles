@@ -274,7 +274,7 @@ Use grep/find against the structured tree when you need to pull context quickly:
   3. Update any related `People/Snyk/` files if the article mentions tracked people (add to their topics list)
   4. Update any related Project pages if relevant to active work
   5. Move the raw clip from `Inbox/` to `Resources/Clips/Processed/`
-  6. Prepend an entry to `~/Vault/Personal/log.md` (right after the header)
+  6. Prepend an entry to `~/Vault/Personal/log.md` (right after the header), using the heading + bullet-list format defined under "Index and Log" below
   7. Update `~/Vault/Personal/index.md` with the new summary page
 - If an article is actionable (spawns a task), create or update a Project page in `Projects/Snyk/` or `Projects/Personal/` and link back to the summary
 
@@ -291,7 +291,11 @@ Use grep/find against the structured tree when you need to pull context quickly:
 ### Index and Log
 - `~/Vault/Personal/index.md` is the master catalog — read it first when searching for context, update it when creating/modifying pages
 - `~/Vault/Personal/log.md` is the reverse-chronological record — prepend new entries (right after the header) after any ingest, lint, or significant wiki update
-- Log entry format: `## [YYYY-MM-DD] action | Title` where action is one of: ingest, lint, update, create, archive
+- Log entry format: a `## [YYYY-MM-DD] action | Title` heading (action is one of: ingest, lint, update, create, archive), where Title is a short one-line description — then a blank line, then a flat `-` bullet list describing what changed.
+  - One bullet per discrete change or fact; write each bullet in proper sentence case (capitalized first word, normal capitalization — not all-caps for emphasis).
+  - Keep bullets flat (no nested sub-bullets); use a short lead-in bullet ending in `:` to group related items when helpful.
+  - Never write the body as a single run-on paragraph — that renders as a giant heading/wall of text and is hard to scan.
+  - Use inline emphasis sparingly: rely on `code spans`, `[[wiki-links]]`, and status emoji (🟢/🟡/🚨) rather than bold/italics for emphasis.
 
 ### Content-Type Filing Rules
 - **Recipes** (cooking videos, food blogs, meal prep) → `Resources/Personal/Recipes/<Title>.md`. Follow the template and frontmatter conventions defined in `Resources/Personal/Recipes/Recipes.md`. Always estimate calories and macros per serving (calories, protein, carbs, fat) when the source doesn't provide them — mark `macros_estimated: true` in the frontmatter. After creating the recipe, add a wiki-link to the "By course" index in `Recipes.md` and bump `recipe_count`.
