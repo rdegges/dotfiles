@@ -4,6 +4,13 @@
 
 # Install Homebrew packages
 if command -v brew &> /dev/null; then
+    # Newer Homebrew refuses to load formulae/casks from untrusted third-party
+    # taps, which aborts `brew bundle` mid-run. Trust every tap declared in the
+    # Brewfile first (no-op on older brew versions without `brew trust`).
+    awk -F'"' '/^tap /{print $2}' ~/.brew/Brewfile | while read -r tap; do
+        brew trust "$tap" &> /dev/null || true
+    done
+
     echo "Installing Homebrew packages from Brewfile..."
     brew bundle --file=~/.brew/Brewfile
 else
