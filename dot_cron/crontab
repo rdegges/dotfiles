@@ -1,3 +1,8 @@
+# Cron runs jobs with a minimal PATH (/usr/bin:/bin), so bare `brew`, `asdf`,
+# and `pipx` below never resolved. Cron env lines don't expand variables, so
+# these paths must be absolute.
+PATH=/opt/homebrew/bin:/Users/rdegges/.asdf/shims:/usr/local/bin:/usr/bin:/bin
+
 # Keep `brew` packages up-to-date.
 0 10 * * * /opt/homebrew/bin/brew update --force --quiet; brew upgrade --greedy --quiet
 

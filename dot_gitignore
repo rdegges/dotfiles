@@ -15,3 +15,5 @@ node_modules
 
 # Swap files.
 .*.swp
+
+**/.claude/settings.local.json
