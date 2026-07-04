@@ -1,0 +1,6 @@
+# Sourced by every zsh invocation, including non-interactive SSH commands
+# (`ssh host cmd`), which skip .zprofile and .zshrc. Without this, remote
+# tooling like herdr's --remote bridge can't resolve brew- or ~/.local/bin-
+# installed binaries. Harmless duplication with .zprofile/.zshrc in
+# interactive shells.
+export PATH="$HOME/.local/bin:/opt/homebrew/bin:/opt/homebrew/sbin:$PATH"
