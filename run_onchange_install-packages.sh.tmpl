@@ -11,18 +11,21 @@ if command -v brew &> /dev/null; then
     # likeliest reason the bundle below aborts.
     if brew trust --help &> /dev/null; then
         awk -F'"' '/^tap /{print $2}' ~/.brew/Brewfile | while read -r tap; do
-            brew trust --tap "$tap" < /dev/null &> /dev/null \
-                || echo "Warning: failed to trust tap: $tap" >&2
+            _trust_err=$(brew trust --tap "$tap" < /dev/null 2>&1) \
+                || echo "Warning: failed to trust tap: $tap: $_trust_err" >&2
         done
     fi
 
     echo "Installing Homebrew packages from Brewfile..."
-    # Exit non-zero on failure so chezmoi reports it and retries on the next
-    # apply. A swallowed failure here latches: the script won't re-run until
-    # the Brewfile changes, leaving packages missing for weeks.
+    # Record failure but keep going so the rest of the script (oh-my-zsh)
+    # still runs; the exit at the bottom fails the script afterwards. A
+    # swallowed failure here latches: chezmoi won't re-run the script until
+    # the Brewfile changes, leaving packages missing for weeks. Exiting
+    # non-zero makes chezmoi report the failure and retry on every apply.
+    _bundle_failed=0
     if ! brew bundle --file=~/.brew/Brewfile; then
         echo "Error: brew bundle failed; packages are missing. Fix and re-run 'chezmoi apply'." >&2
-        exit 1
+        _bundle_failed=1
     fi
 else
     echo "Homebrew not found. Skipping Brewfile installation."
@@ -51,4 +54,8 @@ fi
 
 # asdf itself is installed via Homebrew (see dot_brew/Brewfile). Its data dir
 # (~/.asdf: plugins, installs, shims) is created on first use by asdf 0.16+.
+
+# Deferred failure from the brew bundle step above (default 0 covers the
+# no-brew path). Must stay the last line so everything else has run first.
+exit "${_bundle_failed:-0}"
 {{ end -}}
