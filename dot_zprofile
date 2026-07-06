@@ -1,2 +1,3 @@
-# Activate Homebrew.
-eval "$(/opt/homebrew/bin/brew shellenv)"
+# Activate Homebrew. Try Apple Silicon (/opt/homebrew) first, fall back to
+# Intel (/usr/local) so this works on any Mac.
+eval "$(/opt/homebrew/bin/brew shellenv 2>/dev/null || /usr/local/bin/brew shellenv)"

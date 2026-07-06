@@ -3,4 +3,7 @@
 # tooling like herdr's --remote bridge can't resolve brew- or ~/.local/bin-
 # installed binaries. Harmless duplication with .zprofile/.zshrc in
 # interactive shells.
-export PATH="$HOME/.local/bin:/opt/homebrew/bin:/opt/homebrew/sbin:$PATH"
+# Both Homebrew prefixes are listed; only the one for this Mac's architecture
+# exists (Apple Silicon = /opt/homebrew, Intel = /usr/local), the other is a
+# harmless no-op.
+export PATH="$HOME/.local/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/local/sbin:$PATH"
