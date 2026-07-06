@@ -112,7 +112,7 @@
   fetchJobs = 4
 [credential "https://github.com"]
 	helper = 
-	helper = !gh auth git-credential
+	helper = !{{ if eq .chezmoi.arch "arm64" }}/opt/homebrew{{ else }}/usr/local{{ end }}/bin/gh auth git-credential
 [credential "https://gist.github.com"]
 	helper = 
-	helper = !gh auth git-credential
+	helper = !{{ if eq .chezmoi.arch "arm64" }}/opt/homebrew{{ else }}/usr/local{{ end }}/bin/gh auth git-credential
