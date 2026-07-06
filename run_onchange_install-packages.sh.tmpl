@@ -6,13 +6,24 @@
 if command -v brew &> /dev/null; then
     # Newer Homebrew refuses to load formulae/casks from untrusted third-party
     # taps, which aborts `brew bundle` mid-run. Trust every tap declared in the
-    # Brewfile first (no-op on older brew versions without `brew trust`).
-    awk -F'"' '/^tap /{print $2}' ~/.brew/Brewfile | while read -r tap; do
-        brew trust --tap "$tap" < /dev/null &> /dev/null || true
-    done
+    # Brewfile first (skipped on older brew versions without `brew trust`).
+    # Warn instead of silencing failures: a tap that fails to trust is the
+    # likeliest reason the bundle below aborts.
+    if brew trust --help &> /dev/null; then
+        awk -F'"' '/^tap /{print $2}' ~/.brew/Brewfile | while read -r tap; do
+            brew trust --tap "$tap" < /dev/null &> /dev/null \
+                || echo "Warning: failed to trust tap: $tap" >&2
+        done
+    fi
 
     echo "Installing Homebrew packages from Brewfile..."
-    brew bundle --file=~/.brew/Brewfile
+    # Exit non-zero on failure so chezmoi reports it and retries on the next
+    # apply. A swallowed failure here latches: the script won't re-run until
+    # the Brewfile changes, leaving packages missing for weeks.
+    if ! brew bundle --file=~/.brew/Brewfile; then
+        echo "Error: brew bundle failed; packages are missing. Fix and re-run 'chezmoi apply'." >&2
+        exit 1
+    fi
 else
     echo "Homebrew not found. Skipping Brewfile installation."
 fi
