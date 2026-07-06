@@ -38,15 +38,6 @@ else
   echo "zsh is not the current shell. Please change your shell to zsh and try again."
 fi
 
-function is_asdf_installed {
-  [ -d "$HOME/.asdf" ]
-}
-
-if ! is_asdf_installed; then
-  echo "Installing asdf..."
-  git clone https://github.com/asdf-vm/asdf.git ~/.asdf --branch v0.14.0
-  echo "asdf installed successfully."
-else
-  echo "asdf is already installed."
-fi
+# asdf itself is installed via Homebrew (see dot_brew/Brewfile). Its data dir
+# (~/.asdf: plugins, installs, shims) is created on first use by asdf 0.16+.
 {{ end -}}
