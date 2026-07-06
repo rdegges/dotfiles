@@ -6,9 +6,10 @@
 echo "Installing Homebrew..."
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
 
-# Configure Homebrew.
-(echo; echo 'eval "$(/opt/homebrew/bin/brew shellenv)"') >> ~/.zprofile
-source ~/.zprofile
+# Configure Homebrew for this bootstrap shell. chezmoi installs the managed
+# ~/.zprofile (which runs brew shellenv) later, so we only need brew active now.
+# Works on both Apple Silicon (/opt/homebrew) and Intel (/usr/local).
+eval "$(/opt/homebrew/bin/brew shellenv 2>/dev/null || /usr/local/bin/brew shellenv)"
 echo "Homebrew installed!"
 
 # Install Git.
