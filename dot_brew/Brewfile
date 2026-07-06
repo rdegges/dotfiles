@@ -1,5 +1,14 @@
 tap "snyk/tap"
 tap "xykong/tap"
+# Trust taps for packages installed outside this Brewfile so Homebrew 6.x stops
+# skipping their upgrades (the install script auto-trusts every tap listed here).
+# These are tap-only (no package line) so trust propagates to all boxes without
+# force-installing the packages. jesseduffield/lazygit is leftover -- lazygit
+# itself comes from homebrew-core -- and is listed only to silence its warning.
+tap "jesseduffield/lazygit"
+tap "rhettbull/osxphotos"
+tap "rdegges/tap"
+tap "updatest/tap"
 brew "asdf"
 brew "xz"
 brew "openssl@3"
