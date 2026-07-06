@@ -1,0 +1,30 @@
+{
+  "model": "fable",
+  "fallbackModel": ["opus[1m]"],
+  "enabledPlugins": {
+    "gopls-lsp@claude-plugins-official": true
+  },
+  "extraKnownMarketplaces": {
+    "claude-plugins-official": {
+      "source": {
+        "source": "github",
+        "repo": "anthropics/claude-plugins-official"
+      }
+    },
+    "railway-skills": {
+      "source": {
+        "source": "github",
+        "repo": "railwayapp/railway-skills"
+      }
+    }
+  },
+  "sandbox": {
+    "enabled": false,
+    "allowUnsandboxedCommands": true
+  },
+  "effortLevel": "high",
+  "tui": "fullscreen",
+  "skipDangerousModePermissionPrompt": true,
+  "agentPushNotifEnabled": true,
+  "defaultMode": "bypassPermissions"
+}

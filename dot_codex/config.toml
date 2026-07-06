@@ -1,0 +1,22 @@
+# Codex CLI config. Durable prefs only. Deliberately NOT synced: per-project trust
+# entries (they leak absolute paths and differ per machine) and `model` (each box
+# keeps Codex's own default so this never clobbers the work model). Reasoning effort
+# is pinned to "high": xhigh/max overthink and burn usage for little gain (see the
+# Model Delegation notes in CLAUDE.md).
+approval_policy = "never"
+file_opener = "cursor"
+model_reasoning_effort = "high"
+sandbox_mode = "danger-full-access"
+
+[history]
+model_reasoning_summary = "auto"
+persistence = "save-all"
+show_raw_agent_reasoning = true
+web_search = "live"
+
+[mcp_servers.railway]
+args = ["mcp"]
+command = "railway"
+
+[notice]
+hide_full_access_warning = true
