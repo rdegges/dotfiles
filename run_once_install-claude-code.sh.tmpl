@@ -1,0 +1,20 @@
+{{- if eq .chezmoi.os "darwin" -}}
+#!/bin/bash
+# Install Claude Code CLI (https://claude.com/product/claude-code) to ~/.local/bin
+# using the official installer. Runs once per machine on `chezmoi apply`.
+#
+# To re-install / upgrade later, just rerun the installer (or `claude update`):
+#   curl -fsSL https://claude.ai/install.sh | bash
+
+set -euo pipefail
+
+if [ -x "$HOME/.local/bin/claude" ]; then
+    echo "Claude Code already installed at ~/.local/bin/claude — skipping."
+    "$HOME/.local/bin/claude" --version 2>/dev/null | head -1 || true
+    exit 0
+fi
+
+echo "Installing Claude Code CLI to ~/.local/bin..."
+curl -fsSL https://claude.ai/install.sh | bash
+echo "Claude Code installed: $($HOME/.local/bin/claude --version 2>/dev/null | head -1)"
+{{ end -}}

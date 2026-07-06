@@ -56,3 +56,14 @@ alias bi="brew install"
 
 # Mac helpers.
 alias dstore="find . -name '.DS_Store' -delete"
+
+# AI coding agents (launched with permission/approval prompts bypassed).
+alias cc="claude --dangerously-skip-permissions"
+alias cx="codex --dangerously-bypass-approvals-and-sandbox"
+
+# herdr agent servers: agentp = personal box, agentw = work box.
+# agentw is only defined on work (Snyk) machines.
+alias agentp="herdr --remote rdegges@mac-server"
+{{ if .work -}}
+alias agentw="herdr --remote rdegges@snyk-server"
+{{ end -}}
