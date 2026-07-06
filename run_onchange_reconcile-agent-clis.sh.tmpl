@@ -1,0 +1,42 @@
+{{- if eq .chezmoi.os "darwin" -}}
+#!/bin/bash
+# Keep the chezmoi-managed Codex and Claude Code CLIs the ONLY copies on this
+# machine. Canonical sources:
+#   codex  -> Homebrew cask "codex"      (declared in dot_brew/Brewfile)
+#   claude -> official native installer  (~/.local/bin/claude, see
+#             run_once_install-claude-code.sh.tmpl)
+# Installs from other channels (npm globals, an extra Homebrew cask) can shadow
+# or duplicate these -- e.g. a global @openai/codex on the asdf-managed node
+# puts a shim ahead of the brew binary on PATH. This removes those stray copies
+# with each tool's own package manager (never rm -rf), and only AFTER confirming
+# the canonical copy is present, so the machine is never left without the tool.
+# Idempotent; re-runs whenever this script changes.
+set -uo pipefail
+
+_reshim() { command -v asdf >/dev/null 2>&1 && asdf reshim nodejs >/dev/null 2>&1 || true; }
+_has_npm_global() { command -v npm >/dev/null 2>&1 && npm ls -g --depth=0 "$1" >/dev/null 2>&1; }
+
+# codex: canonical is the Homebrew cask.
+if brew list --cask codex >/dev/null 2>&1; then
+  if _has_npm_global @openai/codex; then
+    echo "reconcile: removing stray npm-global @openai/codex (brew cask is canonical)"
+    npm uninstall -g @openai/codex >/dev/null 2>&1 || true
+    _reshim
+  fi
+fi
+
+# claude: canonical is the native installer at ~/.local/bin/claude.
+if [ -x "$HOME/.local/bin/claude" ]; then
+  if brew list --cask claude-code >/dev/null 2>&1; then
+    echo "reconcile: removing stray Homebrew cask claude-code (native install is canonical)"
+    brew uninstall --cask claude-code >/dev/null 2>&1 || true
+  fi
+  if _has_npm_global @anthropic-ai/claude-code; then
+    echo "reconcile: removing stray npm-global @anthropic-ai/claude-code (native install is canonical)"
+    npm uninstall -g @anthropic-ai/claude-code >/dev/null 2>&1 || true
+    _reshim
+  fi
+fi
+
+echo "reconcile: codex -> $(command -v codex 2>/dev/null || echo none), claude -> $(command -v claude 2>/dev/null || echo none)"
+{{ end -}}
