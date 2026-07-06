@@ -1,0 +1,26 @@
+{{- if eq .chezmoi.os "darwin" -}}
+#!/bin/bash
+# ~/.tool-versions hash: {{ include "dot_tool-versions" | sha256sum }}
+#
+# Install the asdf tool versions pinned in ~/.tool-versions whenever they change,
+# so the shims actually resolve. Without this, applying a new pin leaves asdf
+# pointing at a version that isn't installed ("version X not installed").
+#
+# chezmoi applies ~/.tool-versions before this runs (".tool-versions" sorts ahead
+# of "install-tool-versions"), so we read the freshly-applied file. Installing an
+# already-present version is a fast no-op; a new one (e.g. a fresh Python) builds.
+set -uo pipefail
+
+command -v asdf >/dev/null 2>&1 || { echo "asdf not found; skipping tool-version install."; exit 0; }
+
+TV="$HOME/.tool-versions"
+[ -f "$TV" ] || exit 0
+
+echo "Installing pinned asdf tool versions from $TV ..."
+while read -r tool version _; do
+  case "$tool" in ''|\#*) continue ;; esac
+  asdf plugin add "$tool" >/dev/null 2>&1 || true
+  asdf install "$tool" "$version" || echo "Warning: failed to install $tool $version"
+done < "$TV"
+echo "asdf tool versions installed."
+{{ end -}}
