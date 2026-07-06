@@ -1,0 +1,6 @@
+# Claude Code skills to install, one source per line. Comments (#) and blank
+# lines are ignored. The install script runs `npx skills add <source> -g -y`
+# for each. The `skills` tool maintains its own ~/.agents/.skill-lock.json,
+# which is deliberately NOT managed by chezmoi (the tool rewrites it -- including
+# an updatedAt timestamp -- on every run, which would drift endlessly).
+pbakaus/impeccable

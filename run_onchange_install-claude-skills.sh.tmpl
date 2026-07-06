@@ -1,12 +1,10 @@
 {{- if eq .chezmoi.os "darwin" -}}
 #!/bin/bash
 
-# ~/.agents/.skill-lock.json hash: {{ include "dot_agents/dot_skill-lock.json" | sha256sum }}
-# Re-runs whenever the skill lock file changes
+# ~/.agents/skills.txt hash: {{ include "dot_agents/skills.txt" | sha256sum }}
+# Re-runs whenever the desired skills list changes.
 
 set -euo pipefail
-
-echo "Installing Claude Code skills from lock file..."
 
 if ! command -v npx &> /dev/null; then
     echo "npx not found. Skipping skill installation."
@@ -14,21 +12,20 @@ if ! command -v npx &> /dev/null; then
     exit 0
 fi
 
-LOCK_FILE="$HOME/.agents/.skill-lock.json"
+SKILLS_FILE="$HOME/.agents/skills.txt"
 
-if [ ! -f "$LOCK_FILE" ]; then
-    echo "No skill lock file found. Skipping."
+if [ ! -f "$SKILLS_FILE" ]; then
+    echo "No skills list found at $SKILLS_FILE. Skipping."
     exit 0
 fi
 
-# Parse each skill source from the lock file and install it globally
-for source in $(python3 -c "
-import json, sys
-with open('$LOCK_FILE') as f:
-    lock = json.load(f)
-for name, info in lock.get('skills', {}).items():
-    print(info['source'])
-"); do
+echo "Installing Claude Code skills from $SKILLS_FILE..."
+
+# Each non-comment, non-blank line is a skill source. The `skills` tool owns its
+# own lock file (~/.agents/.skill-lock.json); we only drive the desired set here.
+grep -vE '^[[:space:]]*(#|$)' "$SKILLS_FILE" | while read -r source; do
+    source="${source%%[[:space:]]*}"
+    [ -z "$source" ] && continue
     echo "Installing skill: $source"
     npx skills add "$source" -g -y 2>&1 || echo "Warning: failed to install $source"
 done
