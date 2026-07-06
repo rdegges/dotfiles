@@ -1,6 +1,9 @@
 {{- if eq .chezmoi.os "darwin" -}}
 #!/bin/bash
-# ~/.cron/crontab hash: {{ include "dot_cron/crontab" | sha256sum }}
+# ~/.cron/crontab hash: {{ include "dot_cron/crontab.tmpl" | sha256sum }}
+
+# Ensure the cron job log directory exists before any job writes to it.
+mkdir -p "$HOME/.cron/logs"
 
 # Install crontab.
 echo "Installing crontab..."

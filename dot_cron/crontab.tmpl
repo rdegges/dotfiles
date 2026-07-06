@@ -1,0 +1,41 @@
+# Managed by chezmoi (source: dot_cron/crontab.tmpl). Do not edit in place.
+#
+# Cron runs jobs with a minimal environment and no shell profile. The env
+# ASSIGNMENT lines below are literal -- cron does NOT expand $VARS in them -- so
+# absolute paths are required; {{ "{{ .chezmoi.homeDir }}" }} is filled in by chezmoi at
+# apply time. COMMAND lines are run via /bin/sh, so $HOME does expand there.
+#
+# Commands are bare (resolved via PATH) rather than hardcoded to /opt/homebrew,
+# so this works on both Apple Silicon (/opt/homebrew) and Intel (/usr/local).
+SHELL=/bin/sh
+PATH={{ .chezmoi.homeDir }}/.asdf/shims:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin
+
+# Homebrew, non-interactively: quiet the env hints, skip the redundant implicit
+# auto-update (we run `brew update` explicitly), and never block on 6.x "ask
+# mode" (no-TTY already skips the prompt; this is belt-and-suspenders).
+HOMEBREW_NO_ENV_HINTS=1
+HOMEBREW_NO_AUTO_UPDATE=1
+HOMEBREW_NO_ASK=1
+
+# Update Homebrew + upgrade all formulae and casks. Plain `brew upgrade` (no
+# args) already covers both. No --greedy: it redundantly re-downloads apps that
+# update themselves. --no-quit so an unattended run never closes an app you're
+# using. Daily at 10:00.
+0 10 * * * { date; brew update --quiet && brew upgrade --quiet --no-quit; } > $HOME/.cron/logs/brew.log 2>&1
+
+# Sync dotfiles from the repo (git pull + apply). Hourly at :15.
+15 * * * * { date; chezmoi update --force; } > $HOME/.cron/logs/chezmoi.log 2>&1
+
+# Refresh asdf plugin repos (installed tool versions stay pinned by
+# .tool-versions). Hourly at :30.
+30 * * * * { date; asdf plugin update --all; } > $HOME/.cron/logs/asdf.log 2>&1
+
+# Upgrade all pipx-managed apps. Hourly at :45.
+45 * * * * { date; pipx upgrade-all; } > $HOME/.cron/logs/pipx.log 2>&1
+
+# Prune brew cache older than 30 days (also autoremoves now-unused deps by
+# default in 6.x). Saturday at 11:00.
+0 11 * * 6 { date; brew cleanup --prune=30 --quiet; } > $HOME/.cron/logs/brew-cleanup.log 2>&1
+
+# Update Oh My Zsh. Saturday at 10:00.
+0 10 * * 6 { date; zsh -c 'cd $HOME/.oh-my-zsh && git pull -q'; } > $HOME/.cron/logs/oh-my-zsh.log 2>&1
