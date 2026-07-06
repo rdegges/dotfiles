@@ -4,7 +4,6 @@ tap "xykong/tap"
 # skipping their upgrades (the install script auto-trusts every tap listed here).
 # Tap-only (no package line) so trust propagates to all boxes without
 # force-installing the packages onto boxes that don't have them.
-tap "rhettbull/osxphotos"
 tap "rdegges/tap"
 tap "updatest/tap"
 brew "asdf"
