@@ -54,7 +54,7 @@ To make any new item work-only, gate it on `.work` — this works in any templat
 {{ end }}
 ```
 
-The Himalaya email config below is the first consumer of this pattern: the personal iCloud account renders everywhere, while the work Gmail account only renders when `work = true`.
+Several things consume this pattern today: the Himalaya email config (below), the `agentw` shell alias (a work-only agent server), and gated blocks in the install/cron scripts. For example, the personal iCloud account renders everywhere, while the work Gmail account only renders when `work = true`.
 
 
 ## Email (Himalaya)
@@ -81,3 +81,32 @@ The only per-machine step is loading the iCloud app password into the Keychain:
    ```bash
    himalaya folder list
    ```
+
+
+## Toolchain (asdf)
+
+Language runtimes and CLI tools (Python, Node, Go, uv, pipx, Bun) are managed by
+[asdf](https://asdf-vm.com). asdf itself is installed via Homebrew (see
+`dot_brew/Brewfile`); its data dir (`~/.asdf`) is created on first use.
+
+Exact versions are pinned in `~/.tool-versions` (managed by chezmoi as
+`dot_tool-versions`) so every machine resolves the same toolchain. To move to
+newer releases, `asdf install <tool> latest`, `asdf set <tool> <version> --home`,
+then `chezmoi add ~/.tool-versions` and commit.
+
+
+## AI coding tools
+
+- **Claude Code** (`claude`) — installed to `~/.local/bin` via the official
+  installer (`run_once_install-claude-code.sh.tmpl`).
+- **Codex** (`codex`) — installed via the Homebrew cask.
+- **herdr** — terminal multiplexer for AI agents, installed via Homebrew.
+
+`run_onchange_reconcile-agent-clis.sh.tmpl` keeps exactly one copy of `claude`
+and `codex` on each box: it removes stray installs from other channels (npm
+globals, an extra Homebrew cask) so the managed install is the only one on PATH.
+
+Shell aliases (see `dot_oh-my-zsh/custom/aliases.zsh.tmpl`): `cc` (claude with
+permissions bypassed), `cx` (codex with approvals/sandbox bypassed), `agentp`
+(herdr on the personal server), and `agentw` (herdr on the work server, defined
+only when `work = true`).
