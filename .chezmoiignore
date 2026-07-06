@@ -1,2 +1,11 @@
 README.md
 bootstrap.sh
+
+{{/* Never sync secrets or machine-local state, even if `chezmoi add`ed by accident. */}}
+.codex/auth.json
+.claude/settings.local.json
+
+{{/* Codex delegation skill is work-only (needs an authenticated Codex sub). */}}
+{{ if not .work }}
+.claude/skills/codex-computer-use
+{{ end }}
