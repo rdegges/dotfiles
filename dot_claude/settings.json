@@ -1,6 +1,8 @@
 {
   "model": "fable",
-  "fallbackModel": ["opus[1m]"],
+  "fallbackModel": [
+    "opus[1m]"
+  ],
   "enabledPlugins": {
     "gopls-lsp@claude-plugins-official": true
   },
@@ -26,5 +28,10 @@
   "tui": "fullscreen",
   "skipDangerousModePermissionPrompt": true,
   "agentPushNotifEnabled": true,
-  "defaultMode": "bypassPermissions"
+  "defaultMode": "bypassPermissions",
+  "voiceEnabled": true,
+  "voice": {
+    "enabled": true,
+    "mode": "hold"
+  }
 }
