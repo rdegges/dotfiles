@@ -1,11 +1,9 @@
-# Codex CLI config. Durable prefs only. Deliberately NOT synced: per-project trust
-# entries (they leak absolute paths and differ per machine) and `model` (each box
-# keeps Codex's own default so this never clobbers the work model). Reasoning effort
-# is pinned to "high": xhigh/max overthink and burn usage for little gain (see the
-# Model Delegation notes in CLAUDE.md).
+# Codex CLI config. Durable prefs only. Per-project trust entries are deliberately
+# not synced because they leak absolute paths and differ per machine.
 approval_policy = "never"
 file_opener = "cursor"
-model_reasoning_effort = "high"
+model = "gpt-5.6-sol"
+model_reasoning_effort = "xhigh"
 sandbox_mode = "danger-full-access"
 
 [history]
