@@ -5,6 +5,8 @@ tap "xykong/tap"
 # Tap-only (no package line) so trust propagates to all boxes without
 # force-installing the packages onto boxes that don't have them.
 tap "rdegges/tap"
+tap "heroku/brew"
+tap "updatest/tap"
 brew "asdf"
 brew "xz"
 brew "openssl@3"
