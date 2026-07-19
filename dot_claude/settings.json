@@ -4,7 +4,8 @@
     "opus[1m]"
   ],
   "enabledPlugins": {
-    "gopls-lsp@claude-plugins-official": true
+    "gopls-lsp@claude-plugins-official": true,
+    "mattpocock-skills@mattpocock": true
   },
   "extraKnownMarketplaces": {
     "claude-plugins-official": {
@@ -18,6 +19,12 @@
         "source": "github",
         "repo": "railwayapp/railway-skills"
       }
+    },
+    "mattpocock": {
+      "source": {
+        "source": "github",
+        "repo": "mattpocock/skills"
+      }
     }
   },
   "sandbox": {
@@ -26,12 +33,12 @@
   },
   "effortLevel": "high",
   "tui": "fullscreen",
-  "skipDangerousModePermissionPrompt": true,
-  "agentPushNotifEnabled": true,
-  "defaultMode": "bypassPermissions",
-  "voiceEnabled": true,
   "voice": {
     "enabled": true,
     "mode": "hold"
-  }
+  },
+  "skipDangerousModePermissionPrompt": true,
+  "agentPushNotifEnabled": true,
+  "voiceEnabled": true,
+  "defaultMode": "bypassPermissions"
 }
