@@ -12,9 +12,5 @@ persistence = "save-all"
 show_raw_agent_reasoning = true
 web_search = "live"
 
-[mcp_servers.railway]
-args = ["mcp"]
-command = "railway"
-
 [notice]
 hide_full_access_warning = true
