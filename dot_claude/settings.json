@@ -27,6 +27,12 @@
       }
     }
   },
+  "permissions": {
+    "allow": [
+      "Edit(//Users/rdegges/Vault/Personal/**)",
+      "Write(//Users/rdegges/Vault/Personal/**)"
+    ]
+  },
   "sandbox": {
     "enabled": false,
     "allowUnsandboxedCommands": true
