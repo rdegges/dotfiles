@@ -244,6 +244,26 @@ If it's not in any of those, then ask me where it is or whether you should clone
 
 My Obsidian vault is at `~/Vault/Personal` and is always synced via Obsidian Sync. It is my personal knowledge base and your primary source of context about me, my work, and my thinking. The vault follows a PARA layout (Projects / Areas / Resources / Archive) with a **Snyk/Personal split** at every level, plus top-level `People/` and `Meetings/` folders that also split Snyk from Personal.
 
+### Vault Subagents — Route Vault Work to Them
+
+Two custom subagents (in `~/.claude/agents/`, shipped with these dotfiles) own
+vault work. Prefer delegating over doing vault work inline — it keeps large
+vault reads out of the main context and enforces the vault's conventions:
+
+- **`vault-librarian`** (read-only) — any lookup or synthesis that requires
+  reading vault notes: "who is X", meeting prep, project status, past
+  decisions, open items, cross-note research.
+- **`vault-archivist`** (write-capable) — all filing and maintenance: ingest
+  ("process my inbox" = `Resources/Clips/Inbox/`), creating
+  People/Meeting/Project/Resource notes, recipes, `log.md`/`index.md` updates,
+  lint (report-first), archiving.
+
+The canonical conventions (frontmatter templates, filing rules, log format)
+live in those agent definitions and in `~/Vault/Personal/Preferences.md`
+§Vault Hygiene — they are the source of truth; do not duplicate or override
+them here. If the subagents are unavailable (non-Claude-Code harness), read
+Preferences.md §Vault Hygiene before writing anything to the vault.
+
 ### Automatic Context Pulling
 
 **At the start of every session or task**, proactively read these baseline files to ground yourself in what I'm currently working on:
@@ -252,149 +272,57 @@ My Obsidian vault is at `~/Vault/Personal` and is always synced via Obsidian Syn
 2. `~/Vault/Personal/Preferences.md` — How I like things done (code, writing, communication).
 3. `~/Vault/Personal/Projects.md` — Master index of projects with links.
 
-**For any work-related request**, also check the Snyk side of PARA for relevant context before asking me:
+**For anything deeper** — a person's context ("who is X"), work-request
+background, meeting history, topic research, open items — delegate to
+`vault-librarian` instead of fanning out reads yourself. Trivial single-file
+peeks at a path you already know are fine to read directly.
 
-- `~/Vault/Personal/Projects/Snyk/` — Active Snyk initiatives and projects.
-- `~/Vault/Personal/Areas/Snyk/` — Ongoing Snyk responsibilities (GTM AI, DevRel, SecRel, Community, Content, etc.).
-- `~/Vault/Personal/Resources/Snyk/` — Reference material. Start with `Snyk Institutional Knowledge.md` — it's the canonical brain-dump of how things work at Snyk.
+### Keeping the Vault Updated (via vault-archivist)
 
-For personal requests, mirror the same pattern against `Projects/Personal/`, `Areas/Personal/`, and `Resources/Personal/`.
+The *when* lives here; the *how* (formats, filing rules) lives in the
+archivist. Delegate these to `vault-archivist`:
 
-**When I mention someone by name**, look them up in `~/Vault/Personal/People/Snyk/<Name>.md` (fall back to `People/Personal/` if not found). Fuzzy match the filename — first name, last name, or partial matches are all fine. If multiple files match, disambiguate by the `last_met` field in the frontmatter (prefer the most recently met person unless context makes another choice obvious). Read both the frontmatter and the `## Meeting History` section to get relationship context before responding.
-
-**For recent meeting context**, look in `~/Vault/Personal/Meetings/Snyk/YYYY/MM/DD/`. Files are named `HHMM - Title.md` (e.g. `0900 - SteerCo GTM AI Transformation.md`). The `Meetings/Personal/` tree mirrors the same convention for non-work meetings.
-
-### File Formats
-
-**People files** (`People/Snyk/<Name>.md`) use this frontmatter and structure:
-
-    ---
-    last_met: 2026-02-11
-    meeting_count: 1
-    topics:
-      - ga-launch-strategy
-      - pr-communications
-    ---
-    ## Meta
-    - **Title**: ...
-    - **Email**: ...
-    - **Company**: ...
-    - **Type**: External contact
-    - **Last Updated**: 2026-04-10
-    ## Relationship
-    ## Meeting History
-    - **2026-02-11** — [[0900 - Marketing weekly]] — summary
-
-**Meeting files** (`Meetings/Snyk/YYYY/MM/DD/HHMM - Title.md`) look like:
-
-    ---
-    date: 2026-04-08
-    time: "09:00 - 09:30"
-    duration: 30
-    type: meeting
-    has_transcript: true
-    attendees:
-      - "[[Michaela Doyle]]"
-      - "[[Tim Smith]]"
-    tags:
-      - meeting
-      - snyk
-    ---
-    ## Attendees
-    ## Summary
-    ## Key Decisions
-
-Attendees in meeting files are Obsidian wiki-links (`[[Name]]`) that resolve to `People/Snyk/<Name>.md`. When you see an attendee link, you can read the corresponding people file directly to get their context.
-
-### Searching the Vault
-
-Use grep/find against the structured tree when you need to pull context quickly:
-
-- Find a person by fuzzy name: `find ~/Vault/Personal/People -iname "*smith*"`
-- Find all meetings with someone: `grep -rl "\[\[Tim Smith\]\]" ~/Vault/Personal/Meetings/Snyk/`
-- Most recent meetings: `ls -1 ~/Vault/Personal/Meetings/Snyk/2026/*/*/ | tail`
-- All meetings on a topic: `grep -rli "ga launch" ~/Vault/Personal/Meetings/Snyk/`
-- People I met recently: `grep -rl "last_met: 2026-04" ~/Vault/Personal/People/Snyk/`
-- Search project notes: `grep -rli "<keyword>" ~/Vault/Personal/Projects/Snyk/ ~/Vault/Personal/Areas/Snyk/`
-
-### Keeping the Vault Updated
-
-- **New work projects:** create the note in `~/Vault/Personal/Projects/Snyk/<Project>.md` with purpose, start date, last worked on date, status, links to the GitHub repo (if any), and other relevant metadata. Link it from `Projects.md`. New personal projects go in `Projects/Personal/`.
-- **New people:** add them to `~/Vault/Personal/People/Snyk/<Full Name>.md` (or `People/Personal/` for non-work contacts) using the frontmatter format above.
-- **New meetings:** create the note at `~/Vault/Personal/Meetings/Snyk/YYYY/MM/DD/HHMM - Title.md` using the meeting frontmatter format, and wiki-link attendees as `[[Full Name]]` so they resolve to their People file.
-- **Decisions and context:** if we make an important decision during a session (architecture choice, tool selection, strategy change), append a brief entry to the relevant project or area note so future sessions have that context.
-- **Now page:** if my priorities visibly shift during our work (e.g., "I'm dropping X to focus on Y"), offer to update `Now.md`.
+- **New projects, people, or meetings** worth recording.
+- **Decisions and context:** if we make an important decision during a session
+  (architecture choice, tool selection, strategy change), have the archivist
+  append a brief entry to the relevant project or area note so future sessions
+  have that context.
+- **Now page:** if my priorities visibly shift during our work (e.g., "I'm
+  dropping X to focus on Y"), offer to update `Now.md`.
+- **Valuable syntheses** (comparisons, analyses, meeting prep, strategy docs):
+  offer to file them under `Resources/` rather than letting them vanish into
+  chat history.
+- **"Process my inbox" / "ingest clips" / "lint the vault" / archiving** —
+  always the archivist. Lint and archive are report-first: findings before
+  changes.
 
 ### Vault Structure
 
 ```
 ~/Vault/Personal/
-├── Now.md                    # Current priorities and focus
-├── Preferences.md            # How I like things done
+├── Now.md                    # Current priorities and focus (read first)
+├── Preferences.md            # How I like things done + §Vault Hygiene (write rules)
 ├── Projects.md               # Master project index
 ├── People.md                 # People index / overview
-├── Weekly Planner.md         # Weekly planning template
-├── Projects/
-│   ├── Snyk/                 # Active work projects
-│   └── Personal/             # Active personal projects
-├── Areas/
-│   ├── Snyk/                 # Ongoing work responsibilities
-│   └── Personal/             # Ongoing personal responsibilities
+├── Areas.md                  # Areas index
+├── Action Items.md           # Full open-item queue
+├── index.md                  # Master catalog (machine-maintained)
+├── log.md                    # Reverse-chron change log (machine-maintained)
+├── Projects/{Snyk,Personal}/ # Active projects
+├── Areas/{Snyk,Personal,Writing}/  # Ongoing responsibilities + writing drafts
 ├── Resources/
-│   ├── Snyk/                 # Work reference (incl. Snyk Institutional Knowledge.md)
-│   └── Personal/             # Personal reference
-├── Archive/
-│   ├── Snyk/                 # Archived work
-│   └── Personal/             # Archived personal
-├── People/
-│   ├── Snyk/                 # Work contacts (frontmatter-based)
-│   └── Personal/             # Personal contacts
+│   ├── Snyk/                 # Work reference (incl. Snyk Institutional Knowledge.md,
+│   │                         #   Done List/, Published Blogs/)
+│   ├── Personal/             # Personal reference (incl. Recipes/, Session Traces/)
+│   └── Clips/{Inbox,Processed}/  # Web-clipper ingest queue
+├── Archive/{Snyk,Personal}/  # Archived material
+├── People/Snyk/              # Contacts (frontmatter-based; Personal/ created on demand)
 └── Meetings/
-    ├── Snyk/YYYY/MM/DD/      # Work meetings, filename: "HHMM - Title.md"
-    └── Personal/             # Personal meetings
+    ├── Snyk/YYYY/MM/DD/      # "HHMM - Title.md" + per-day daily-brief.md
+    └── Personal/             # Personal meetings, same convention
 ```
 
-**Do not create new top-level folders** in the vault — stick with the PARA + People + Meetings structure above. Within those folders, use the Snyk/Personal split and follow the filename and frontmatter conventions.
-
-### Ingest Workflow (Web Clipper → Wiki)
-- Raw article clips land in `~/Vault/Personal/Resources/Clips/Inbox/`
-- When asked to "process my inbox" or "ingest clips", read each clip in Inbox/:
-  1. Read the raw article markdown
-  2. Write a wiki-style summary page in `Resources/Snyk/` or `Resources/Personal/` based on content (work-related = Snyk, personal = Personal). Summary should have frontmatter: `source_url`, `date_clipped`, `topics` (list), `related_people` (wiki-links), `related_projects` (wiki-links), `tags`
-  3. Update any related `People/Snyk/` files if the article mentions tracked people (add to their topics list)
-  4. Update any related Project pages if relevant to active work
-  5. Move the raw clip from `Inbox/` to `Resources/Clips/Processed/`
-  6. Prepend an entry to `~/Vault/Personal/log.md` (right after the header), using the heading + bullet-list format defined under "Index and Log" below
-  7. Update `~/Vault/Personal/index.md` with the new summary page
-- If an article is actionable (spawns a task), create or update a Project page in `Projects/Snyk/` or `Projects/Personal/` and link back to the summary
-
-### Wiki Maintenance (Lint)
-- When asked to "lint the vault" or "health-check the wiki", check for:
-  - People files with stale `last_met` dates (>30 days old)
-  - Meeting files with empty Summary or Key Decisions sections
-  - Projects that look completed and should move to Archive
-  - Orphan pages with no inbound wiki-links
-  - Missing cross-references (names mentioned in meetings but no People file exists)
-  - Contradictions between pages
-- Report findings and ask before making changes
-
-### Index and Log
-- `~/Vault/Personal/index.md` is the master catalog — read it first when searching for context, update it when creating/modifying pages
-- `~/Vault/Personal/log.md` is the reverse-chronological record — prepend new entries (right after the header) after any ingest, lint, or significant wiki update
-- Log entry format: a `## [YYYY-MM-DD] action | Title` heading (action is one of: ingest, lint, update, create, archive), where Title is a short one-line description — then a blank line, then a flat `-` bullet list describing what changed.
-  - One bullet per discrete change or fact; write each bullet in proper sentence case (capitalized first word, normal capitalization — not all-caps for emphasis).
-  - Keep bullets flat (no nested sub-bullets); use a short lead-in bullet ending in `:` to group related items when helpful.
-  - Never write the body as a single run-on paragraph — that renders as a giant heading/wall of text and is hard to scan.
-  - Use inline emphasis sparingly: rely on `code spans`, `[[wiki-links]]`, and status emoji (🟢/🟡/🚨) rather than bold/italics for emphasis.
-
-### Content-Type Filing Rules
-- **Recipes** (cooking videos, food blogs, meal prep) → `Resources/Personal/Recipes/<Title>.md`. Follow the template and frontmatter conventions defined in `Resources/Personal/Recipes/Recipes.md`. Always estimate calories and macros per serving (calories, protein, carbs, fat) when the source doesn't provide them — mark `macros_estimated: true` in the frontmatter. After creating the recipe, add a wiki-link to the "By course" index in `Recipes.md` and bump `recipe_count`.
-- **Work reference material** → `Resources/Snyk/<Title>.md`
-- **Personal reference material** → `Resources/Personal/<Title>.md`
-
-### Filing Query Results
-
-- When Claude produces a valuable synthesis (comparison, analysis, meeting prep, strategy doc), offer to file it in the vault under `Resources/Snyk/` or `Resources/Personal/` rather than letting it vanish into chat history
+**Do not create new top-level folders** in the vault — stick with the PARA + People + Meetings structure above. Root naming: capitalized files are human-facing destinations, lowercase (`index.md`, `log.md`) are machine-maintained plumbing. All other conventions (frontmatter templates, ingest steps, log format, content-type filing) are defined in the `vault-archivist` agent and `Preferences.md` §Vault Hygiene.
 
 ## gstack
 
