@@ -23,6 +23,11 @@ HOMEBREW_NO_ASK=1
 # using. Daily at 10:00.
 0 10 * * * { date; brew update --quiet && brew upgrade --quiet --no-quit; } > $HOME/.cron/logs/brew.log 2>&1
 
+# Snapshot every Obsidian vault into git. Hourly at :05, ahead of the chezmoi
+# pull at :15 so a snapshot never races a dotfiles-driven change. This is the
+# only undo available for the vaults -- Obsidian Sync keeps no usable history.
+5 * * * * { date; $HOME/.cron/vault-snapshot.sh; } > $HOME/.cron/logs/vault-snapshot.log 2>&1
+
 # Sync dotfiles from the repo (git pull + apply). Hourly at :15.
 15 * * * * { date; chezmoi update --force; } > $HOME/.cron/logs/chezmoi.log 2>&1
 

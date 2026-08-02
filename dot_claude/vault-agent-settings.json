@@ -1,0 +1,58 @@
+{
+  "$comment": "Settings for UNATTENDED vault agent runs (cron/scheduled). Use with: claude --settings ~/.claude/vault-agent-settings.json. Deliberately stricter than ~/.claude/settings.json, which stays permissive for interactive work. An unattended agent gets a sandbox, no bypassPermissions, and an explicit deny list -- the archivist's 'Bash is for mv -n only' is prose, and prose does not hold.",
+  "permissions": {
+    "defaultMode": "default",
+    "allow": [
+      "Read(//Users/rdegges/Vault/**)",
+      "Edit(//Users/rdegges/Vault/**)",
+      "Write(//Users/rdegges/Vault/**)",
+      "Bash(vault-lint:*)",
+      "Bash(git -C /Users/rdegges/Vault/Personal status:*)",
+      "Bash(git -C /Users/rdegges/Vault/Personal diff:*)",
+      "Bash(git -C /Users/rdegges/Vault/Personal log:*)",
+      "Bash(git -C /Users/rdegges/Vault/Personal rev-parse:*)",
+      "Bash(git -C /Users/rdegges/Vault/Personal add:*)",
+      "Bash(git -C /Users/rdegges/Vault/Personal commit:*)",
+      "Bash(git -C /Users/rdegges/Vault/Work status:*)",
+      "Bash(git -C /Users/rdegges/Vault/Work diff:*)",
+      "Bash(git -C /Users/rdegges/Vault/Work log:*)",
+      "Bash(git -C /Users/rdegges/Vault/Work rev-parse:*)",
+      "Bash(git -C /Users/rdegges/Vault/Work add:*)",
+      "Bash(git -C /Users/rdegges/Vault/Work commit:*)",
+      "Bash(pgrep:*)",
+      "Bash(mv -n:*)"
+    ],
+    "deny": [
+      "Bash(rm:*)",
+      "Bash(rmdir:*)",
+      "Bash(curl:*)",
+      "Bash(wget:*)",
+      "Bash(nc:*)",
+      "Bash(ssh:*)",
+      "Bash(scp:*)",
+      "Bash(chmod:*)",
+      "Bash(chown:*)",
+      "Bash(git push:*)",
+      "Bash(git remote:*)",
+      "Bash(git checkout:*)",
+      "Bash(git reset:*)",
+      "Bash(git clean:*)",
+      "Bash(git restore:*)",
+      "Bash(chezmoi:*)",
+      "Bash(crontab:*)",
+      "Write(//Users/rdegges/.claude/**)",
+      "Edit(//Users/rdegges/.claude/**)",
+      "Write(//Users/rdegges/.local/share/chezmoi/**)",
+      "Edit(//Users/rdegges/.local/share/chezmoi/**)",
+      "Write(//Users/rdegges/.ssh/**)",
+      "Read(//Users/rdegges/.ssh/**)",
+      "Read(//Users/rdegges/.aws/**)",
+      "Read(//Users/rdegges/.config/gh/**)"
+    ]
+  },
+  "sandbox": {
+    "enabled": true,
+    "allowUnsandboxedCommands": false
+  },
+  "skipDangerousModePermissionPrompt": false
+}
