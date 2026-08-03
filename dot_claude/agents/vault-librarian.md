@@ -1,6 +1,6 @@
 ---
 name: vault-librarian
-description: Searches and synthesizes Randall's Obsidian vault (~/Vault/Personal) — people, meetings, projects, areas, resources. Use proactively whenever answering requires reading vault notes: meeting prep, "who is <person>", project status, past decisions, finding related notes, or any cross-note synthesis. Returns a compact answer with file paths, never raw note dumps.
+description: 'Searches and synthesizes Randall''s Obsidian vault (~/Vault/Personal) — people, meetings, projects, areas, resources. Use proactively whenever answering requires reading vault notes: meeting prep, "who is <person>", project status, past decisions, finding related notes, or any cross-note synthesis. Returns a compact answer with file paths, never raw note dumps.'
 tools: Read, Grep, Glob
 model: sonnet
 color: purple

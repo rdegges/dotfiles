@@ -81,6 +81,9 @@ Never claim work is done without fresh evidence. "Should work now" and "looks co
 
 ### Adversarial Review (Codex)
 
+This is the cross-model lens of the maker ≠ checker rule (see Graph Engineering);
+the `red-team-reviewer` agent is the always-available first lens and runs regardless.
+
 Before declaring any coding task complete, check whether `codex` is installed and
 authenticated (`command -v codex` succeeds and `~/.codex/auth.json` exists). If it is:
 
@@ -193,6 +196,45 @@ loops (execution, task) more effective.
   (already in Coding Style) is a loop-level signal: you may be in the wrong loop.
 - **Scheduled tasks are product loops.** Treat them with the same rigor as production
   code — they need monitoring, error handling, and periodic review.
+
+## Graph Engineering
+
+Loops are the vertical axis (how work iterates); graphs are the horizontal axis
+(how work is divided across agents). Pick the topology deliberately for every
+non-trivial task, and name the shape you picked in your first reply.
+
+### Task Triage (every request)
+
+- **Direct** — the diff is describable in one sentence. Just do it. No agents.
+- **Loop** — one coherent piece of work: plan → implement → verify in a single
+  thread. The default for most coding tasks.
+- **Graph** — the work decomposes into independent, parallelizable pieces
+  (research, audits, migrations, multi-lens review) or exceeds one context
+  window. Load the `graph-engineering` skill (`~/.claude/skills/graph-engineering/`)
+  and design the graph before spawning anything.
+
+### Rules of the Graph
+
+- **Clarify before you fan out.** If an ambiguity would change the shape of the
+  graph, ask me one targeted question first. Ambiguity that only affects a leaf
+  node gets resolved by that node.
+- **Fan-out must earn its cost.** Multi-agent runs ~15x the tokens of a single
+  thread and is *worse* for tightly-coupled changes. Effort scaling: lookups =
+  0 subagents; comparisons/research = 2–4; audits, migrations, deep research =
+  orchestrated workflow. When in doubt, stay single-threaded.
+- **Reads fan out; writes stay single-threaded.** Subagents exist to keep
+  exploration, logs, and research out of the main context — they return compact
+  briefs, never raw dumps. Parallel writers only via worktrees with pre-agreed
+  contracts, capped by my review bandwidth (~4 streams).
+- **Every delegation gets a complete brief**: objective, output format, tool
+  guidance, and explicit boundaries. Vague briefs produce duplicated work and slop.
+- **Maker ≠ checker.** Before any non-trivial change is "done", a fresh-context
+  reviewer that never saw the implementation reasoning checks the diff against
+  the spec — use the `red-team-reviewer` agent. Codex challenge review and
+  hermetic-tests (see Verification) are additional lenses, not replacements.
+- **Codify recurring graphs.** When the same fan-out shape recurs (audit,
+  release prep, deep research), save it as a workflow in `~/.claude/workflows/`
+  so the orchestration becomes a reusable, reviewable artifact.
 
 ## Tools, Commands, and Environment
 
@@ -324,29 +366,10 @@ archivist. Delegate these to `vault-archivist`:
 
 **Do not create new top-level folders** in the vault — stick with the PARA + People + Meetings structure above. Root naming: capitalized files are human-facing destinations, lowercase (`index.md`, `log.md`) are machine-maintained plumbing. All other conventions (frontmatter templates, ingest steps, log format, content-type filing) are defined in the `vault-archivist` agent and `Preferences.md` §Vault Hygiene.
 
-## gstack
-
-- In Claude Code, use the /browse skill from gstack for web browsing. In Cowork or other contexts with native browser tools, use the platform's browser capabilities instead.
-- Available gstack skills:
-  - /office-hours, /plan-ceo-review, /plan-eng-review, /plan-design-review, /plan-devex-review
-  - /design-consultation, /design-shotgun, /design-html, /design-review, /devex-review
-  - /review, /ship, /land-and-deploy, /canary, /benchmark
-  - /browse, /open-gstack-browser, /setup-browser-cookies, /pair-agent
-  - /qa, /qa-only, /cso
-  - /autoplan, /careful, /freeze, /guard, /unfreeze
-  - /investigate, /retro, /codex
-  - /document-release, /document-generate
-  - /setup-deploy, /setup-gbrain, /sync-gbrain
-  - /gstack-upgrade, /learn
-
-
 ## visualplanner
 
 - Use the `visualplanner` skill (installed at `~/.claude/skills/visualplanner/`) to turn any planning document into a visual, interactive HTML breakdown.
-- **When to use visualplanner vs gstack planning:**
-  - **gstack** (`/autoplan`, `/plan-ceo-review`, `/plan-eng-review`, `/plan-design-review`, `/plan-devex-review`) — for **writing and reviewing** plans. Use these to draft, refine, and get structured feedback on plan content.
-  - **visualplanner** — for **presenting** plans visually. Use this after a plan is written to generate a self-contained HTML walkthrough with scroll-based navigation, flow diagrams, expandable cards, and review toolbars.
-- Typical workflow: write the plan with gstack → visualize it with visualplanner for sharing or async review.
+- visualplanner is for **presenting** plans, not writing them: after a plan is written, generate a self-contained HTML walkthrough with scroll-based navigation, flow diagrams, expandable cards, and review toolbars for sharing or async review.
 {{ if .work }}
 ## Model Delegation — Codex / GPT-5.5 (work machine only)
 
