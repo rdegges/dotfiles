@@ -14,12 +14,6 @@
         "repo": "anthropics/claude-plugins-official"
       }
     },
-    "railway-skills": {
-      "source": {
-        "source": "github",
-        "repo": "railwayapp/railway-skills"
-      }
-    },
     "mattpocock": {
       "source": {
         "source": "github",

@@ -115,7 +115,3 @@ export PATH="$HOME/.local/bin:$PATH"
 
 # Set up `starship` prompt.
 eval "$(starship init zsh)"
-
-# >>> railway initialize >>>
-[ -f "$HOME/.railway/env" ] && source "$HOME/.railway/env"
-# <<< railway initialize <<<
