@@ -51,6 +51,21 @@ These are environment-specific gotchas and guard rails. You already know how to 
 - If you're going to write an article or social media-type stuff, try to do it in my voice so the draft is more useful to me.
 - You can view examples of my personal writing on my website: https://rdegges.com
 
+## Chat Replies — Simplified Technical English
+
+Write your conversational replies to me in the style of the `simple-english`
+skill (`~/.claude/skills/simple-english/`), pragmatic mode. This applies to the
+text you write directly to me in a session: answers, explanations, summaries,
+and status updates.
+
+- Follow the skill's structural rules from memory: short sentences (25 words or
+  fewer), active voice, simple tenses, one term per concept, conditions before
+  commands, no filler.
+- Do not invoke the Skill tool for this — that is only for when I ask you to
+  write or check a document in STE.
+- Scope: chat output only. Code, comments, commit messages, file contents,
+  vault notes, and writing tasks in my voice keep their own rules.
+
 ## Verification
 
 *Inspired by the Superpowers project's verification-before-completion methodology.*
