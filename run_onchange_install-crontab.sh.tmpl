@@ -2,11 +2,32 @@
 #!/bin/bash
 # ~/.cron/crontab hash: {{ include "dot_cron/crontab.tmpl" | sha256sum }}
 
+set -euo pipefail
+
 # Ensure the cron job log directory exists before any job writes to it.
 mkdir -p "$HOME/.cron/logs"
 
-# Install crontab.
+# crontab(1) reads/writes TCC-protected /var/at/tabs and can hang forever on a
+# macOS permission prompt when run unattended (this script fires from the hourly
+# `chezmoi update` cron job, where nobody can click "Allow" — it once held the
+# chezmoi state lock for 4 hours). So: skip when already in sync, and bound
+# every crontab call with a timeout.
+TO=$(command -v gtimeout || command -v timeout || true)
+run() { if [ -n "$TO" ]; then "$TO" -k 5 30 "$@"; else "$@"; fi; }
+
+if run crontab -l 2>/dev/null | diff -q - "$HOME/.cron/crontab" >/dev/null 2>&1; then
+    echo "crontab already up to date; skipping."
+    exit 0
+fi
+
 echo "Installing crontab..."
-crontab ~/.cron/crontab
-echo "crontab installed."
+if run crontab "$HOME/.cron/crontab" < /dev/null; then
+    echo "crontab installed."
+else
+    # Non-zero exit so chezmoi doesn't record this run as done — it retries on
+    # the next apply and succeeds once run interactively (or once cron has
+    # Full Disk Access). The timeouts bound a fully-hung run to ~70s total.
+    echo "ERROR: crontab install failed or timed out (macOS Full Disk Access?); run 'crontab ~/.cron/crontab' manually." >&2
+    exit 1
+fi
 {{ end -}}

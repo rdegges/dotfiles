@@ -6,7 +6,10 @@ tap "xykong/tap"
 # force-installing the packages onto boxes that don't have them.
 tap "rdegges/tap"
 tap "heroku/brew"
-tap "updatest/tap"
+# NOTE: do not re-add "updatest/tap" — the vendor repo is github.com/updatest/tap
+# (no homebrew- prefix), so a bare tap line 404s and breaks brew bundle on every
+# apply (removed once already in 297716c). The updatest cask ships in
+# homebrew-cask core now; use `cask "updatest"` if the app is ever wanted.
 brew "asdf"
 brew "xz"
 brew "openssl@3"
