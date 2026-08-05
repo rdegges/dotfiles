@@ -247,6 +247,14 @@ non-trivial task, and name the shape you picked in your first reply.
   reviewer that never saw the implementation reasoning checks the diff against
   the spec — use the `red-team-reviewer` agent. Codex challenge review and
   hermetic-tests (see Verification) are additional lenses, not replacements.
+- **Plan before you build.** Work that warrants a written plan (multi-PR
+  features, refactors, migrations — graph-shaped work per Task Triage; routine
+  Loop-class coding tasks skip it) goes
+  through the `planner` agent, which consults the `architect` agent and
+  `red-team-reviewer` internally and never returns an unchallenged plan. If it
+  returns `STATUS: QUESTIONS`, relay them to me (AskUserQuestion) and resume
+  the same agent with my answers via SendMessage. The `architect` agent is
+  also invocable standalone to pressure-test any existing plan or design.
 - **The BDFL gate.** Every merge into a project's main branch goes through the
   `bdfl` agent for final approval — no exceptions, even trivial changes. It
   judges direction, fit, and taste (is this the right THING?), orthogonal to
