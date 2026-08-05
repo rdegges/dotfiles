@@ -1,0 +1,99 @@
+* {
+  box-sizing: border-box;
+}
+
+body {
+  font-family: system-ui, -apple-system, sans-serif;
+  background: #ffffff;
+  color: #222;
+  margin: 0;
+}
+
+.container {
+  width: 640px;
+  margin: 48px auto;
+  padding: 0 24px;
+}
+
+h1 {
+  font-size: 2.2rem;
+  margin-bottom: 4px;
+}
+
+.tagline {
+  margin-top: 0;
+  color: #888;
+}
+
+.card {
+  background: #f7f7f9;
+  border-radius: 12px;
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+label {
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+input {
+  padding: 10px 12px;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  font-size: 1rem;
+}
+
+button {
+  margin-top: 16px;
+  padding: 12px;
+  border: none;
+  border-radius: 8px;
+  background: #4f6df5;
+  color: #fff;
+  font-size: 1rem;
+  font-weight: 600;
+  cursor: pointer;
+  outline: none;
+}
+
+button:hover {
+  background: #3d5ae8;
+}
+
+.result {
+  margin-top: 24px;
+  padding: 20px 24px;
+  border: 1px solid #eee;
+  border-radius: 12px;
+  color: #c7c7c7;
+}
+
+.row {
+  display: flex;
+  justify-content: space-between;
+  padding: 6px 0;
+}
+
+.row.big {
+  font-size: 1.3rem;
+  font-weight: 700;
+}
+
+.result-value {
+  white-space: nowrap;
+  overflow: hidden;
+  max-width: 140px;
+}
+
+@media (prefers-color-scheme: dark) {
+  body {
+    background: #16181d;
+  }
+
+  .card {
+    background: #1f2229;
+  }
+}

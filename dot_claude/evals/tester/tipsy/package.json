@@ -1,0 +1,10 @@
+{
+  "name": "tipsy",
+  "version": "1.0.0",
+  "description": "A simple tip calculator",
+  "type": "module",
+  "scripts": {
+    "test": "node --test",
+    "start": "node server.js"
+  }
+}
