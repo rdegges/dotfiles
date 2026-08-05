@@ -253,7 +253,8 @@ for main, the gates apply.
   guidance, and explicit boundaries. Vague briefs produce duplicated work and slop.
 - **The tester pass.** After any code generation and before red-team review,
   the `tester` agent owns test quality: it runs the project's full arsenal
-  (unit, integration, regression, smoke, perf, static, coverage), scrutinizes
+  (unit, integration, regression, smoke, perf, static, coverage, and a
+  screenshot-driven visual/UX pass when the change is user-facing), scrutinizes
   and improves the tests themselves, and returns implementation commentary.
   It writes test files only; relay its commentary to the maker. Where the
   `hermetic-tests` skill ran, it owns the tests for the code it covers —
