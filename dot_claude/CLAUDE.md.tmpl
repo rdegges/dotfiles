@@ -294,6 +294,17 @@ for main, the gates apply.
   red-team-reviewer's correctness check. Honor its verdict: APPROVE merges,
   REVISE/REJECT goes back to the maker with the BDFL's guidance relayed
   verbatim. Do not merge over a REVISE or REJECT.
+- **Plans face the same gate, before implementation.** The `planner` agent
+  runs it internally; when a plan arrives any other way, point the `bdfl` at
+  it yourself. It rules **per proposed mechanism**, not on the plan as a
+  whole — a bundle passes review while one bad idea rides along inside it.
+  Reviewers scoped to correctness (architect, red-team) never ask whether an
+  idea should exist, so nothing else in the graph catches a mechanism that is
+  well-built and wrong.
+- **Brief for subtraction, not just coverage.** Review briefs that only ask
+  "what's missing?" are scored on additions, and reviewers respond by making
+  every mechanism bigger. Ask every reviewer what to CUT, and treat a review
+  that removed nothing as incomplete rather than clean.
 - **Codify recurring graphs.** When the same fan-out shape recurs (audit,
   release prep, deep research), save it as a workflow in `~/.claude/workflows/`
   so the orchestration becomes a reusable, reviewable artifact.
