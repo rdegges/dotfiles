@@ -43,6 +43,7 @@ These are environment-specific gotchas and guard rails. You already know how to 
 - **Follow existing style.** Match the conventions of the files you're editing, even if you'd do it differently. If a linter or formatter is configured (ESLint, Prettier, black, gofmt, etc.), write code that passes it.
 - **No speculative features.** No abstractions for single-use code, no "flexibility" or "configurability" that wasn't requested, no error handling for impossible scenarios.
 - **Clean up after yourself.** Remove imports/variables/functions that your changes made unused, but leave pre-existing dead code alone unless asked. If you notice unrelated dead code, mention it — don't delete it.
+- **Never gate on a piped command's exit code.** `cmd | tail` (or `| grep`, `2>&1 | head`) reports the LAST pipe stage's status, so `cmd && next-step` silently proceeds past failures. Capture output to a file and test `$?` (or use `set -o pipefail`) whenever the command's success gates a next action — lint before push, tests before merge. This rule exists because the pipe-swallowed exit code shipped real mistakes three separate times.
 - **Three-strike rule for debugging.** If you've tried 3 fixes and none worked, stop and question the architecture. Three failed attempts usually means it's a design issue, not a bug. Discuss with me before attempting fix #4.
 - **Exhaustive exploration for performance work.** When the task is performance optimization or architecture evaluation, suspend the "surgical changes" rule. Define measurable success criteria, then systematically explore the full solution space â test every viable alternative, compute the matrix of combinations, and recommend based on data. Don't suggest the first reasonable-looking solution.
 
@@ -93,6 +94,11 @@ Never claim work is done without fresh evidence. "Should work now" and "looks co
 - Before claiming a build succeeds: run the build, check the exit code.
 - Before claiming a bug is fixed: run the reproduction case, confirm it no longer reproduces.
 - Before claiming requirements are met: re-read the requirements and check each one against what was actually built.
+- Before claiming a fact about an external system: check the authoritative artifact
+  (reference file, live API, packet capture), not memory and not a mock. For a new
+  third-party API client, run at least one live read-only smoke call per endpoint class
+  before trusting the mock suite. Record a cause as fact only after a cheap disproof
+  attempt; until then it is an observation.
 
 ### Adversarial Review (Codex)
 
@@ -132,6 +138,9 @@ runs, it replaces the post-hoc challenge review above for the code it covers.
 - About to commit, push, or open a PR without running the full test suite.
 - Trusting a subagent's success report without indepently checking.
 - Relying on a linter passing as proof that a build works.
+- Gating on a command whose output runs through a pipe (`| tail`, `| head`, `| grep`) —
+  pipes mask exit codes and truncate evidence. Run the gating command bare, read the
+  full result, then filter separately.
 
 ### Pattern
 ```
@@ -214,7 +223,11 @@ loops (execution, task) more effective.
 - **When debugging hits 3 strikes, question the loop level.** The three-strike rule
   (already in Coding Style) is a loop-level signal: you may be in the wrong loop.
 - **Scheduled tasks are product loops.** Treat them with the same rigor as production
-  code — they need monitoring, error handling, and periodic review.
+  code — they need monitoring, error handling, and periodic review. When you create or
+  modify one, prove the path before moving on: trigger it once with real work and verify
+  the effect, and confirm a failure produces a signal someone will see (for jobs unsafe
+  to live-fire, a documented simulation counts). A green run that had nothing to do
+  proves nothing.
 
 ## Graph Engineering
 
@@ -291,7 +304,7 @@ for main, the gates apply.
 - When suggesting commands, use the package manager already used in the repo.
 - If there is a Makefile, Taskfile, or similar, prefer its documented tasks over raw tool invocations.
 - Always use GitHub for code hosting, the `gh` CLI tool is available to you.
-- For CI and CD, always use GitHub actions. After pushing to GitHub, you should monitor the GitHub Actions logs using the `gh` CLI tool and fix issues automatically if necessary. Try not to break the build, but if you do, please fix it.
+- For CI and CD, always use GitHub actions. After pushing to GitHub, you should monitor the GitHub Actions logs using the `gh` CLI tool and fix issues automatically if necessary. Try not to break the build, but if you do, please fix it. When watching PR checks, treat "zero checks reported" as its own state (path-filtered workflows, a merged or stale base branch, a guard error) — never as green and never as pending-forever. A check or guard that can error on legitimate input (API caps, empty sets) must fail distinguishably from a real finding.
 - Deploy all live code to production on Render using Render blueprints: https://render.com/docs/blueprint-spec unless the current project has another production setup for something like Heroku, Vercel, etc.
 - If deploying via Render via a `git` push, etc., be sure to use the `render` CLI tool to monitor the deploy logs and ensure the deployment works. If not, figure out why, and attempt to fix it. Don't leave a build broken if possible.
 - Unless otherwise specified, you should always use Docker to run all commands, including tests and one-offs, when working on a project. For example, if you're working on a Python project and package management is done using `uv`, you should never run `uv` on the host operating system, instead, use a relevant official Docker image (the latest version) instead. You should always keep the host operating system "clean". If Docker isn't working, make sure that Docker Desktop is running properly first.
@@ -494,6 +507,11 @@ right model. Cost is a tiebreaker only when the other axes genuinely tie.
 - **Read-only investigation the skills don't cover:** run
   `codex exec -s read-only "<one self-contained prompt>"` directly and read back
   what it found. Add `-C <dir>` to point it at a specific repo.
+- **Known invocation gotchas:** outside a git repo, add `--skip-git-repo-check` —
+  without it Codex errors or silently returns empty output. Never pipe stdin to a
+  backgrounded `codex exec`; redirect `</dev/null` or it hangs on "Reading additional
+  input...". Split 10-minute-plus runs into scoped passes — the JSONL stream can die
+  mid-run without `turn.completed`.
 - **Bounded implementation on a scratch branch:** `codex exec -s workspace-write`
   inside a git worktree, then review the diff before it goes anywhere near a real
   branch.
