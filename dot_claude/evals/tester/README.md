@@ -4,6 +4,14 @@ Regression evals for the `tester` agent (`~/.claude/agents/tester.md`). Run
 after any change to the tester's definition; compare against the results
 table before merging the change.
 
+**Codified runner:** the whole protocol — setup, cold run, scoring, and the
+miss/tie-break variance rule — is the `eval-tester` workflow
+(`~/.claude/workflows/eval-tester.js`):
+`Workflow({name: "eval-tester", args: {fixture: "tipsy" | "statusboard",
+scratchBase: "<abs dir>", shotsBase: "<abs dir>"}})`. It returns the verdict
+plus row data; append the row(s) here. The manual steps below remain as
+documentation and fallback.
+
 ## Fixture: tipsy
 
 `tipsy/` is a small vanilla-JS tip calculator seeded with 12 known defects
@@ -25,9 +33,10 @@ rules live in `tipsy-seeds.md`. The fixture is the PRISTINE pre-tester state
    > first gate. Run your full process per your definition. Notes: `npm test`
    > runs the suite (no dependencies to install). `npm start` serves the app
    > at http://localhost:4173 — the change is user-facing, so the visual/UX
-   > pass applies; use the browse skill for screenshots. Do not deploy
-   > anything or touch files outside this repo. This is a host-run scratch
-   > project — no Docker convention exists here.
+   > pass applies; use the browse skill and save screenshots to an isolated
+   > directory (that directory is yours alone). Do not deploy anything or
+   > touch files outside this repo and that directory. This is a host-run
+   > scratch project — no Docker convention exists here.
 
    Do NOT mention the seeds or this eval in the brief.
 3. Score the report against `tipsy-seeds.md`: binary CAUGHT/MISSED per seed.
@@ -43,6 +52,7 @@ rules live in `tipsy-seeds.md`. The fixture is the PRISTINE pre-tester state
 | 2026-08-05 | dfd3efa | 4/4 | 3/3 | 5/5 | 7 | Baseline. Opus. 108k tokens, ~11 min. Dark-mode CDP blocked; worked around via CSSOM. |
 | 2026-08-05 | (this commit) | 4/4 | 3/3 | 4/5 | 5 | MISSED V2 (light-mode result contrast); dark-mode contrast caught. Contract-proposals rule verified working: fix-agnostic failing tests, 3 test.todo proposals, no invented error contracts. Before/after path correctly skipped (single-commit fixture). |
 | 2026-08-05 | (this commit) | 4/4 | 3/3 | 5/5 | 8 | Tie-break re-run per the variance rule: V2 caught (1.69:1, measured) → prior miss confirmed as run variance. 6 test.todo proposals, no invented contracts. Used an isolated screenshots dir — recommended for all future runs. |
+| 2026-08-05 | 84c498f | 4/4 | 3/3 | 5/5 | 5 | First run via the eval-tester workflow (validates the codified runner, tester.md unchanged): machine-scored PASS, no regressions. V2 caught at 1.69:1. Unseeded finds all server/HTML: no form, space-in-path 404s, query-string 404, .git served, hardcoded port. 5 test.todo proposals; before/after correctly skipped. |
 
 ## Fixture: statusboard
 
