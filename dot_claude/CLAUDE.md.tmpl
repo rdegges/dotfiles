@@ -247,6 +247,12 @@ non-trivial task, and name the shape you picked in your first reply.
   reviewer that never saw the implementation reasoning checks the diff against
   the spec — use the `red-team-reviewer` agent. Codex challenge review and
   hermetic-tests (see Verification) are additional lenses, not replacements.
+- **The BDFL gate.** Every merge into a project's main branch goes through the
+  `bdfl` agent for final approval — no exceptions, even trivial changes. It
+  judges direction, fit, and taste (is this the right THING?), orthogonal to
+  red-team-reviewer's correctness check. Honor its verdict: APPROVE merges,
+  REVISE/REJECT goes back to the maker with the BDFL's guidance relayed
+  verbatim. Do not merge over a REVISE or REJECT.
 - **Codify recurring graphs.** When the same fan-out shape recurs (audit,
   release prep, deep research), save it as a workflow in `~/.claude/workflows/`
   so the orchestration becomes a reusable, reviewable artifact.
