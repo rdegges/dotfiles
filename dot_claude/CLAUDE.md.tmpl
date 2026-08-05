@@ -188,6 +188,10 @@ A trace is not a transcript — it is a structured reflection:
 
 File traces in ~/Vault/Personal/Resources/Personal/Session Traces/YYYY-MM-DD — <slug>.md.
 When 3+ traces show the same pattern, propose a CLAUDE.md or skill update.
+The `hill-climber` agent owns this mining: run it when 3+ new traces have
+accumulated, or on demand. It returns ranked proposals with evidence and a
+binary eval each; apply them via chezmoi and merge through the BDFL gate
+like any other change.
 
 ### Hill Climbing Protocol
 
