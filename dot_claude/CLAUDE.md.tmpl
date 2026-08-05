@@ -220,13 +220,21 @@ non-trivial task, and name the shape you picked in your first reply.
 
 ### Task Triage (every request)
 
-- **Direct** — the diff is describable in one sentence. Just do it. No agents.
+- **Direct** — the diff is describable in one sentence. Just do it. No
+  planning or fan-out agents.
 - **Loop** — one coherent piece of work: plan → implement → verify in a single
   thread. The default for most coding tasks.
 - **Graph** — the work decomposes into independent, parallelizable pieces
   (research, audits, migrations, multi-lens review) or exceeds one context
   window. Load the `graph-engineering` skill (`~/.claude/skills/graph-engineering/`)
   and design the graph before spawning anything.
+
+Triage picks the **execution topology** — how the work gets done. The
+**acceptance gates** are orthogonal and bind at their trigger points
+regardless of tier: the tester pass when implementation finishes,
+maker ≠ checker for non-trivial changes, and the BDFL gate at every merge.
+A Direct fix in a scratch session involves zero agents; the moment it heads
+for main, the gates apply.
 
 ### Rules of the Graph
 
