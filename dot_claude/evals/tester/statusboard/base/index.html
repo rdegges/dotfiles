@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Statusboard</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header>
+    <h1>Statusboard</h1>
+    <p class="subtitle">Live health for the Acme platform.</p>
+  </header>
+
+  <main class="cards">
+    <section class="card">
+      <span class="dot ok"></span>
+      <h2>API</h2>
+      <p>Operational</p>
+    </section>
+    <section class="card">
+      <span class="dot ok"></span>
+      <h2>Web</h2>
+      <p>Operational</p>
+    </section>
+    <section class="card">
+      <span class="dot ok"></span>
+      <h2>Database</h2>
+      <p>Operational</p>
+    </section>
+  </main>
+
+  <footer>
+    <button id="refresh">Refresh</button>
+    <p class="updated">Last updated just now.</p>
+  </footer>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>

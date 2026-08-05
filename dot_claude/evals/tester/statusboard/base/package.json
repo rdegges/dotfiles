@@ -1,0 +1,9 @@
+{
+  "name": "statusboard",
+  "version": "1.0.0",
+  "description": "Live health for the Acme platform",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js"
+  }
+}

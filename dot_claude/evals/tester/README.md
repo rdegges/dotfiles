@@ -44,9 +44,49 @@ rules live in `tipsy-seeds.md`. The fixture is the PRISTINE pre-tester state
 | 2026-08-05 | (this commit) | 4/4 | 3/3 | 4/5 | 5 | MISSED V2 (light-mode result contrast); dark-mode contrast caught. Contract-proposals rule verified working: fix-agnostic failing tests, 3 test.todo proposals, no invented error contracts. Before/after path correctly skipped (single-commit fixture). |
 | 2026-08-05 | (this commit) | 4/4 | 3/3 | 5/5 | 8 | Tie-break re-run per the variance rule: V2 caught (1.69:1, measured) → prior miss confirmed as run variance. 6 test.todo proposals, no invented contracts. Used an isolated screenshots dir — recommended for all future runs. |
 
+## Fixture: statusboard
+
+`statusboard/` covers the before/after visual comparison path tipsy cannot:
+a two-commit repo where the change under test (an incident banner) also
+accidentally regresses the existing UI. Ground truth in
+`statusboard-seeds.md`.
+
+### Protocol
+
+1. Build the two-commit scratch repo:
+   `cp -R ~/.claude/evals/tester/statusboard/base /tmp/sb-eval && cd /tmp/sb-eval && git init -q && git add -A && git commit -qm "statusboard v1"`
+   `cp -R ~/.claude/evals/tester/statusboard/change/. /tmp/sb-eval/ && git add -A && git commit -qm "add incident banner"`
+2. Spawn the `tester` agent with this brief (verbatim, adjusting paths):
+
+   > Repo: /tmp/sb-eval (local git repo, two commits, no remote). The change
+   > under test: the latest commit, "add incident banner" — a maker agent
+   > added a dismissible incident banner to the existing status page shipped
+   > in the previous commit. Nothing has been reviewed yet; you are the
+   > first gate. Run your full process per your definition. Notes: no test
+   > suite exists yet (static page). `npm start` serves the app at
+   > http://localhost:4174 (PORT env respected). The change is user-facing,
+   > so the visual/UX pass applies; use the browse skill and save
+   > screenshots to an isolated directory. Do not touch files outside this
+   > repo and that directory. This is a host-run scratch project — no
+   > Docker convention exists here.
+
+   Do NOT mention the seeds, the regressions, or before/after comparison —
+   whether the tester runs the comparison unprompted is seed M1.
+   Installs into the scratch repo are permitted; record any install in the
+   results Notes column.
+3. Score per `statusboard-seeds.md`; same miss/re-run rule as tipsy.
+
+Note: the base/→change/ overlay build cannot represent file deletions
+between commits — any future fixture that deletes a file needs a different
+representation.
+
+### Results (statusboard)
+
+| Date | tester.md @ | Regressions | Intent (I1) | Mechanics (M1) | Notes |
+|------|-------------|-------------|-------------|----------------|-------|
+| 2026-08-05 | 84c498f | 4/4 | ✓ | ✓ | Baseline. Worktree comparison ran unprompted (base served on PORT=4175, before/after shots, teardown verified). All four regressions measured, not eyeballed. Withdrew 3 of its own over-reach tests as test.todo. Installed jsdom as a devDependency (installs permitted per protocol). Refused to fake line coverage; reported per-diff-hunk coverage instead. |
+
 ## Known limits
 
-- The fixture cannot exercise the before/after visual comparison path (it is
-  a single-commit repo with no prior UI). A second fixture with a base UI +
-  regressing diff would cover it.
 - Visual seed detection depends on the gstack `browse` skill being installed.
+- Both fixtures assume node is available on the host; neither uses Docker.

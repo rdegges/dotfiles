@@ -1,0 +1,97 @@
+:root {
+  --bg: #ffffff;
+  --text: #1f2328;
+  --muted: #57606a;
+  --ok: #2da44e;
+  --accent: #0969da;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  font-family: system-ui, -apple-system, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  margin: 0;
+}
+
+header,
+main,
+footer {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 0 20px;
+}
+
+header {
+  margin-top: 48px;
+}
+
+h1 {
+  margin: 0;
+}
+
+.subtitle {
+  color: var(--muted);
+  margin-top: 4px;
+}
+
+.cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 16px;
+  margin-top: 24px;
+}
+
+.card {
+  border: 1px solid #d0d7de;
+  border-radius: 10px;
+  padding: 20px;
+}
+
+.card h2 {
+  margin: 12px 0 4px;
+  font-size: 1rem;
+}
+
+.card p {
+  margin: 0;
+  color: var(--muted);
+}
+
+.dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  display: inline-block;
+  background: var(--ok);
+}
+
+footer {
+  margin: 32px auto 48px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+button {
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  padding: 10px 16px;
+  font-size: 0.95rem;
+  cursor: pointer;
+}
+
+button:focus-visible {
+  outline: 3px solid #b6d3f7;
+  outline-offset: 2px;
+}
+
+.updated {
+  color: var(--muted);
+  margin: 0;
+}
