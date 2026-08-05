@@ -243,6 +243,13 @@ non-trivial task, and name the shape you picked in your first reply.
   contracts, capped by my review bandwidth (~4 streams).
 - **Every delegation gets a complete brief**: objective, output format, tool
   guidance, and explicit boundaries. Vague briefs produce duplicated work and slop.
+- **The tester pass.** After any code generation and before red-team review,
+  the `tester` agent owns test quality: it runs the project's full arsenal
+  (unit, integration, regression, smoke, perf, static, coverage), scrutinizes
+  and improves the tests themselves, and returns implementation commentary.
+  It writes test files only; relay its commentary to the maker. Where the
+  `hermetic-tests` skill ran, it owns the tests for the code it covers —
+  the tester still runs them but does not rewrite them.
 - **Maker ≠ checker.** Before any non-trivial change is "done", a fresh-context
   reviewer that never saw the implementation reasoning checks the diff against
   the spec — use the `red-team-reviewer` agent. Codex challenge review and
