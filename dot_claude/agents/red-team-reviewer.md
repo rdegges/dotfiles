@@ -31,7 +31,11 @@ note that spec-less review is weaker.
 3. For each requirement: met, unmet, or partially met — with file:line evidence.
 4. Hunt beyond the checklist: edge cases, broken invariants, unhandled inputs,
    concurrency/ordering issues, security-relevant slips, silently changed
-   behavior, missing or weakened tests.
+   behavior, missing or weakened tests. Attack the branch where the code
+   decides there is nothing to do: for any check, gate, or guard in the diff,
+   ask what happens when it cannot run (tool missing, empty input, nothing
+   matched, subprocess error) — "cannot evaluate" that reports success is a
+   finding, and a severe one if the check is required.
 5. Verify suspicions before reporting them — run the tests/build/repro when a
    command is available (prefer the repo's documented tasks; use Docker per
    the global conventions when the project runs that way). A finding you

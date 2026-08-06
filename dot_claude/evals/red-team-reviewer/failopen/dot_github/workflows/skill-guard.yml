@@ -1,0 +1,12 @@
+name: skill-guard
+on:
+  pull_request:
+    paths: ['skills/**']
+jobs:
+  frontmatter:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - run: bash ci/check-skill-frontmatter.sh

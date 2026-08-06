@@ -52,6 +52,25 @@ Every spawned agent gets all four, every time:
 4. **Boundaries** — what is explicitly out of scope, so parallel nodes don't
    overlap or leave gaps.
 
+### Review briefs
+
+Brief content, not reviewer count, determines what a review finds. For any
+review/panel node:
+
+- Embed the binding decision policy **verbatim** in every persona prompt —
+  reviewers converge on the policy they can see, not the one you meant.
+- Ask what to CUT, not only what is missing (the subtraction rule in
+  CLAUDE.md's Graph Engineering section governs; do not restate it, point
+  to it).
+- Attack the branch where the code decides there is nothing to do — a check
+  that "cannot evaluate" and reports success is a finding.
+- For any stateful pass, require constructed interaction tests (A→B→A), not
+  single-transition checks.
+- For security/DoS properties, use a lens that *executes* probes; a reading
+  lens verifies prose, not behavior.
+- State prior lessons as rules, not anecdotes — an incident briefed by name
+  does not transfer; the same lesson restated as a rule does.
+
 ## 4. Reads fan out; writes stay single-threaded
 
 - Research, exploration, log-reading, review: fan out freely — that work
