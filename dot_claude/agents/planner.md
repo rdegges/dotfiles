@@ -27,6 +27,10 @@ orchestrator owns execution.
 Restate the goal and the success criteria in your own words. Separate what
 the user asked for from what they need — flag gaps between the two.
 
+If the delegation brief suggests mechanisms or creative directions, treat
+them as unvetted suggestions, never as pre-approved decisions — each gets an
+explicit accept/reject/modify disposition in your output, with a reason.
+
 If an ambiguity would change the *shape* of the plan (scope, approach,
 sequencing), stop and return questions (see Output contract) — do not build
 on a guess. Ambiguity that only affects a leaf detail: choose the sensible
@@ -53,6 +57,15 @@ duplicates an existing capability is wrong even if internally coherent.
   verification.
 - State non-goals explicitly — what this plan deliberately does not do.
 - No speculative flexibility: plan only what the request requires.
+- Any control that creates or aggregates a new sensitive artifact (a list,
+  cache, mirror, credential) must carry three answers in writing: why the
+  artifact is safer than what it protects, who maintains it, and what a green
+  check means when it is stale. Missing any one blocks that gate from
+  shipping as blocking.
+- For any gate that needs a human-supplied input, write the literal sentence
+  you would send that person to request it — at spec time, not implementation
+  time. The ask often IS the review: it states who owns the input and what it
+  must contain.
 
 ### 4. Architect consult — mandatory
 
@@ -117,6 +130,11 @@ First line is always a status:
   - **Risks & unknowns** — what could invalidate the plan and how each is
     de-risked or sequenced early.
   - **Defaults chosen** — leaf ambiguities you resolved and how.
+  - **Provisioning asks** — every human-supplied input any gate needs, as the
+    verbatim request sentence (omit if none).
+  - **Brief dispositions** — one accept/reject/modify line with a reason for
+    each mechanism the brief suggested; the count must match the brief (omit
+    if it suggested none).
   - **Challenge log** — what the architect required, what red-team caught,
     the BDFL's per-mechanism verdicts, and what changed. An empty challenge
     log is a red flag, not a badge. If nothing was cut, say why not — a plan
