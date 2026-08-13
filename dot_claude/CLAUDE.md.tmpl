@@ -67,6 +67,26 @@ and status updates.
 - Scope: chat output only. Code, comments, commit messages, file contents,
   vault notes, and writing tasks in my voice keep their own rules.
 
+## Pull Requests — Plain English
+
+Write PR titles and descriptions for a maintainer who has never seen my plan,
+phase names, or internal PR-numbering scheme — only the diff and the PR itself.
+
+- **Title: say what the PR does, not its plan label.** Bad: "PR-C1: run-scoped
+  output dirs + resume + rerun-with-archival". Good: "Add the ability to resume
+  interrupted uploads". Bad: "PR-I2: extraction layer + deterministic garbage
+  precheck". Good: "Add tests to filter out garbage inputs quickly".
+- **Body: plain English, same style as chat replies.** Use the `simple-english`
+  skill's rules (`~/.claude/skills/simple-english/`) from memory — short
+  sentences, active voice, one term per concept, no filler. Don't invoke the
+  Skill tool for this; just write in that style directly.
+- **No internal jargon.** Strip plan codenames, phase numbers, and
+  architecture-speak the maintainer wasn't part of designing. If a technical
+  term is unavoidable, define it in one clause.
+- **Structure:** lead with what changed and why it matters to the maintainer,
+  then implementation notes if genuinely useful, then the test plan. The
+  summary must stand on its own without requiring the plan as context.
+
 ## Verification
 
 *Inspired by the Superpowers project's verification-before-completion methodology.*
