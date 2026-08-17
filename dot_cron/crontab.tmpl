@@ -38,6 +38,13 @@ HOMEBREW_NO_ASK=1
 # Upgrade all pipx-managed apps. Hourly at :45.
 45 * * * * { date; pipx upgrade-all; } > $HOME/.cron/logs/pipx.log 2>&1
 
+# Prune Docker build cache older than 3 days and all images unused by any
+# container. Recent cache stays hot (fast rebuilds on active projects) while
+# the long tail can't creep back to the 100G+ it once reached; pruned images
+# just re-pull on demand. Skips when Docker Desktop isn't running rather than
+# logging a connection error. Daily at 09:00.
+0 9 * * * { date; if docker info >/dev/null 2>&1; then docker builder prune -af --filter until=72h; docker image prune -af; else echo "docker not running; skipped"; fi; } > $HOME/.cron/logs/docker-prune.log 2>&1
+
 # Prune brew cache older than 30 days (also autoremoves now-unused deps by
 # default in 6.x). Saturday at 11:00.
 0 11 * * 6 { date; brew cleanup --prune=30 --quiet; } > $HOME/.cron/logs/brew-cleanup.log 2>&1
