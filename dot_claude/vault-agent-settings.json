@@ -1,13 +1,20 @@
 {
-  "$comment": "Settings for UNATTENDED vault agent runs (cron/scheduled). Use with: claude --settings ~/.claude/vault-agent-settings.json. Deliberately stricter than ~/.claude/settings.json, which stays permissive for interactive work. An unattended agent gets a sandbox, no bypassPermissions, and an explicit deny list -- the pkms plugin agents' prompt rules ('moves are no-clobber', 'never overwrite') are prose, and prose does not hold. pkms itself is allowed: it is the safety layer (reads are read-only, writes are snapshot-wrapped and undoable, and it refuses paths outside a registered vault).",
+  "$comment": "Settings for UNATTENDED vault agent runs (cron/scheduled). Use with: claude --settings ~/.claude/vault-agent-settings.json. Deliberately stricter than ~/.claude/settings.json, which stays permissive for interactive work. An unattended agent gets a sandbox, no bypassPermissions, and an explicit deny list -- the pkms plugin agents' prompt rules ('moves are no-clobber', 'never overwrite') are prose, and prose does not hold. pkms subcommands are enumerated rather than wildcarded: the allowed set only reads, or writes snapshot-wrapped inside an already-registered vault. Excluded on purpose: 'pkms secret' (mutates the OS keyring), 'pkms init' (moves the registered-vault fence itself), 'pkms auth'/'pkms mcp'. Named residual: 'pkms ingest' can fetch URLs -- scheduled pull-ingest needs it, so it is the one deliberate network channel in an otherwise curl/wget-denied profile.",
   "permissions": {
     "defaultMode": "default",
     "allow": [
       "Read(//Users/rdegges/Vault/**)",
       "Edit(//Users/rdegges/Vault/**)",
       "Write(//Users/rdegges/Vault/**)",
-      "Bash(vault-lint:*)",
-      "Bash(pkms:*)",
+      "Bash(pkms query:*)",
+      "Bash(pkms lint:*)",
+      "Bash(pkms profile:*)",
+      "Bash(pkms snapshot:*)",
+      "Bash(pkms undo:*)",
+      "Bash(pkms history:*)",
+      "Bash(pkms ingest:*)",
+      "Bash(pkms doctor:*)",
+      "Bash(pkms version:*)",
       "Bash(git -C /Users/rdegges/Vault/Personal status:*)",
       "Bash(git -C /Users/rdegges/Vault/Personal diff:*)",
       "Bash(git -C /Users/rdegges/Vault/Personal log:*)",
