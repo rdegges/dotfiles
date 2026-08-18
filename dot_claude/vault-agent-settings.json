@@ -5,7 +5,6 @@
     "allow": [
       "Read(//Users/rdegges/Vault/**)",
       "Edit(//Users/rdegges/Vault/**)",
-      "Write(//Users/rdegges/Vault/**)",
       "Bash(pkms query:*)",
       "Bash(pkms lint:*)",
       "Bash(pkms profile:*)",
@@ -48,11 +47,9 @@
       "Bash(git restore:*)",
       "Bash(chezmoi:*)",
       "Bash(crontab:*)",
-      "Write(//Users/rdegges/.claude/**)",
       "Edit(//Users/rdegges/.claude/**)",
-      "Write(//Users/rdegges/.local/share/chezmoi/**)",
       "Edit(//Users/rdegges/.local/share/chezmoi/**)",
-      "Write(//Users/rdegges/.ssh/**)",
+      "Edit(//Users/rdegges/.ssh/**)",
       "Read(//Users/rdegges/.ssh/**)",
       "Read(//Users/rdegges/.aws/**)",
       "Read(//Users/rdegges/.config/gh/**)"

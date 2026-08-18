@@ -1,8 +1,7 @@
 {
   "permissions": {
     "allow": [
-      "Edit(//Users/rdegges/Vault/Personal/**)",
-      "Write(//Users/rdegges/Vault/Personal/**)"
+      "Edit(//Users/rdegges/Vault/Personal/**)"
     ]
   },
   "model": "fable",
