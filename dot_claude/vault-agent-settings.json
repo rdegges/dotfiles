@@ -1,5 +1,5 @@
 {
-  "$comment": "Settings for UNATTENDED vault agent runs (cron/scheduled). Use with: claude --settings ~/.claude/vault-agent-settings.json. Deliberately stricter than ~/.claude/settings.json, which stays permissive for interactive work. An unattended agent gets a sandbox, no bypassPermissions, and an explicit deny list -- the archivist's 'Bash is for mv -n only' is prose, and prose does not hold.",
+  "$comment": "Settings for UNATTENDED vault agent runs (cron/scheduled). Use with: claude --settings ~/.claude/vault-agent-settings.json. Deliberately stricter than ~/.claude/settings.json, which stays permissive for interactive work. An unattended agent gets a sandbox, no bypassPermissions, and an explicit deny list -- the pkms plugin agents' prompt rules ('moves are no-clobber', 'never overwrite') are prose, and prose does not hold. pkms itself is allowed: it is the safety layer (reads are read-only, writes are snapshot-wrapped and undoable, and it refuses paths outside a registered vault).",
   "permissions": {
     "defaultMode": "default",
     "allow": [
@@ -7,6 +7,7 @@
       "Edit(//Users/rdegges/Vault/**)",
       "Write(//Users/rdegges/Vault/**)",
       "Bash(vault-lint:*)",
+      "Bash(pkms:*)",
       "Bash(git -C /Users/rdegges/Vault/Personal status:*)",
       "Bash(git -C /Users/rdegges/Vault/Personal diff:*)",
       "Bash(git -C /Users/rdegges/Vault/Personal log:*)",

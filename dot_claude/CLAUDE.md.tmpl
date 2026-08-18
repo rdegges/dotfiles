@@ -434,25 +434,32 @@ If it's not in any of those, then ask me where it is or whether you should clone
 
 My Obsidian vault is at `~/Vault/Personal` and is always synced via Obsidian Sync. It is my personal knowledge base and your primary source of context about me, my work, and my thinking. The vault follows a PARA layout (Projects / Areas / Resources / Archive) with a **Snyk/Personal split** at every level, plus top-level `People/` and `Meetings/` folders that also split Snyk from Personal.
 
-### Vault Subagents — Route Vault Work to Them
+### Vault Agents — the pkms Plugin Owns Vault Work
 
-Two custom subagents (in `~/.claude/agents/`, shipped with these dotfiles) own
-vault work. Prefer delegating over doing vault work inline — it keeps large
-vault reads out of the main context and enforces the vault's conventions:
+The vault is managed by pkms (github.com/rdegges/pkms, installed via brew;
+registered as vault `personal`). Its Claude Code plugin ships the two agents
+that own vault work. Prefer delegating over doing vault work inline — it
+keeps large vault reads out of the main context, and pkms makes every write
+snapshot-protected and undoable:
 
-- **`vault-librarian`** (read-only) — any lookup or synthesis that requires
+- **`pkms:librarian`** (read-only) — any lookup or synthesis that requires
   reading vault notes: "who is X", meeting prep, project status, past
   decisions, open items, cross-note research.
-- **`vault-archivist`** (write-capable) — all filing and maintenance: ingest
-  ("process my inbox" = `Resources/Clips/Inbox/`), creating
-  People/Meeting/Project/Resource notes, recipes, `log.md`/`index.md` updates,
-  lint (report-first), archiving.
+- **`pkms:archivist`** (write-capable) — all filing and maintenance: creating
+  People/Meeting/Project/Resource notes, recipes, `log.md`/`index.md`
+  updates, archiving. For "process my inbox" / "ingest clips", invoke the
+  plugin's `/pkms:process-inbox` skill.
 
-The canonical conventions (frontmatter templates, filing rules, log format)
-live in those agent definitions and in `~/Vault/Personal/Preferences.md`
-§Vault Hygiene — they are the source of truth; do not duplicate or override
-them here. If the subagents are unavailable (non-Claude-Code harness), read
-Preferences.md §Vault Hygiene before writing anything to the vault.
+The plugin agents are vault-agnostic: they learn structure from
+`pkms profile show`, never from hard-coded folders. The vault-SPECIFIC
+judgment (clip-summary pipeline, archive authority, external-author rule,
+log.md authoring, the librarian's vault map) lives in
+`~/Vault/Personal/Preferences.md` §Vault Hygiene — including its
+**Agent Conventions** subsection — and every brief to a vault agent MUST
+tell it to read and follow that section. Standalone "lint the vault" and
+"archive X" requests are report-first: findings before changes. If the
+plugin is unavailable (non-Claude-Code harness), read Preferences.md
+§Vault Hygiene before writing anything to the vault.
 
 ### Automatic Context Pulling
 
@@ -464,13 +471,14 @@ Preferences.md §Vault Hygiene before writing anything to the vault.
 
 **For anything deeper** — a person's context ("who is X"), work-request
 background, meeting history, topic research, open items — delegate to
-`vault-librarian` instead of fanning out reads yourself. Trivial single-file
+`pkms:librarian` instead of fanning out reads yourself. Trivial single-file
 peeks at a path you already know are fine to read directly.
 
-### Keeping the Vault Updated (via vault-archivist)
+### Keeping the Vault Updated (via pkms:archivist)
 
-The *when* lives here; the *how* (formats, filing rules) lives in the
-archivist. Delegate these to `vault-archivist`:
+The *when* lives here; the *how* (formats, filing rules) lives in
+Preferences.md §Vault Hygiene, which rides in the brief. Delegate these to
+`pkms:archivist`:
 
 - **New projects, people, or meetings** worth recording.
 - **Decisions and context:** if we make an important decision during a session
@@ -482,9 +490,10 @@ archivist. Delegate these to `vault-archivist`:
 - **Valuable syntheses** (comparisons, analyses, meeting prep, strategy docs):
   offer to file them under `Resources/` rather than letting them vanish into
   chat history.
-- **"Process my inbox" / "ingest clips" / "lint the vault" / archiving** —
-  always the archivist. Lint and archive are report-first: findings before
-  changes.
+- **"Process my inbox" / "ingest clips"** — always the `/pkms:process-inbox`
+  skill (brief carries §Vault Hygiene, especially the clip-summary
+  pipeline). **"Lint the vault" / archiving** — the archivist, report-first:
+  findings before changes.
 
 ### Vault Structure
 
@@ -512,7 +521,7 @@ archivist. Delegate these to `vault-archivist`:
     └── Personal/             # Personal meetings, same convention
 ```
 
-**Do not create new top-level folders** in the vault — stick with the PARA + People + Meetings structure above. Root naming: capitalized files are human-facing destinations, lowercase (`index.md`, `log.md`) are machine-maintained plumbing. All other conventions (frontmatter templates, ingest steps, log format, content-type filing) are defined in the `vault-archivist` agent and `Preferences.md` §Vault Hygiene.
+**Do not create new top-level folders** in the vault — stick with the PARA + People + Meetings structure above. Root naming: capitalized files are human-facing destinations, lowercase (`index.md`, `log.md`) are machine-maintained plumbing. All other conventions (frontmatter templates, ingest steps, log format, content-type filing) are defined in `~/Vault/Personal/Preferences.md` §Vault Hygiene and enforced by `pkms lint`.
 
 ## visualplanner
 
