@@ -1,11 +1,18 @@
 {
+  "permissions": {
+    "allow": [
+      "Edit(//Users/rdegges/Vault/Personal/**)",
+      "Write(//Users/rdegges/Vault/Personal/**)"
+    ]
+  },
   "model": "fable",
   "fallbackModel": [
     "opus[1m]"
   ],
   "enabledPlugins": {
     "gopls-lsp@claude-plugins-official": true,
-    "mattpocock-skills@mattpocock": true
+    "mattpocock-skills@mattpocock": true,
+    "pkms@rdegges": true
   },
   "extraKnownMarketplaces": {
     "claude-plugins-official": {
@@ -19,13 +26,13 @@
         "source": "github",
         "repo": "mattpocock/skills"
       }
+    },
+    "rdegges": {
+      "source": {
+        "source": "github",
+        "repo": "rdegges/pkms"
+      }
     }
-  },
-  "permissions": {
-    "allow": [
-      "Edit(//Users/rdegges/Vault/Personal/**)",
-      "Write(//Users/rdegges/Vault/Personal/**)"
-    ]
   },
   "sandbox": {
     "enabled": false,
