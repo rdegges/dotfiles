@@ -4,14 +4,15 @@
       "Edit(//Users/rdegges/Vault/Personal/**)"
     ]
   },
-  "model": "fable",
+  "model": "opus[1m]",
   "fallbackModel": [
     "opus[1m]"
   ],
   "enabledPlugins": {
     "gopls-lsp@claude-plugins-official": true,
     "mattpocock-skills@mattpocock": true,
-    "pkms@rdegges": true
+    "pkms@rdegges": true,
+    "cloudflare@cloudflare": true
   },
   "extraKnownMarketplaces": {
     "claude-plugins-official": {
@@ -31,6 +32,12 @@
         "source": "github",
         "repo": "rdegges/pkms"
       }
+    },
+    "cloudflare": {
+      "source": {
+        "source": "github",
+        "repo": "cloudflare/skills"
+      }
     }
   },
   "sandbox": {
@@ -44,6 +51,7 @@
     "mode": "hold"
   },
   "skipDangerousModePermissionPrompt": true,
+  "inputNeededNotifEnabled": true,
   "agentPushNotifEnabled": true,
   "voiceEnabled": true,
   "defaultMode": "bypassPermissions"
