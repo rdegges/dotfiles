@@ -1,0 +1,134 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Vorssaint settings that follow me to every Mac.
+
+  This is a PARTIAL domain on purpose. `defaults import` merges, so keys absent
+  here keep whatever value the local machine already has. That is what keeps the
+  app's own per-machine keys intact:
+
+    featureAvailable.*   capability flags the app computes per machine; several
+                         are hardware-dependent (fanControl, brightness), so a
+                         synced value would be wrong on a different Mac.
+    hasOnboarded, onboardingStep, *IntroVersion, *OnboardingVersion,
+    panelCollapsedResetVersion, unifiedScreenCaptureShortcutMigrated
+                         onboarding and schema-migration state.
+    appUpdatesLast*      update-check bookkeeping; changes constantly.
+    settingsWindow*, NSNavPanel*, NSOSPLastRootDirectory
+                         window geometry and an AppKit file bookmark that
+                         encodes this volume's UUID and inode numbers.
+    shelfItems           runtime data, not a setting.
+
+  Clipboard history, clipboard images, and recordings live in
+  ~/Library/Application Support/com.vorssaint.utils and are deliberately NOT
+  synced: that directory holds whatever I have copied, which does not belong in
+  a git repo. See .chezmoiignore.
+-->
+<plist version="1.0">
+<dict>
+	<key>appUpdatesCheckFrequency</key>
+	<string>daily</string>
+	<key>batteryLimitPercent</key>
+	<integer>10</integer>
+	<key>cleanerScheduleFrequency</key>
+	<string>weekly</string>
+	<key>clipboardAutoClearDelaySeconds</key>
+	<integer>20</integer>
+	<key>clipboardHistoryEnabled</key>
+	<true/>
+	<key>clipboardHistoryLimit</key>
+	<integer>50</integer>
+	<key>defaultDurationMinutes</key>
+	<integer>0</integer>
+	<key>dockClickCycleWindows</key>
+	<false/>
+	<key>dockClickHide</key>
+	<true/>
+	<key>dockClickMinimize</key>
+	<false/>
+	<key>finderCutPasteEnabled</key>
+	<true/>
+	<key>keepAwakeActiveIcon</key>
+	<string>vorssaint</string>
+	<key>keepAwakeIconTint</key>
+	<string>orange</string>
+	<key>keepAwakeMouseJiggleIntervalMinutes</key>
+	<integer>5</integer>
+	<key>launchAtLoginWanted</key>
+	<true/>
+	<key>menuBarMetricAppearance</key>
+	<string>values</string>
+	<key>monitorAlertBatteryPercent</key>
+	<integer>15</integer>
+	<key>monitorAlertCPUTemperatureThreshold</key>
+	<integer>90</integer>
+	<key>monitorAlertCPUThreshold</key>
+	<integer>90</integer>
+	<key>monitorAlertCooldownMinutes</key>
+	<integer>15</integer>
+	<key>monitorAlertDiskFreePercent</key>
+	<integer>10</integer>
+	<key>monitorIntervalSeconds</key>
+	<integer>2</integer>
+	<key>monitorMemoryMetric</key>
+	<string>used</string>
+	<key>musicBlockEnabled</key>
+	<true/>
+	<key>panelControlFilesExpanded</key>
+	<true/>
+	<key>panelControlWindowsExpanded</key>
+	<true/>
+	<key>panelShowFanControl</key>
+	<false/>
+	<key>recorderMicrophone</key>
+	<true/>
+	<key>recorderQuality</key>
+	<string>balanced</string>
+	<key>recorderSaveFolder</key>
+	<string>{{ .chezmoi.homeDir }}/Videos/Screen Recordings</string>
+	<key>screenshotCopyToClipboard</key>
+	<true/>
+	<key>screenshotDownscale</key>
+	<false/>
+	<key>screenshotFileNamePattern</key>
+	<string></string>
+	<key>screenshotFullScreenShortcut</key>
+	<string>shift+command:20</string>
+	<key>screenshotFullScreenShortcutEnabled</key>
+	<true/>
+	<key>screenshotLastCaptureShortcut</key>
+	<string>shift+command:14</string>
+	<key>screenshotLastCaptureShortcutEnabled</key>
+	<true/>
+	<key>screenshotSaveFolder</key>
+	<string>{{ .chezmoi.homeDir }}/Pictures/Screenshots</string>
+	<key>screenshotSaveSubfolder</key>
+	<string>%y-%mo</string>
+	<key>screenshotShortcut</key>
+	<string>shift+command:21</string>
+	<key>screenshotShortcutEnabled</key>
+	<true/>
+	<key>scrollInverterHorizontalEnabled</key>
+	<false/>
+	<key>shelfEnabled</key>
+	<true/>
+	<key>smoothScrollEnabled</key>
+	<true/>
+	<key>urlCleanerEnabled</key>
+	<true/>
+	<key>whatsAppDownloadsAccessConfirmed</key>
+	<true/>
+	<key>whatsAppDownloadsAutomaticEnabled</key>
+	<true/>
+	<key>whatsAppDownloadsIncludeExisting</key>
+	<false/>
+	<key>whatsAppDownloadsRetentionDays</key>
+	<integer>7</integer>
+	<key>whatsAppOrganizerDelayMinutes</key>
+	<integer>5</integer>
+	<key>windowEdgeSnapEnabled</key>
+	<false/>
+	<key>windowMaximizeEnabled</key>
+	<true/>
+</dict>
+</plist>

@@ -4,6 +4,9 @@ bootstrap.sh
 {{/* Never sync secrets or machine-local state, even if `chezmoi add`ed by accident. */}}
 .codex/auth.json
 .claude/settings.local.json
+{{/* Vorssaint's clipboard history, clipboard images, and recordings live here.
+     Settings sync via ~/.config/vorssaint/settings.plist instead. */}}
+Library/Application Support/com.vorssaint.utils
 
 {{/* Codex delegation skill is work-only (needs an authenticated Codex sub). */}}
 {{ if not .work }}

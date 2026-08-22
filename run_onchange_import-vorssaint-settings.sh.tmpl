@@ -1,0 +1,48 @@
+{{- if eq .chezmoi.os "darwin" -}}
+#!/bin/bash
+# ~/.config/vorssaint/settings.plist hash: {{ include "dot_config/vorssaint/settings.plist.tmpl" | sha256sum }}
+#
+# Push my Vorssaint settings into the app's preference domain whenever they
+# change. Writing ~/Library/Preferences/com.vorssaint.utils.plist directly does
+# not work: cfprefsd caches the domain in memory and overwrites the file with
+# its own copy, so the app never sees the new values. `defaults import` goes
+# through cfprefsd instead, which is why chezmoi manages the plist under
+# ~/.config and this script imports it rather than managing the real plist.
+#
+# `defaults import` MERGES (verified: importing a one-key plist left the other
+# keys intact). That is load-bearing -- settings.plist is a partial domain, so
+# the app's per-machine keys (featureAvailable.*, onboarding state) survive.
+#
+# chezmoi applies ~/.config/vorssaint/settings.plist before this runs
+# (".config/..." sorts ahead of "import-vorssaint-settings"), so we read the
+# freshly-applied file.
+set -uo pipefail
+
+DOMAIN="com.vorssaint.utils"
+PLIST="$HOME/.config/vorssaint/settings.plist"
+
+[ -f "$PLIST" ] || { echo "No $PLIST; skipping Vorssaint settings import."; exit 0; }
+
+# Fail closed on a malformed plist. `defaults import` treats an unreadable file
+# as an empty domain on some macOS versions, which would silently blank the
+# settings instead of erroring.
+if ! plutil -lint "$PLIST" >/dev/null; then
+    echo "Error: $PLIST is not a valid plist; refusing to import." >&2
+    exit 1
+fi
+
+echo "Importing Vorssaint settings from $PLIST ..."
+if ! defaults import "$DOMAIN" "$PLIST"; then
+    echo "Error: failed to import Vorssaint settings into $DOMAIN." >&2
+    exit 1
+fi
+
+# A running Vorssaint holds its own copy of the settings and writes them back on
+# quit, which undoes the import. Tell me to restart it instead of killing the
+# app out from under whatever it is doing.
+if pgrep -x Vorssaint >/dev/null; then
+    echo "Vorssaint is running: restart it for the imported settings to take effect."
+else
+    echo "Vorssaint settings imported."
+fi
+{{ end -}}
