@@ -1,5 +1,4 @@
 tap "snyk/tap"
-tap "xykong/tap"
 # Trust taps for packages installed outside this Brewfile so Homebrew 6.x stops
 # skipping their upgrades (the install script auto-trusts every tap listed here).
 # Tap-only (no package line) so trust propagates to all boxes without
@@ -40,5 +39,3 @@ brew "snyk/tap/snyk"
 cask "1password-cli"
 cask "codex"
 cask "vorssaint"
-cask "xykong/tap/flux-markdown"
-brew "apfel"
