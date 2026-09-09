@@ -59,9 +59,9 @@ review/panel node:
 
 - Embed the binding decision policy **verbatim** in every persona prompt —
   reviewers converge on the policy they can see, not the one you meant.
-- Ask what to CUT, not only what is missing (the subtraction rule in
-  CLAUDE.md's Graph Engineering section governs; do not restate it, point
-  to it).
+- Ask what to CUT, not only what is missing. Review briefs that only ask
+  "what's missing?" are scored on additions; a review that removed nothing
+  is incomplete, not clean.
 - Attack the branch where the code decides there is nothing to do — a check
   that "cannot evaluate" and reports success is a finding.
 - For any stateful pass, require constructed interaction tests (A→B→A), not
@@ -101,7 +101,7 @@ Scale the checker to the stakes; the maker never grades its own work:
 - **High-stakes work**: adversarial panel — independent skeptics prompted to
   *refute* each finding/claim; only survivors ship.
 - Cross-model lenses (Codex challenge review, hermetic-tests) stack on top
-  where their triggers apply — see CLAUDE.md §Verification.
+  where their triggers apply — see the `verification-gates` and `codex-delegation` skills.
 - Verifiers get a runnable check wherever possible (tests, build, repro) —
   evidence, not assertions.
 

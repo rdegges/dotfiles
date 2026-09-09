@@ -11,4 +11,5 @@ Library/Application Support/com.vorssaint.utils
 {{/* Codex delegation skill is work-only (needs an authenticated Codex sub). */}}
 {{ if not .work }}
 .claude/skills/codex-computer-use
+.claude/skills/codex-delegation
 {{ end }}
