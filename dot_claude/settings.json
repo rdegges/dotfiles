@@ -10,9 +10,7 @@
   ],
   "enabledPlugins": {
     "gopls-lsp@claude-plugins-official": true,
-    "mattpocock-skills@mattpocock": true,
-    "pkms@rdegges": true,
-    "cloudflare@cloudflare": true
+    "pkms@rdegges": true
   },
   "extraKnownMarketplaces": {
     "claude-plugins-official": {
