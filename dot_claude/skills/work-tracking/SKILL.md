@@ -66,9 +66,27 @@ closing a parent is Randall's call.
 | AI-490 | AI for Business Operations |
 | AI-488 | AI for Customer Success |
 
-Epics Randall owns on `AI` as of 2026-09-21: `AI-3685` Automated Renewals
-(Account Management Center, under AI-490, Skyler Ebelt and Connor McKay),
-`AI-3686` Customer Onboarding Agent, Toffee UI only (under AI-488, Connor).
+Epics Randall owns on `AI` as of 2026-09-21 (parent Initiative in brackets):
+`AI-3685` Automated Renewals / Account Management Center [AI-490], `AI-3686`
+Customer Onboarding Agent, Toffee UI only [AI-488], `AI-3696` Lead Uploader
+[AI-490], `AI-3697` scanme event lead capture [AI-490], `AI-3698` Workday MCP
+server [AI-494], `AI-3699` Tropic procurement MCP server [AI-490], `AI-3700`
+Internal agent platform standards on Render: Okta gateway, deployment skill,
+LiteLLM keys [AI-2983], `AI-3701` snykstack skills registry [AI-494], `AI-3702`
+Momentum Moments roundup agent [AI-494], `AI-3703` GSI weekly partner briefing
+[AI-490], `AI-3704` AI Security Engineering newsletter agent [AI-490]. New
+engineering work goes under one of these before a new Epic is considered.
+
+Randall's program Stories on `AITE` as of 2026-09-21 sit under existing
+outcome Epics: AITE-56 Fable 5.1 decision and AITE-61 Snyk Assist / Remote
+MCP ownership [AITE-24]; AITE-57 Anthropic order form certification and
+AITE-58 AI spend policy and reporting [AITE-29]; AITE-59 Superorgs and
+AITE-60 agents-as-employees framework [AITE-25]; AITE-62 Keycard and Arcade
+[AITE-28]; AITE-63 Render org-wide rollout [AITE-30]; AITE-64 10-day request
+SLA and MCP approval workflow [AITE-20]; AITE-65 work-tracking model
+[AITE-11]; AITE-66 enrichment benchmark [AITE-19]; AITE-67 Clari replacement
+[AITE-33]; AITE-68 Marketo to headless MAP [AITE-32]; AITE-69 Okta/Workday
+group taxonomy [AITE-22]; AITE-70 Mission Control ownership [AITE-23].
 
 Board practices: Scrum board 13008, two-week sprints, story points
 `customfield_10021` barely used, one-slide-per-person sprint review at the end
