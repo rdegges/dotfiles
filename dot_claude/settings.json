@@ -1,7 +1,8 @@
 {
   "permissions": {
     "allow": [
-      "Edit(//Users/rdegges/Vault/Personal/**)"
+      "Edit(//Users/rdegges/Vault/Personal/**)",
+      "mcp__claude-in-chrome__javascript_tool"
     ]
   },
   "model": "claude-fable-5-1[1m]",
@@ -52,5 +53,11 @@
   "inputNeededNotifEnabled": true,
   "agentPushNotifEnabled": true,
   "voiceEnabled": true,
-  "defaultMode": "bypassPermissions"
+  "defaultMode": "bypassPermissions",
+  "autoMode": {
+    "allow": [
+      "$defaults",
+      "Reads and writes to Snyk Atlassian (snyksec.atlassian.net, home.atlassian.com) through the Claude in Chrome tools, including Jira issue transitions, comments, and project or space changes, when the user asked for the change in chat."
+    ]
+  }
 }
