@@ -92,15 +92,31 @@ tickets by hand. Their process docs live in Confluence space `AO`
 | AITE-6 | Modernize Tech Stack |
 | AITE-36 | Prioritized Builds |
 
-Epics Randall owns on `AITE` as of 2026-09-21: `AITE-47` Account Management
-Center decisions and dependencies (under AITE-36), `AITE-45` AI Adoption &
-ROI Log (under AITE-1). Kanban board "AI Transformation Delivery Board".
+Under AITE-36 Prioritized Builds sit the business-outcome Epics, one per
+build: `AITE-37` AI SDR, `AITE-38` AI Campaign Manager, `AITE-39` AI AE (the
+Account Management Center / Automated Renewals outcome; its seven decision and
+dependency stories moved here from the retired `AITE-47` on 2026-09-21),
+`AITE-40` Case Resolution, `AITE-41` Continuous Signal Engine, `AITE-42`
+Document Search, `AITE-43` Onboarding Agent, `AITE-44` Vendor & Contract
+Intelligence. Randall also owns `AITE-45` AI Adoption & ROI Log (under
+AITE-1). Kanban board "AI Transformation Delivery Board".
 
-Typical mapping of Randall's program workstreams: AI enablement and pilot
-rollouts → AITE-2; spend attribution, Snyk Assist and MCP ownership → AITE-4;
-architecture and platform decisions → AITE-5; vendor and compliance work
-(Render, Keycard, procurement) → AITE-6; portfolio items and re-owned builds →
-AITE-36.
+**Cross-board link convention (Colin Campbell, 2026-09-21).** Every AITE
+business-outcome Epic must carry a `Relates` link to the AI Operations Epic
+that builds it, for example AITE-37 to AI-3283, AITE-39 to AI-3685, AITE-43 to
+AI-3686. When you create an Epic on either board for work that exists on the
+other, add the link the same day. AITE holds outcomes and decisions at macro
+level; requirements and build detail stay on `AI`.
+
+Typical mapping of Randall's program workstreams. Prefer an existing Epic
+over a new one: AI enablement and pilot rollouts → AITE-13 or AITE-14 (under
+AITE-2); MCP connector approvals → AITE-20; #ask-ai intake → AITE-21; skill
+rollout automation → AITE-22; build-versus-buy and vendor decisions → AITE-24;
+spend attribution and LLM API management → AITE-29; Snyk Assist and MCP
+platform ownership → AITE-27 or AITE-28; vendor and compliance work (Render,
+Keycard, procurement) → AITE-34; re-owned builds → the matching outcome Epic
+under AITE-36. Create a new AITE Epic only when no outcome above fits, and
+tell Colin or Patrick when you do.
 
 ## 4. Automatic upkeep
 
