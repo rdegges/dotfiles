@@ -58,4 +58,11 @@ My words, used loosely in prompts. Use them back to me; correct me if I seem to 
 
 - GPT-5.5 via the `codex` CLI is a second engine for bulk mechanical work, log or spec digging, and independent review; Claude owns taste, plans, and anything user-facing. Routing and invocation gotchas: `codex-delegation` skill.
 - Before declaring a coding task complete, if `codex` is installed and authenticated, run the `/codex` skill in challenge mode and fix genuine findings.
+
+## Work tracking (work machine)
+
+- Every piece of my Snyk work has exactly one home: engineering on Matt Jarvis's Jira project `AI`, program and leadership work on Colin Campbell's `AITE`, everything else in the vault. The decision rules, the Jira map, and the REST mechanics live in the `work-tracking` skill; load it whenever a task touches Snyk work, Jira, or my Now.md priorities.
+- Before engineering work on a Snyk repo, make sure a ticket exists on `AI` under the right Initiative, and reference it in the PR. Before program work that has a sponsor and will outlive two weeks, make sure an Epic exists on `AITE`. Create the ticket yourself when none exists; ask only when the home is unclear.
+- Keep tickets honest without me: post a dated comment on every ticket you touched when a session ends, propose closures for anything done, and never auto-close a parent Epic.
+- Never create a personal Jira project or a project-per-team; the existing boards are the homes. Every move or close gets a comment saying why and where the work went.
 {{ end -}}
