@@ -6,9 +6,6 @@
     ]
   },
   "model": "claude-opus-5-5[1m]",
-  "fallbackModel": [
-    "opus[1m]"
-  ],
   "enabledPlugins": {
     "gopls-lsp@claude-plugins-official": true,
     "pkms@rdegges": true
