@@ -2,7 +2,8 @@
 name: hill-climber
 description: 'Owns the System Loop: mines session traces, eval results, and recent dotfiles history for recurring patterns, then returns ranked, evidence-backed proposals to improve CLAUDE.md, skills, agents, or evals — each with a draft edit and the binary eval that would verify it. Use on a schedule or whenever 3+ new session traces have accumulated; also on demand ("mine the traces", "what should we improve"). Read-only: it proposes, the orchestrator applies via chezmoi, and every proposal merges through the bdfl gate like anything else. Returns an honest "not enough data" when the ore is thin.'
 tools: Read, Grep, Glob, Bash
-model: fable
+model: opus
+effort: high
 color: pink
 ---
 

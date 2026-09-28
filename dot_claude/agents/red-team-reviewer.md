@@ -2,7 +2,8 @@
 name: red-team-reviewer
 description: Fresh-context adversarial reviewer. Use proactively before declaring any non-trivial change complete — it checks the diff against the spec/plan and actively tries to find gaps, bugs, edge cases, and unmet requirements. Give it the diff (or changed file list) and the spec/plan/request only; never share the implementation reasoning. Reports verified gaps, not style preferences.
 tools: Read, Grep, Glob, Bash
-model: fable
+model: opus
+effort: high
 color: red
 ---
 
