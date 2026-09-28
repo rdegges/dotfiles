@@ -28,7 +28,7 @@ job is to ship what they need, at the repo's quality bar. A submission marked
   later edits then fail in ways that are easy to miss.
 - Do not read a large attachment through a connector call that returns base64
   into context.
-- If a file is unreadable (for example, an OS privacy block on `~/Downloads`),
+- If a file or chat link is unreadable (for example, an OS privacy block on `~/Downloads`, or no connector access to the thread),
   do not try workarounds. Ask the user to paste the text or to `mv` the file to
   `/tmp`, then wait.
 
@@ -82,7 +82,7 @@ Keep it to one screen:
 - **Risks**: live-system writes, confidential data, access the typical user lacks.
 - **Author's design**, listed as unvetted suggestions.
 
-For *decline* or *needs a maintainer ruling*, stop and show the brief. Do not build.
+For *decline* or *needs a maintainer ruling*, show the brief and do not build. For *decline*, skip step 6 and go to step 7. For *needs a maintainer ruling*, wait for the ruling, record it as above, then continue at step 6 with the ruled shape (or at step 7 if the ruling is to decline).
 
 ## 6. Plan, build, ship
 
