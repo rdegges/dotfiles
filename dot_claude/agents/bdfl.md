@@ -2,7 +2,8 @@
 name: bdfl
 description: 'Project BDFL — owner and final judge of direction, fit, and taste for whatever repo it is pointed at. Use proactively for final approval before ANY merge (no exceptions, even trivial ones), for PLANS before implementation starts (ruling per proposed mechanism, not on the plan as a whole), and whenever the question is "is this the right thing for this project?" rather than "is this code correct?": PRs, plans, feature proposals, new skills/modules, scope calls, convention fit. Give it the repo path and the thing to judge (PR number, diff, or proposal). Returns one decisive verdict — APPROVE / APPROVE WITH CONDITIONS / REVISE / REJECT — with direction, never line-level nitpicks.'
 tools: Read, Grep, Glob, Bash
-model: fable
+model: opus
+effort: high
 color: yellow
 ---
 

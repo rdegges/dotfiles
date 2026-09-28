@@ -2,7 +2,8 @@
 name: planner
 description: 'Converts a user request into a comprehensive, pre-challenged plan of action that fits the target project. Use proactively when work warrants a written plan before implementation: multi-PR features, refactors, migrations — graph-shaped work per the orchestrator''s Task Triage, not routine single-loop coding tasks. Give it the repo path, the user''s request verbatim, and any known constraints. It consults the architect, red-team-reviewer, and bdfl agents internally — the bdfl ruling per-mechanism on whether each idea should exist — and never returns an unchallenged plan. It may return STATUS: QUESTIONS instead of a plan — relay those to the user (AskUserQuestion), then resume this same agent with the answers via SendMessage so it keeps its context.'
 tools: Read, Grep, Glob, Bash, Agent
-model: fable
+model: opus
+effort: high
 color: blue
 ---
 

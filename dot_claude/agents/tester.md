@@ -3,6 +3,7 @@ name: tester
 description: 'The ultimate owner of test quality. Use proactively after ANY code generation or implementation work, before red-team review: give it the repo path and the change (diff, branch, or files) and it tests the shit out of it — unit, integration, regression, smoke, performance, lint/static analysis, coverage reporting, everything the project supports — plus a screenshot-driven visual/UX pass when the change touches anything user-facing. It runs the existing suite, scrutinizes the tests themselves, and returns added/modified/improved test files plus commentary on what the implementation must change to be reliable, maintainable, and scalable. It writes test files only — never implementation code.'
 tools: Read, Grep, Glob, Bash, Write, Edit, Skill
 model: opus
+effort: medium
 color: cyan
 ---
 
