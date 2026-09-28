@@ -53,6 +53,9 @@ rules live in `tipsy-seeds.md`. The fixture is the PRISTINE pre-tester state
 | 2026-08-05 | (this commit) | 4/4 | 3/3 | 4/5 | 5 | MISSED V2 (light-mode result contrast); dark-mode contrast caught. Contract-proposals rule verified working: fix-agnostic failing tests, 3 test.todo proposals, no invented error contracts. Before/after path correctly skipped (single-commit fixture). |
 | 2026-08-05 | (this commit) | 4/4 | 3/3 | 5/5 | 8 | Tie-break re-run per the variance rule: V2 caught (1.69:1, measured) → prior miss confirmed as run variance. 6 test.todo proposals, no invented contracts. Used an isolated screenshots dir — recommended for all future runs. |
 | 2026-08-05 | 84c498f | 4/4 | 3/3 | 5/5 | 5 | First run via the eval-tester workflow (validates the codified runner, tester.md unchanged): machine-scored PASS, no regressions. V2 caught at 1.69:1. Unseeded finds all server/HTML: no form, space-in-path 404s, query-string 404, .git served, hardcoded port. 5 test.todo proposals; before/after correctly skipped. |
+| 2026-09-28 | 89080f0 | 4/4 | 3/3 | 5/5 | 8 | Baseline before the model/effort and toolchain changes. Opus 5.5, inherited medium effort. The browse skill was missing, so the tester drove headless Chrome over CDP with its own script (14 shots). $0.61, 3.3 min for the tester agent. |
+| 2026-09-28 | 98087a5 | 4/4 | 3/3 | 5/5 | 8 | `effort: medium` pinned in frontmatter (same as the default). No regression. Still improvised CDP (22 shots). $0.88, 4.2 min. |
+| 2026-09-28 | b9115e9 | 4/4 | 3/3 | 5/5 | 6 | New visual toolchain: Claude in Chrome for flows and keyboard states, Docker Playwright 1.63.0 for the viewport and color-scheme matrix (2 x 2 x 6 states, 28 shots). V1 measured (scrollWidth 640 vs 390), V5 measured (1.12:1). $0.96, 4.5 min. |
 
 ## Fixture: statusboard
 
