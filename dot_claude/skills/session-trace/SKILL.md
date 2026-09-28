@@ -61,6 +61,11 @@ of no record lists. `_template.md` and the records themselves never count.
    then runs this listing exactly. The brief tells it to follow
    `Preferences.md` §Vault Hygiene and to return (a) the exact command it
    ran, (b) the unmined list, oldest first, and (c) the `unmined:` count.
+   The brief also states that the `Hill-climbs/` record (step 4) is the
+   loop's state file and an explicit exception to the §Vault Hygiene "no
+   per-run notes" rule, so the archivist must file it at exactly that path
+   and name, create the `Hill-climbs/` folder if it does not exist, and must
+   not relocate, rename, or merge it.
 
    ```bash
    bash <<'SH'
@@ -69,12 +74,20 @@ of no record lists. `_template.md` and the records themselves never count.
    mined=$(mktemp) && trap 'rm -f "$mined"' EXIT
    for f in Hill-climbs/*.md; do
      [ -f "$f" ] || continue
-     awk '/^---[[:space:]]*$/ { if (++fm == 2) exit; next }
-       fm == 1 && /^mined:/ { m = 1; next }
-       fm == 1 && m && /^[[:space:]]*- / {
-         sub(/^[[:space:]]*- [[:space:]]*/, ""); sub(/[[:space:]]+$/, "")
-         gsub(/^"|"$/, ""); print; next }
-       fm == 1 { m = 0 }' "$f"
+     awk -v q="'" 'FNR == 1 && !/^---[[:space:]]*$/ { exit }
+       /^---[[:space:]]*$/ { if (++fm == 2) exit; next }
+       /^mined:/ { m = 1; next }
+       m && /^[[:space:]]*$/ { next }
+       m && /^[[:space:]]*- / {
+         s = $0; sub(/^[[:space:]]*- [[:space:]]*/, "", s)
+         sub(/[[:space:]]+#.*$/, "", s); sub(/[[:space:]]+$/, "", s)
+         c = substr(s, 1, 1)
+         if (length(s) > 1 && (c == "\"" || c == q) && substr(s, length(s)) == c)
+           s = substr(s, 2, length(s) - 2)
+         sub(/^\[\[/, "", s); sub(/\]\]$/, "", s); sub(/.*\//, "", s)
+         if (s !~ /\.md$/) s = s ".md"
+         print s; next }
+       { m = 0 }' "$f"
    done | LC_ALL=C sort -u > "$mined"
    list=$(find . -maxdepth 1 -type f -name '*.md' ! -name '_template.md' \
      | sed 's|^\./||' | LC_ALL=C sort | LC_ALL=C comm -23 - "$mined")
@@ -91,7 +104,22 @@ of no record lists. `_template.md` and the records themselves never count.
    traces (the first 25 of the list). Pass their full paths.
 4. **Record.** The archivist then files hill-climber's report as
    `Hill-climbs/YYYY-MM-DD HHMM — hill-climb.md` (same §Vault Hygiene rule).
-   Its frontmatter `mined:` lists exactly the trace notes hill-climber read.
+   This record is the loop's state file and an explicit exception to the
+   §Vault Hygiene "no per-run notes" rule: the archivist must file it at
+   exactly that path and name, create the `Hill-climbs/` folder if it does
+   not exist, and must not relocate, rename, or merge it. Its frontmatter
+   `mined:` lists exactly the trace notes hill-climber read. Each entry is a
+   bare trace file name with the `.md` extension, one per `- ` line:
+
+   ```yaml
+   mined:
+     - 2026-09-01 — alpha.md
+   ```
+
+   After the archivist files the record, re-run the same listing yourself.
+   The new `unmined:` count must equal the previous count minus the number
+   of traces hill-climber read. Any other result is
+   `hill-climb trigger FAILED: record filed but <n> mined traces still listed`.
 5. **Report.** The session's final message contains exactly one of these
    lines. The trigger is never silent.
    - `hill-climb: filed <note name>`
