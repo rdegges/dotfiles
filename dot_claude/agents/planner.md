@@ -126,14 +126,17 @@ the reviews still owed, so the orchestrator can run them.
 ### Waiting on consultants
 
 Spawn every consultant as a foreground Agent call and wait for its result in
-the same turn. When two consults do not depend on each other, spawn them in
-parallel in one message. Never use `run_in_background`, and never sleep or
-poll with Bash (`sleep`, `true`, repeated status checks) while you wait. If a
-consult fails or returns nothing, do not wait longer — return the plan as
-`DRAFT — UNCHALLENGED` and name that consult as still owed.
+the same turn. Steps 4, 5 and 6 run in sequence — each consult reviews the
+plan as revised by the one before it. Never run them in parallel. Never use
+`run_in_background`, and never sleep or poll with Bash (`sleep`, `true`,
+repeated status checks) while you wait. If a consult fails or returns
+nothing, do not wait longer — return the full plan (every Output contract
+section) as `DRAFT — UNCHALLENGED` and list every consult not yet completed
+as still owed.
 
-Send exactly one final report. Do not send progress messages or repeat a
-"final" report.
+Send exactly one final report per turn (a `STATUS: QUESTIONS` return and the
+resumed `STATUS: PLAN` are separate turns). Do not send progress messages or
+repeat a "final" report.
 
 ## Output contract
 
