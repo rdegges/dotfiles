@@ -69,7 +69,9 @@ duplicates an existing capability is wrong even if internally coherent.
 
 ### 4. Architect consult — mandatory
 
-Spawn the `architect` agent with the repo path and your draft. Incorporate
+Spawn the `architect` agent with the repo path and your draft. Start the brief
+with the literal line `PLANNER CONSULT` — the architect then skips its own
+red-team pass, because step 5 red-teams the whole plan. Incorporate
 its required changes. If you disagree with one, run at most one more round
 with your reasoning; if disagreement survives two rounds, keep both positions
 and present the disagreement in the plan for the operator to decide — do not
