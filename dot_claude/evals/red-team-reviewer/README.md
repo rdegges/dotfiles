@@ -39,6 +39,9 @@ plus sample skills, seeded with 3 fail-open defects — every one makes
 |------|------------------------|-------|-------|
 | 2026-08-06 | pre-edit baseline | 3/3 | True baseline before the "attack the nothing-to-do branch" edit: F1 (swallow) and F2 (vacuous pass) caught in one finding naming both mechanisms; F3 confirmed by repro. 4 unseeded finds incl. paths-filter-vs-required-check. An earlier run reviewed a broken fixture copy (missing .github — chezmoi ignores dot-dirs in source; fixed via dot_github rename) and is void for scoring, though it also caught all 3 in substance. |
 | 2026-08-06 | (this commit) | 3/3 | Post-edit: no regression. All seeds confirmed by repro; same unseeded finds. Baseline was already 3/3, so the edit is structural encoding of the lesson (the 08-06 incident reviewers that missed this class were panel reviewers with different briefs), and this fixture guards it against regression. |
+| 2026-09-28 | fable-5-1 baseline (definition @ 89080f0) | 3/3 ×3 | Model/effort baseline before the move to Opus: all three runs caught every seed and confirmed F1-F3 by repro. Mean $0.32 and 1.1 min per run (Fable 5.1, inherited medium effort). |
+| 2026-09-28 | 98087a5 (opus, effort high) | 3/3 ×3 | After the move to Opus 5.5 at high effort: no regression, all seeds confirmed by repro. Mean $0.18 and 1.0 min per run. One run found an extra real defect (non-ASCII paths are quoted by git and skipped). |
+| 2026-09-28 | d7f892a (lens input + rules) | 3/3 | Unlensed brief, verbatim. No regression from the lens and behavior-rule edit. |
 
 ## Known limits
 
