@@ -100,7 +100,7 @@ Scale the checker to the stakes; the maker never grades its own work:
   spec, not by vote alone.
 - **High-stakes work**: adversarial panel — independent skeptics prompted to
   *refute* each finding/claim; only survivors ship.
-- Cross-model lenses (Codex challenge review, hermetic-tests) stack on top
+- Cross-model lenses (Codex adversarial review, hermetic-tests) stack on top
   where their triggers apply — see the `verification-gates` and `codex-delegation` skills.
 - Verifiers get a runnable check wherever possible (tests, build, repro) —
   evidence, not assertions.
