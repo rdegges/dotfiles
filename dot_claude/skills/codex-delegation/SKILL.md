@@ -56,9 +56,10 @@ free, it has no niche.
   dev and Rust like a paranoid C++ dev — do not let it own the shape of code I
   ship. Use it to *gather information and try things*, then bring the real change
   back to Claude.
-- **Independent review / second opinion → the `/codex` skill** (its `review`,
-  `challenge`, and `consult` modes). Always verify Codex's claims against the code
-  before presenting them; it's a reviewer, not an authority.
+- **Independent review / second opinion → `codex review`** for a diff (see
+  Adversarial Review below), or `codex exec -s read-only "<question>"` for a
+  consult. Always verify Codex's claims against the code before presenting
+  them; it's a reviewer, not an authority.
 
 ### Escalation philosophy
 
@@ -100,15 +101,17 @@ the `red-team-reviewer` agent is the always-available first lens and runs regard
 Before declaring any coding task complete, check whether `codex` is installed and
 authenticated (`command -v codex` succeeds and `~/.codex/auth.json` exists). If it is:
 
-- Run an **adversarial review** of your changes via the `/codex` skill in *challenge*
-  mode — have it actively try to break the code and surface bugs, edge cases, and
-  security issues in the diff.
+- Run an **adversarial review** of your changes with `codex review`, from inside
+  the repo, with `</dev/null` so it never waits on stdin:
+  `codex review --base <base-branch> "Try to break this change: find bugs, edge cases, and security issues." </dev/null`
+  (use `--uncommitted` instead of `--base` for changes not yet committed).
 - Triage the findings: fix every genuine issue. For anything that's a false positive
   or out of scope, note it briefly rather than blindly applying the suggestion.
 - Re-run the relevant tests/build after fixing, then end the run.
 
-If `codex` is not installed or not authenticated, skip this step silently — never
-block a task on its absence.
+If `codex` is not installed or not authenticated, skip this step and say so in
+your final report ("codex review skipped: not installed/authenticated") — never
+block a task on its absence, and never skip it silently.
 
 For production business logic with spec-able behavior (parsers, protocol handlers,
 billing/money math, public API contracts), prefer the stronger form: the
