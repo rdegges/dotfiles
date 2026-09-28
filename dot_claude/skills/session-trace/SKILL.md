@@ -43,10 +43,63 @@ A trace is not a transcript — it is a structured reflection:
 
 File traces in ~/Vault/Personal/Resources/Personal/Session Traces/YYYY-MM-DD — <slug>.md.
 When 3+ traces show the same pattern, propose a CLAUDE.md or skill update.
-The `hill-climber` agent owns this mining: run it when 3+ new traces have
-accumulated, or on demand. It returns ranked proposals with evidence and a
-binary eval each; apply them via chezmoi and merge through the BDFL gate
-like any other change.
+The `hill-climber` agent owns this mining: run it through the trigger below,
+or on demand. It returns ranked proposals with evidence and a binary eval
+each; apply them via chezmoi and merge through the BDFL gate like any other
+change.
+
+### Hill-climb trigger
+
+Nothing counts "new" traces by itself, so every trace filing runs this
+trigger. Hill-climb records live in the `Hill-climbs/` subfolder of the
+Session Traces folder. Each record's frontmatter `mined:` is a YAML block
+list, one trace file name per line, of the traces that run read. A trace is
+**unmined** when it is a note in the Session Traces folder that the `mined:`
+of no record lists. `_template.md` and the records themselves never count.
+
+1. **File and list.** The same `pkms:archivist` brief that files the trace
+   then runs this listing exactly. The brief tells it to follow
+   `Preferences.md` §Vault Hygiene and to return (a) the exact command it
+   ran, (b) the unmined list, oldest first, and (c) the `unmined:` count.
+
+   ```bash
+   bash <<'SH'
+   set -euo pipefail
+   cd "$HOME/Vault/Personal/Resources/Personal/Session Traces"
+   mined=$(mktemp) && trap 'rm -f "$mined"' EXIT
+   for f in Hill-climbs/*.md; do
+     [ -f "$f" ] || continue
+     awk '/^---[[:space:]]*$/ { if (++fm == 2) exit; next }
+       fm == 1 && /^mined:/ { m = 1; next }
+       fm == 1 && m && /^[[:space:]]*- / {
+         sub(/^[[:space:]]*- [[:space:]]*/, ""); sub(/[[:space:]]+$/, "")
+         gsub(/^"|"$/, ""); print; next }
+       fm == 1 { m = 0 }' "$f"
+   done | LC_ALL=C sort -u > "$mined"
+   list=$(find . -maxdepth 1 -type f -name '*.md' ! -name '_template.md' \
+     | sed 's|^\./||' | LC_ALL=C sort | LC_ALL=C comm -23 - "$mined")
+   [ -n "$list" ] && printf '%s\n' "$list"
+   printf 'unmined: %s\n' "$(printf '%s' "$list" | grep -c . || true)"
+   SH
+   ```
+
+2. **Check.** Count the returned list yourself. If the count is not the
+   stated `unmined:` count, or the archivist could not run the command, the
+   trigger FAILED. Do not guess a list.
+3. **Mine.** If 3 or more traces are unmined, run `hill-climber` in the
+   FOREGROUND, never in the background, on at most the 25 OLDEST unmined
+   traces (the first 25 of the list). Pass their full paths.
+4. **Record.** The archivist then files hill-climber's report as
+   `Hill-climbs/YYYY-MM-DD HHMM — hill-climb.md` (same §Vault Hygiene rule).
+   Its frontmatter `mined:` lists exactly the trace notes hill-climber read.
+5. **Report.** The session's final message contains exactly one of these
+   lines. The trigger is never silent.
+   - `hill-climb: filed <note name>`
+   - `hill-climb: skipped (<n> unmined, need 3)`
+   - `hill-climb trigger FAILED: <why>`
+
+Hill-climber's proposals go to me. Any that I adopt go through `planner` and
+`bdfl` like other work.
 
 
 ### Loop Hygiene

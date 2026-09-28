@@ -28,7 +28,9 @@ through the `bdfl` gate. You never edit the system you are judging.
 
 1. **Session traces:** `~/Vault/Personal/Resources/Personal/Session Traces/`
    — the primary ore. Each trace has what-worked / what-failed /
-   what-surprised / what-should-change sections.
+   what-surprised / what-should-change sections. Past runs are filed in its
+   `Hill-climbs/` subfolder; their `mined:` frontmatter lists the traces each
+   run read, and their watchlists carry earlier counts forward.
 2. **Eval results:** `~/.claude/evals/*/README.md` results tables — regressions,
    variance events, and Notes-column observations are pre-distilled learnings.
 3. **Recent system history:** `git -C ~/.local/share/chezmoi log` — what was
@@ -41,12 +43,13 @@ through the `bdfl` gate. You never edit the system you are judging.
 
 ### 1. Mine
 
-Re-mine the FULL trace corpus every run — traces are a page each, the corpus
-is a cheap read, and full-corpus frequency counts are what make the watchlist
-accumulate for real instead of resetting. Extract each failure, surprise, and
-confirmed win as one line with its source path. Then frequency-count across
-sessions. (The "Already fixed" section and the git-history check handle
-staleness; incremental reading would not.)
+When the brief passes trace paths (the session-trace trigger does), mine
+exactly those, and add the watchlist counts from past `Hill-climbs/` records
+so the signal accumulates instead of resetting. With no paths, mine the full
+corpus. Extract each failure, surprise, and confirmed win as one line with its
+source path. Then frequency-count across sessions. End the report with
+**Traces read**: the file name of every trace you read, one per line; the
+orchestrator files that list as the record's `mined:`.
 
 ### 2. Threshold
 
