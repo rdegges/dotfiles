@@ -33,7 +33,7 @@ rules live in `tipsy-seeds.md`. The fixture is the PRISTINE pre-tester state
    > first gate. Run your full process per your definition. Notes: `npm test`
    > runs the suite (no dependencies to install). `npm start` serves the app
    > at http://localhost:4173 — the change is user-facing, so the visual/UX
-   > pass applies; use the browse skill and save screenshots to an isolated
+   > pass applies; use the Chrome tools and save screenshots to an isolated
    > directory (that directory is yours alone). Do not deploy anything or
    > touch files outside this repo and that directory. This is a host-run
    > scratch project — no Docker convention exists here.
@@ -75,7 +75,7 @@ accidentally regresses the existing UI. Ground truth in
    > first gate. Run your full process per your definition. Notes: no test
    > suite exists yet (static page). `npm start` serves the app at
    > http://localhost:4174 (PORT env respected). The change is user-facing,
-   > so the visual/UX pass applies; use the browse skill and save
+   > so the visual/UX pass applies; use the Chrome tools and save
    > screenshots to an isolated directory. Do not touch files outside this
    > repo and that directory. This is a host-run scratch project — no
    > Docker convention exists here.
@@ -98,5 +98,9 @@ representation.
 
 ## Known limits
 
-- Visual seed detection depends on the gstack `browse` skill being installed.
-- Both fixtures assume node is available on the host; neither uses Docker.
+- Visual seed detection needs the Claude in Chrome extension reachable from
+  the tester for flow driving, and Docker on the host for the Playwright
+  viewport/theme captures.
+- Both fixtures assume node is available on the host; the projects
+  themselves have no Docker convention (the Playwright container is the
+  tester's, not the fixture's).
