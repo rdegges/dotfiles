@@ -404,7 +404,7 @@ async function runPanel({ lens, fixer = noFix, setup, head, final }) {
     if (opts.label === 'worktree:#101') return setup ? setup(remote) : setupOk(remote.head)
     const h = /^head:#101:r(\d+)$/.exec(opts.label)
     if (h) return head ? head(Number(h[1]), remote) : { pr_head_sha: remote.head }
-    if (opts.label === 'bdfl-final:#101') return final ? final(remote) : null
+    if (opts.label === 'bdfl-final:#101') return final ? final(remote, prompt) : null
     const m = /^(engineer|tester|redteam|security|fixer):#\d+:r(\d+)$/.exec(opts.label)
     if (!m) return null
     if (m[1] !== 'fixer') return lens(m[1], Number(m[2]))
@@ -827,4 +827,85 @@ test('pr-panel-loop: when every SHA agrees, a fixed PR converges and the final A
   assert.equal(out.statusDetail, 'converged clean')
   assert.match(finalPrompt, new RegExp(`HEAD CHECK FIRST: .*gh pr view 101 --json headRefOid.*The panel last reviewed ${sha(2)}`, 's'))
   assert.doesNotMatch(finalPrompt, /pull --ff-only/)
+})
+
+// --- Verified head: adversarial paths (tester gate, PR #28) -----------------
+
+// Defect proof: the round 1 fixer reports no push but a worktree head that is
+// neither the verified head nor on GitHub (an unpushed local commit it did not
+// list). Round 2's head check only asks GitHub, so the lenses read a worktree
+// nobody verified, pass it, and the final APPROVE on the unchanged GitHub head
+// stands, though that head still has round 1's blockers.
+test('pr-panel-loop: an unpushed fixer head that differs from the verified head never reaches an APPROVE', async () => {
+  const { out } = await runPanel({
+    lens: blockerThenPass,
+    fixer: () => ({ applied: [], skipped: [], pushed: false, commits: [], local_head: sha(50), remote_head: sha(1), notes: 'canary' }),
+    final: (remote) => approve(remote.head),
+  })
+  assert.notEqual(out.final.final, 'APPROVE', `status ${out.status}: APPROVE stood after lenses read an unverified worktree head`)
+})
+
+// Defect proof: at the backstop, the round 12 fixer pushes a head no lens
+// reviewed, and JS knows it (expected head != reviewed head). The downgrade
+// trusts the final agent's head_sha, and the final prompt hands it the
+// reviewed SHA, so an agent that echoes that SHA keeps its APPROVE.
+test('pr-panel-loop: after a push no lens reviewed, an APPROVE does not stand even if the final agent echoes the reviewed head', async () => {
+  const { out } = await runPanel({
+    lens: (l) => lensResult(l, 'FAIL', ['blocker']),
+    fixer: progressFix,
+    final: (remote, prompt) => approve(/The panel last reviewed ([0-9a-f]{40})/.exec(prompt)[1]),
+  })
+  assert.equal(out.rounds.length, 12)
+  assert.notEqual(out.final.final, 'APPROVE', `status ${out.status}: APPROVE stood on a head pushed after the last lens round`)
+})
+
+test('pr-panel-loop: a fixer that pushes but reports pushed:false escalates at the next head check', async () => {
+  const { labels, out } = await runPanel({
+    lens: blockerThenPass,
+    fixer: () => ({ applied: [], skipped: [], pushed: false, commits: [], notes: 'canary' }),
+    head: (r) => ({ pr_head_sha: r === 1 ? sha(1) : sha(60) }),
+    final: () => approve(sha(60)),
+  })
+  assert.equal(out.status, 'head-mismatch')
+  assert.ok(!labels.includes('engineer:#101:r2'))
+  assert.ok(!labels.includes('bdfl-final:#101'))
+  assert.equal(out.final.head_sha, sha(1))
+})
+
+test('pr-panel-loop: a head check with a different SHA case fails closed (strict compare)', async () => {
+  const upper = 'ABCDEF'.padEnd(40, '0')
+  const { out } = await runPanel({ lens: pass, setup: () => setupOk(upper), head: () => ({ pr_head_sha: upper.toLowerCase() }), final: () => approve(upper) })
+  assert.equal(out.status, 'head-mismatch')
+  assert.equal(out.final.final, 'ESCALATE')
+})
+
+// Two PRs in one run: a fork PR escalates on its own and does not stop or
+// taint the other PR's heads, rounds, or verdict.
+test('pr-panel-loop: a fork PR escalates without a final agent while a sibling PR in the same run is reviewed and approved', async () => {
+  const calls = []
+  const HEADS = { 101: sha(101), 102: sha(102) }
+  const agent = async (prompt, opts) => {
+    calls.push(opts.label)
+    const w = /^worktree:#(\d+)$/.exec(opts.label)
+    if (w) {
+      const n = Number(w[1])
+      return { ok: true, error: '', head_ref: n === 101 ? 'canary/branch-1' : 'canary-branch-2', head_sha: HEADS[n], pr_head_sha: HEADS[n], cross_repository: n === 101 }
+    }
+    const h = /^head:#(\d+):r\d+$/.exec(opts.label)
+    if (h) return { pr_head_sha: HEADS[h[1]] }
+    const f = /^bdfl-final:#(\d+)$/.exec(opts.label)
+    if (f) return { pr: Number(f[1]), head_sha: HEADS[f[1]], final: 'APPROVE', summary_comment: 'canary', merge_notes: 'canary', residual_risks: [] }
+    const m = /^(engineer|tester|redteam|security):#\d+:r\d+$/.exec(opts.label)
+    return m ? lensResult(m[1], 'PASS') : null
+  }
+  const { results } = await load('pr-panel-loop.js')(agent, async (t) => Promise.all(t.map((x) => x())), async (xs, f) => Promise.all(xs.map(f)), () => {}, () => {}, SCRIPTS[0].validArgs())
+  const [fork, ok] = results
+  assert.equal(fork.pr, 101)
+  assert.equal(fork.status, 'setup-failed')
+  assertEscalation(fork.final, /fork \(cross-repository\)/)
+  assert.ok(!calls.some((l) => /#101:r\d+$/.test(l)) && !calls.includes('bdfl-final:#101'), 'no round or final agent for the fork PR')
+  assert.equal(ok.pr, 102)
+  assert.equal(ok.status, 'converged')
+  assert.equal(ok.final.final, 'APPROVE')
+  assert.equal(ok.final.head_sha, sha(102))
 })
