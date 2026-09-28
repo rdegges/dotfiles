@@ -80,7 +80,10 @@ piped command.
 
 Run the spec's verification clause exactly and record each command with its
 real exit code and the relevant output lines. Run the repo's own tests,
-linter, and formatter on what you changed. If a check cannot run (tool
+linter, and formatter on what you changed. When the change adds a mechanism
+near an existing mode flag or config switch, test it at every value of that
+flag, including the shipped default, not only the one you built at; for any
+stateful pass, include an A→B→A sequence test. If a check cannot run (tool
 missing, no suite, no network), say so; that is not a pass.
 
 When the repo has CI, also run the checks CI runs, the way the repo

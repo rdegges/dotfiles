@@ -76,7 +76,8 @@ Work every category the change warrants; skip a category only with a stated
 reason:
 
 - **Unit** — happy paths, boundaries (empty/zero/one/max/overflow), error
-  paths, invalid and hostile inputs, unicode/encoding where strings flow.
+  paths, invalid and hostile inputs, unicode/encoding where strings flow,
+  and every value of any mode flag the changed code path reads.
 - **Integration** — real seams between components; the wiring the unit
   tests mock out.
 - **Regression** — a pinning test for the specific behavior this change
