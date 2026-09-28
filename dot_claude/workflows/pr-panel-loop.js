@@ -374,7 +374,9 @@ async function reviewPR(pr) {
       label: `fixer:#${pr.n}:r${round}`,
       phase: 'Panel',
     })
-    rounds.push({ findingsBrief, fixReport: fix ? JSON.stringify(fix) : '(fixer failed)', reviews: ok })
+    // The report feeds later prompts; leave out the heads so no agent can echo a
+    // SHA back into a field JS compares. JS checks the real values below.
+    rounds.push({ findingsBrief, fixReport: fix ? JSON.stringify({ ...fix, local_head: undefined, remote_head: undefined }) : '(fixer failed)', reviews: ok })
     log(`#${pr.n} round ${round}: ${blockersOrMajors.length} blocker/major findings, fixer pushed=${fix ? fix.pushed : 'n/a'}`)
 
     // Applied but not pushed: the PR branch lacks the fixes, so another round
@@ -409,6 +411,14 @@ async function reviewPR(pr) {
         [`Fixer notes: ${fix.notes}`]
       )
       break
+    } else if (fix && fix.local_head !== expectedHead) {
+      stop(
+        'push-failed',
+        `PUSH FAILED — round ${round} fixer worktree head differs from the verified PR head without a push`,
+        `the round ${round} fixer worktree holds changes that are not on the PR branch`,
+        [`local ${JSON.stringify(fix.local_head)}`, `expected ${JSON.stringify(expectedHead)}`, `Fixer notes: ${fix.notes}`]
+      )
+      break
     }
 
     // Stall detection: a round where the fixer made no change cannot converge
@@ -420,6 +430,17 @@ async function reviewPR(pr) {
       status = 'stalled'
       log(`#${pr.n}: no fixer progress for 2 consecutive rounds — escalating`)
     }
+  }
+
+  // A fixer push after the last lens round leaves a head no lens reviewed; JS
+  // knows this, so do not ask the final agent to notice it.
+  if (!escalated && expectedHead !== reviewedHead) {
+    stop(
+      'head-mismatch',
+      `HEAD MISMATCH — the PR head moved to ${expectedHead} after the last panel round reviewed ${reviewedHead}`,
+      `the PR head moved after the last panel round reviewed ${reviewedHead}; no lens reviewed ${expectedHead}`,
+      []
+    )
   }
 
   const historyBrief = rounds
@@ -441,7 +462,7 @@ async function reviewPR(pr) {
   let final = escalated || await agent(
     `You are ${MAINTAINER} — ${PROJECT}'s BDFL — giving the FINAL verdict on PR #${pr.n} ("${pr.title}" by ${pr.author}, branch ${pr.branch}) after ${rounds.length} panel round(s). Review loop status: ${statusDetail}.
 
-HEAD CHECK FIRST: run cd ${REPO} && gh pr view ${pr.n} --json headRefOid and return headRefOid verbatim as head_sha. The panel last reviewed ${reviewedHead}; if the PR head is anything else, ESCALATE: nobody reviewed that code.
+HEAD CHECK FIRST: run cd ${REPO} && gh pr view ${pr.n} --json headRefOid and return headRefOid verbatim as head_sha.
 
 REPO: ${REPO}. Verify the CURRENT branch state yourself (gh pr diff ${pr.n}, gh pr checks ${pr.n}, worktree at ${SCRATCH}/pr-${pr.n}): do not take the panel's word for anything you can check in two minutes. Non-negotiables before APPROVE: CI checks green or only informational-recall failures; zero unresolved blocker findings; confidentiality clean; conventions met.
 

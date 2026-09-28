@@ -616,7 +616,7 @@ test('pr-panel-loop: fixer progress between nothing-fixable rounds resets the st
 })
 
 test('pr-panel-loop: a fixer that reports progress every round runs to the 12-round backstop and no further', async () => {
-  const { labels, out, finalPrompt } = await runPanel({ lens: (l) => lensResult(l, 'FAIL', ['blocker']), fixer: progressFix })
+  const { labels, out, finalPrompt } = await runPanel({ lens: (l) => lensResult(l, 'FAIL', ['blocker']), fixer: (r) => (r === 12 ? noFix() : progressFix()) })
   assert.equal(out.status, 'backstop')
   assert.equal(out.converged, false)
   assert.equal(out.stalled, false)
@@ -795,7 +795,7 @@ test('pr-panel-loop: a failed head-check agent (null) escalates as head-mismatch
 test('pr-panel-loop: a final APPROVE on a head other than the last reviewed head is downgraded to ESCALATE', async () => {
   const { labels, out, finalPrompt } = await runPanel({ lens: pass, final: () => approve(sha(77)) })
   assert.ok(labels.includes('bdfl-final:#101'))
-  assert.match(finalPrompt, new RegExp(`The panel last reviewed ${sha(1)}`))
+  assert.doesNotMatch(finalPrompt, new RegExp(sha(1)))
   assert.equal(out.converged, true)
   assert.equal(out.status, 'head-mismatch')
   assert.match(out.statusDetail, /^HEAD MISMATCH/)
@@ -825,7 +825,8 @@ test('pr-panel-loop: when every SHA agrees, a fixed PR converges and the final A
   assert.equal(out.final.final, 'APPROVE')
   assert.equal(out.final.head_sha, sha(2))
   assert.equal(out.statusDetail, 'converged clean')
-  assert.match(finalPrompt, new RegExp(`HEAD CHECK FIRST: .*gh pr view 101 --json headRefOid.*The panel last reviewed ${sha(2)}`, 's'))
+  assert.match(finalPrompt, /HEAD CHECK FIRST: .*gh pr view 101 --json headRefOid/)
+  assert.doesNotMatch(finalPrompt, new RegExp(sha(2)))
   assert.doesNotMatch(finalPrompt, /pull --ff-only/)
 })
 
