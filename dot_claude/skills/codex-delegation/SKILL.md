@@ -81,7 +81,9 @@ right model. Cost is a tiebreaker only when the other axes genuinely tie.
 - **Known invocation gotchas:** outside a git repo, add `--skip-git-repo-check` —
   without it Codex errors or silently returns empty output. Never pipe stdin to a
   backgrounded `codex exec`; redirect `</dev/null` or it hangs on "Reading additional
-  input...". Split 10-minute-plus runs into scoped passes — the JSONL stream can die
+  input...". `codex review` rejects `--base`, `--uncommitted`, or `--commit`
+  together with a prompt argument (exit 2) — pass the scope flag, not a prompt.
+  Split 10-minute-plus runs into scoped passes — the JSONL stream can die
   mid-run without `turn.completed`.
 - **Bounded implementation on a scratch branch:** `codex exec -s workspace-write`
   inside a git worktree, then review the diff before it goes anywhere near a real
@@ -103,8 +105,8 @@ authenticated (`command -v codex` succeeds and `~/.codex/auth.json` exists). If 
 
 - Run an **adversarial review** of your changes with `codex review`, from inside
   the repo, with `</dev/null` so it never waits on stdin:
-  `codex review --base <base-branch> "Try to break this change: find bugs, edge cases, and security issues." </dev/null`
-  (use `--uncommitted` instead of `--base` for changes not yet committed).
+  `codex review --base <base-branch> </dev/null`
+  (use `codex review --uncommitted </dev/null` for changes not yet committed).
 - Triage the findings: fix every genuine issue. For anything that's a false positive
   or out of scope, note it briefly rather than blindly applying the suggestion.
 - Re-run the relevant tests/build after fixing, then end the run.
@@ -117,5 +119,5 @@ For production business logic with spec-able behavior (parsers, protocol handler
 billing/money math, public API contracts), prefer the stronger form: the
 `hermetic-tests` skill (`~/.claude/skills/hermetic-tests/`) — blind cross-model
 test verification where the test writer never sees the implementation. When it
-runs, it replaces the post-hoc challenge review above for the code it covers.
+runs, it replaces the post-hoc adversarial review above for the code it covers.
 
