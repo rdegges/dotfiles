@@ -56,6 +56,7 @@ rules live in `tipsy-seeds.md`. The fixture is the PRISTINE pre-tester state
 | 2026-09-28 | 89080f0 | 4/4 | 3/3 | 5/5 | 8 | Baseline before the model/effort and toolchain changes. Opus 5.5, inherited medium effort. The browse skill was missing, so the tester drove headless Chrome over CDP with its own script (14 shots). $0.61, 3.3 min for the tester agent. |
 | 2026-09-28 | 98087a5 | 4/4 | 3/3 | 5/5 | 8 | `effort: medium` pinned in frontmatter (same as the default). No regression. Still improvised CDP (22 shots). $0.88, 4.2 min. |
 | 2026-09-28 | b9115e9 | 4/4 | 3/3 | 5/5 | 6 | New visual toolchain: Claude in Chrome for flows and keyboard states, Docker Playwright 1.63.0 for the viewport and color-scheme matrix (2 x 2 x 6 states, 28 shots). V1 measured (scrollWidth 640 vs 390), V5 measured (1.12:1). $0.96, 4.5 min. |
+| 2026-09-28 | (this commit) | 4/4 | 3/3 | 5/5 | 7 | Pre-merge regression check for the every-mode-flag-value rule (tester.md applied from this branch, run in a session where the edited definition had loaded). No regression. Claude in Chrome DOM reads plus Docker Playwright 1.63.0 matrix (20 shots). Fix-agnostic sweep proofs (29,541 party-of-one undercharges over $0.01–$200). $1.03, 4.5 min. Whether the new rule works is measured by the forward eval, not this fixture. |
 
 ## Fixture: statusboard
 
