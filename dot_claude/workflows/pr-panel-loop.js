@@ -1,7 +1,7 @@
 export const meta = {
   name: 'pr-panel-loop',
   description: 'Phase B: per-PR evaluate-optimize review loop — 4 parallel lenses, fixer applies blockers on the PR branch, re-review until clean (exits early on a 2-round fixer stall or when only maintainer-only findings remain; 12-round runaway backstop), then a BDFL final verdict. The project-specific inputs (repo, project, maintainer persona, audience, rules, rulings) are required args: the orchestrator reads them from the maintainer context note and passes them in.',
-  whenToUse: 'After the pr-bdfl-gate phase: pass the ADVANCE PRs as args.prs (each with a guidanceFile holding its gate verdict and panel_guidance), plus args.scratch, and args.repo, args.project, args.maintainer, args.maintainerShort, args.audience, args.rules, args.rulings from the maintainer context note',
+  whenToUse: 'After the pr-bdfl-gate phase: pass the ADVANCE PRs as args.prs (each with a guidanceFile holding its gate verdict and panel_guidance), plus args.scratch, and args.repo, args.project, args.maintainer, args.maintainerShort, args.audience, args.rules, args.rulings from the maintainer context note. args.repo, args.scratch, and each guidanceFile must be absolute paths of letters, digits, and . _ / - only: paths with spaces (e.g. vault paths) are rejected.',
   phases: [
     { title: 'Panel', detail: 'engineer + tester + red-team + security lenses per PR, looped with a fixer' },
     { title: 'Final', detail: 'BDFL final verdict per PR' },
@@ -34,6 +34,43 @@ const MAINTAINER_SHORT = required('maintainerShort', 'short name used for voice 
 const AUDIENCE = required('audience', 'who a merge ships to, completing "This registry ships to …"')
 const RULES = required('rules', 'the REPO GROUND RULES block every lens and the fixer read').trim()
 const RULINGS = required('rulings', 'fixer bullet on which maintainer rulings are standing orders and which stay open')
+
+// PR records are contributor-controlled, and branch, REPO, SCRATCH, and
+// guidanceFile reach `git fetch`/`git worktree add`/`git push` shell lines in
+// the prompts, so validate them all before any agent starts. Duplicated in
+// pr-bdfl-gate.js on purpose: workflow scripts cannot import.
+const SAFE_PATH = /^\/[A-Za-z0-9._/-]+$/
+const SAFE_BRANCH = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/
+const CONTROL_CHARS = /[\u0000-\u001f\u007f-\u009f]/
+function check(ok, field, what) {
+  if (!ok) throw new Error(`${field}: ${what}`)
+}
+const isText = (v) => typeof v === 'string' && !CONTROL_CHARS.test(v)
+const isSafePath = (v) => typeof v === 'string' && SAFE_PATH.test(v)
+check(isSafePath(REPO), 'args.repo', 'must be an absolute path of [A-Za-z0-9._/-] only (no spaces)')
+check(isSafePath(SCRATCH), 'args.scratch', 'must be an absolute path of [A-Za-z0-9._/-] only (no spaces)')
+const seenN = new Set()
+PRS.forEach((pr, i) => {
+  const at = `args.prs[${i}]`
+  check(pr !== null && typeof pr === 'object', at, 'must be an object { n, title, author, branch, guidanceFile, merge_dependencies }')
+  check(Number.isInteger(pr.n) && pr.n > 0, `${at}.n`, 'must be a positive integer')
+  check(!seenN.has(pr.n), `${at}.n`, `duplicate PR number ${pr.n}`)
+  seenN.add(pr.n)
+  for (const k of ['title', 'author']) check(isText(pr[k]), `${at}.${k}`, 'must be a string with no control characters')
+  const b = pr.branch
+  // Beyond the charset, mirror the `git check-ref-format --branch` rules the
+  // charset lets through; `HEAD` would resolve origin/HEAD, not the PR branch.
+  check(
+    typeof b === 'string' && SAFE_BRANCH.test(b) && !b.includes('..') && !b.includes('//') && !b.endsWith('/') &&
+      b !== 'HEAD' && !b.includes('@{') &&
+      b.split('/').every((c) => !c.startsWith('.') && !c.endsWith('.') && !c.endsWith('.lock')),
+    `${at}.branch`,
+    'must match ^[A-Za-z0-9][A-Za-z0-9._/-]*$ and be a valid git branch: not "HEAD", no "..", "//", "@{", or trailing "/", and no path component that starts with "." or ends with "." or ".lock"'
+  )
+  check(isSafePath(pr.guidanceFile), `${at}.guidanceFile`, 'must be an absolute path of [A-Za-z0-9._/-] only (no spaces)')
+  const deps = pr.merge_dependencies
+  check(deps === undefined || (Array.isArray(deps) && deps.every(Number.isInteger)), `${at}.merge_dependencies`, 'must be an array of integers when present')
+})
 
 const FINDINGS_SCHEMA = {
   type: 'object',

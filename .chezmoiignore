@@ -1,5 +1,6 @@
 README.md
 bootstrap.sh
+tests
 
 {{/* Never sync secrets or machine-local state, even if `chezmoi add`ed by accident. */}}
 .codex/auth.json

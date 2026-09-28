@@ -1,7 +1,7 @@
 export const meta = {
   name: 'pr-bdfl-gate',
   description: 'Phase A: cluster-aware BDFL direction gate over every open non-maintainer PR of a skills registry. The project-specific inputs (repo, project, maintainer persona, audience, institutional context) are required args: the orchestrator reads them from the maintainer context note and passes them in.',
-  whenToUse: 'Before the panel loop: pass every open non-maintainer PR as args.prs = [{ n, author, title, note }], plus args.today, and args.repo, args.project, args.maintainer, args.maintainerShort, args.audience, args.context from the maintainer context note (write the date in args.context as {{today}}; the script fills it from args.today). Then pass the ADVANCE verdicts to pr-panel-loop.',
+  whenToUse: 'Before the panel loop: pass every open non-maintainer PR as args.prs = [{ n, author, title, note }], plus args.today, and args.repo, args.project, args.maintainer, args.maintainerShort, args.audience, args.context from the maintainer context note (write the date in args.context as {{today}}; the script fills it from args.today). args.repo must be an absolute path of letters, digits, and . _ / - only: paths with spaces (e.g. vault paths) are rejected. Then pass the ADVANCE verdicts to pr-panel-loop.',
   phases: [
     { title: 'Gate', detail: 'one BDFL judgment per PR, cluster-aware' },
   ],
@@ -14,7 +14,7 @@ export const meta = {
 // large; Workflow args can arrive as a JSON STRING.
 const ARGS = typeof args === 'string' ? JSON.parse(args) : (args || {})
 const PRS = ARGS.prs
-if (!ARGS.today) throw new Error('pass args.today as YYYY-MM-DD (Date is unavailable in workflow scripts)')
+if (typeof ARGS.today !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(ARGS.today)) throw new Error('pass args.today as YYYY-MM-DD (Date is unavailable in workflow scripts)')
 if (!Array.isArray(PRS) || PRS.length === 0) throw new Error('pass args.prs = [{ n, author, title, note }]')
 
 // Everything project-specific lives in the maintainer's private context note,
@@ -34,6 +34,29 @@ const AUDIENCE = required('audience', 'who a merge ships to, completing "It ship
 const RAW_CONTEXT = required('context', 'the INSTITUTIONAL CONTEXT block: conventions and dated maintainer rulings')
 if (RAW_CONTEXT.includes('${')) throw new Error('pass args.context with {{today}} as the date placeholder, not ${...} template syntax (from the maintainer context note)')
 const CONTEXT = RAW_CONTEXT.trim().split('{{today}}').join(ARGS.today)
+
+// PR records are contributor-controlled and REPO reaches `cd ... && gh ...`
+// shell lines in the prompt, so validate them all before any agent starts.
+// Duplicated in pr-panel-loop.js on purpose: workflow scripts cannot import.
+const SAFE_PATH = /^\/[A-Za-z0-9._/-]+$/
+const CONTROL_CHARS = /[\u0000-\u001f\u007f-\u009f]/
+function check(ok, field, what) {
+  if (!ok) throw new Error(`${field}: ${what}`)
+}
+// The cluster note is a structured block, so it alone may keep \n and \t.
+const NOTE_CONTROL_CHARS = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/
+const isText = (v) => typeof v === 'string' && !CONTROL_CHARS.test(v)
+check(SAFE_PATH.test(REPO), 'args.repo', 'must be an absolute path of [A-Za-z0-9._/-] only (no spaces)')
+const seenN = new Set()
+PRS.forEach((pr, i) => {
+  const at = `args.prs[${i}]`
+  check(pr !== null && typeof pr === 'object', at, 'must be an object { n, author, title, note }')
+  check(Number.isInteger(pr.n) && pr.n > 0, `${at}.n`, 'must be a positive integer')
+  check(!seenN.has(pr.n), `${at}.n`, `duplicate PR number ${pr.n}`)
+  seenN.add(pr.n)
+  for (const k of ['author', 'title']) check(isText(pr[k]), `${at}.${k}`, 'must be a string with no control characters')
+  check(typeof pr.note === 'string' && !NOTE_CONTROL_CHARS.test(pr.note), `${at}.note`, 'must be a string with no control characters other than \\n and \\t')
+})
 
 const GATE_SCHEMA = {
   type: 'object',
