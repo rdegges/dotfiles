@@ -83,6 +83,12 @@ real exit code and the relevant output lines. Run the repo's own tests,
 linter, and formatter on what you changed. If a check cannot run (tool
 missing, no suite, no network), say so; that is not a pass.
 
+When the repo has CI, also run the checks CI runs, the way the repo
+documents them, with CI's pins (runtime, linter, action, eval model, flags)
+read from the workflow files. For these checks, CI's pinned tag overrides
+the "latest official image" default from step 3 and the global instructions.
+If a CI check cannot run locally, say so and treat CI as the verdict.
+
 ### 5. Ship the PR
 
 Commit with a message that says what changed and why, ending with the
@@ -102,6 +108,14 @@ never call it green. Do not wait on checks the brief says do not exist.
 - **Verification** — each command verbatim with its exit code and the
   lines that prove the result.
 - **Checks** — CI status from `gh pr checks`, or "no checks reported".
+- **Stale pins** — every pin CI's workflow files use for the step-4 CI checks,
+  including checks that could not run locally. Each entry: the pin, the
+  current stable release, and the exact CLI command that produced "current"
+  (`gh release view`, `npm view`, registry tags; never memory). Compare a
+  floating major tag such as `@v4` on its major line, and say so in the
+  entry. "none (no CI)" and "could not check: <why>" are valid values;
+  silence is not. Put the same list in the PR body. Never bump a pin in an
+  unrelated PR; flag it for human review.
 - **Deviations** — anything you did differently from the spec, and why.
 - **Not done** — anything left for the orchestrator or a follow-up PR.
 - **Worktree** — confirmation that it was removed.
