@@ -12,7 +12,7 @@ export const meta = {
 //   repo, project, maintainer, maintainerShort, audience, rules, rulings }
 // No fixed round limit — loop until clean. Exit only on convergence, a stall
 // (two consecutive rounds with zero fixer progress => escalate to the
-// maintainer), or the runaway backstop below.
+// maintainer), a fix that was applied but not pushed, or the runaway backstop below.
 const ROUND_BACKSTOP = 12
 const ARGS = typeof args === 'string' ? JSON.parse(args) : (args || {})
 const PRS = ARGS.prs
@@ -204,6 +204,19 @@ function summarizeFindings(reviews) {
     .join('\n')
 }
 
+// An ESCALATE verdict in FINAL_SCHEMA's shape, built here instead of by the
+// final agent: on these exits the PR branch is not the code the panel
+// reviewed, so an agent verdict would judge the wrong head.
+function escalation(pr, reason, risks) {
+  return {
+    pr: pr.n,
+    final: 'ESCALATE',
+    summary_comment: `Thanks for this PR. The review loop stopped before a final verdict: ${reason}. ${MAINTAINER_SHORT} will review it by hand.`,
+    merge_notes: `Do not merge: ${reason}. Re-run the panel on the current branch head first.`,
+    residual_risks: risks,
+  }
+}
+
 async function reviewPR(pr) {
   // one-time worktree setup for this PR (fixer/tester share it; panel reads it)
   await agent(
@@ -215,6 +228,8 @@ async function reviewPR(pr) {
   let clean = false
   let stalledStreak = 0
   let stalled = false
+  let status = 'backstop'
+  let escalated = null
   for (let round = 1; round <= ROUND_BACKSTOP && !clean && !stalled; round++) {
     const history = rounds
       .map((r, i) => `--- round ${i + 1} findings ---\n${r.findingsBrief}\n--- round ${i + 1} fixer report ---\n${r.fixReport}`)
@@ -231,22 +246,47 @@ async function reviewPR(pr) {
     )
     const ok = reviews.filter(Boolean)
     const blockersOrMajors = ok.flatMap((r) => r.findings).filter((f) => f.severity !== 'minor')
-    const allPass = ok.length === 4 && ok.every((r) => r.verdict === 'PASS')
+    // Name lenses by charter key: a failed lens agent returns null, so it has no
+    // self-reported name.
+    const lenses = Object.keys(CHARTERS)
+    const missing = lenses.filter((_, i) => !reviews[i])
+    const failing = lenses.filter((_, i) => reviews[i] && reviews[i].verdict !== 'PASS')
 
-    if (allPass || blockersOrMajors.length === 0) {
+    // Clean needs all four lenses, all PASS, and no blocker/major finding: a
+    // PASS that lists a major is not clean, and neither is a round of failed agents.
+    if (missing.length === 0 && failing.length === 0 && blockersOrMajors.length === 0) {
       rounds.push({ findingsBrief: summarizeFindings(ok) || '(no findings)', fixReport: '(no fixes needed)', reviews: ok })
       clean = true
+      status = 'converged'
       break
     }
 
     const findingsBrief = summarizeFindings(ok)
+    // Not clean, but nothing the fixer can act on (a lens is missing, or failed
+    // on minors only): skip the fixer and count the round toward the stall.
+    if (blockersOrMajors.length === 0) {
+      const lensNote = [
+        missing.length > 0 && `missing lens(es): ${missing.join(', ')}`,
+        failing.length > 0 && `FAIL with only minor findings: ${failing.join(', ')}`,
+      ].filter(Boolean).join('; ')
+      rounds.push({ findingsBrief: findingsBrief || '(no findings)', fixReport: `(fixer skipped, nothing fixable — ${lensNote})`, reviews: ok, lensNote })
+      log(`#${pr.n} round ${round}: not clean, nothing fixable — ${lensNote}`)
+      stalledStreak++
+      if (stalledStreak >= 2) {
+        stalled = true
+        status = 'stalled'
+        log(`#${pr.n}: no fixer progress for 2 consecutive rounds — escalating`)
+      }
+      continue
+    }
     // 2026-09-11 lesson: when every remaining blocker/major is a maintainer-only
     // item (ruling, E2E evidence, owner ack), more fixer rounds cannot converge —
     // stop and hand it to the final verdict instead of burning the backstop.
     const maintainerOnly = /\b(ESCALATE|maintainer[- ]only|not fixer[- ]addressable|R[1-9]\b|E2E_EVIDENCE|owner (ack|review))/i
-    if (round >= 2 && blockersOrMajors.every((f) => maintainerOnly.test(`${f.issue} ${f.suggested_fix}`))) {
+    if (round >= 2 && blockersOrMajors.length > 0 && blockersOrMajors.every((f) => maintainerOnly.test(`${f.issue} ${f.suggested_fix}`))) {
       rounds.push({ findingsBrief, fixReport: '(all remaining blocker/major findings are maintainer-only — stopped early)', reviews: ok })
       stalled = true
+      status = 'maintainer-only'
       log(`#${pr.n} round ${round}: only maintainer-only findings remain — escalating early`)
       break
     }
@@ -258,12 +298,26 @@ async function reviewPR(pr) {
     rounds.push({ findingsBrief, fixReport: fix ? JSON.stringify(fix) : '(fixer failed)', reviews: ok })
     log(`#${pr.n} round ${round}: ${blockersOrMajors.length} blocker/major findings, fixer pushed=${fix ? fix.pushed : 'n/a'}`)
 
+    // Applied but not pushed: the PR branch lacks the fixes, so another round
+    // would review code that is not on GitHub. Stop and escalate.
+    if (fix && fix.applied.length > 0 && !fix.pushed) {
+      status = 'push-failed'
+      escalated = escalation(
+        pr,
+        `the round ${round} fixer applied ${fix.applied.length} change(s) but did not push them, so the PR branch does not have them`,
+        [`Unpushed fixer changes are in ${SCRATCH}/pr-${pr.n} only.`, `Fixer notes: ${fix.notes}`]
+      )
+      log(`#${pr.n} round ${round}: fixer applied changes but did not push — escalating`)
+      break
+    }
+
     // Stall detection: a round where the fixer made no change cannot converge
     // by repetition — after two in a row, hand the PR to the maintainer instead.
     const progressed = !!fix && (fix.applied.length > 0 || fix.pushed)
     stalledStreak = progressed ? 0 : stalledStreak + 1
     if (stalledStreak >= 2) {
       stalled = true
+      status = 'stalled'
       log(`#${pr.n}: no fixer progress for 2 consecutive rounds — escalating`)
     }
   }
@@ -272,8 +326,18 @@ async function reviewPR(pr) {
     .map((r, i) => `=== round ${i + 1} ===\nFINDINGS:\n${r.findingsBrief}\nFIXER: ${r.fixReport}`)
     .join('\n')
 
-  const final = await agent(
-    `You are ${MAINTAINER} — ${PROJECT}'s BDFL — giving the FINAL verdict on PR #${pr.n} ("${pr.title}" by ${pr.author}, branch ${pr.branch}) after ${rounds.length} panel round(s). Review loop status: ${clean ? 'converged clean' : stalled ? `STALLED — ${rounds.length} rounds, no fixer progress in the last 2` : `hit the ${ROUND_BACKSTOP}-round runaway backstop without converging`}.
+  // Name the lenses that kept the last two rounds from converging.
+  const lensNotes = rounds.map((r, i) => r.lensNote && `round ${i + 1} ${r.lensNote}`).slice(-2).filter(Boolean)
+  const statusDetail = clean
+    ? 'converged clean'
+    : status === 'push-failed'
+      ? `PUSH FAILED — round ${rounds.length} fixer applied changes but did not push them`
+      : stalled
+        ? `STALLED — ${rounds.length} rounds, no fixer progress in the last 2${lensNotes.length > 0 ? ` (${lensNotes.join('; ')})` : ''}`
+        : `hit the ${ROUND_BACKSTOP}-round runaway backstop without converging`
+
+  const final = escalated || await agent(
+    `You are ${MAINTAINER} — ${PROJECT}'s BDFL — giving the FINAL verdict on PR #${pr.n} ("${pr.title}" by ${pr.author}, branch ${pr.branch}) after ${rounds.length} panel round(s). Review loop status: ${statusDetail}.
 
 REPO: ${REPO}. Verify the CURRENT branch state yourself (gh pr diff ${pr.n}, gh pr checks ${pr.n}, worktree at ${SCRATCH}/pr-${pr.n} — run git -C ${SCRATCH}/pr-${pr.n} pull --ff-only first): do not take the panel's word for anything you can check in two minutes. Non-negotiables before APPROVE: CI checks green or only informational-recall failures; zero unresolved blocker findings; confidentiality clean; conventions met.
 
@@ -295,6 +359,8 @@ Boundaries: read-only — no posting, approving, merging, or pushing. Output onl
     title: pr.title,
     author: pr.author,
     branch: pr.branch,
+    status,
+    statusDetail,
     converged: clean,
     stalled,
     rounds: rounds.map((r, i) => ({ round: i + 1, findings: r.findingsBrief, fixer: r.fixReport })),

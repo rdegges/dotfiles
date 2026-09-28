@@ -372,3 +372,97 @@ for (const b of ['main', 'refs/heads/main']) {
     assert.ok(error, `${b} passed validation`)
   })
 }
+
+// --- Convergence rules ------------------------------------------------------
+
+// Drive one PR through the panel loop with scripted lens and fixer results.
+// lens(name, round) returns a lens result or null (a failed lens agent);
+// fixer(round) returns a fix report. Every other agent returns null.
+const lensResult = (lens, verdict, severities = []) => ({
+  lens,
+  verdict,
+  findings: severities.map((severity) => ({ severity, area: 'canary', issue: `canary ${severity} issue`, evidence: 'canary', suggested_fix: 'canary fix' })),
+  evidence_of_checks: 'canary',
+})
+const noFix = () => ({ applied: [], skipped: [], pushed: false, commits: [], notes: 'canary' })
+
+async function runPanel({ lens, fixer = noFix }) {
+  const calls = []
+  const agent = async (prompt, opts) => {
+    calls.push({ label: opts.label, prompt })
+    const m = /^(engineer|tester|redteam|security|fixer):#\d+:r(\d+)$/.exec(opts.label)
+    if (!m) return null
+    return m[1] === 'fixer' ? fixer(Number(m[2])) : lens(m[1], Number(m[2]))
+  }
+  const args = SCRIPTS[0].validArgs()
+  args.prs = [args.prs[0]]
+  const { results } = await load('pr-panel-loop.js')(agent, async (t) => Promise.all(t.map((f) => f())), async (xs, f) => Promise.all(xs.map(f)), () => {}, () => {}, args)
+  const labels = calls.map((c) => c.label)
+  return { calls, labels, out: results[0], finalPrompt: (calls.find((c) => c.label === 'bdfl-final:#101') || {}).prompt }
+}
+
+test('pr-panel-loop: a missing lens with no findings does not converge, skips the fixer, and is named', async () => {
+  const { labels, out, finalPrompt } = await runPanel({ lens: (l) => (l === 'engineer' ? null : lensResult(l, 'PASS')) })
+  assert.equal(out.converged, false)
+  assert.equal(out.status, 'stalled')
+  assert.ok(!labels.some((l) => l.startsWith('fixer:')), 'fixer must not run with nothing fixable')
+  assert.equal(out.rounds.length, 2)
+  assert.match(out.rounds[0].fixer, /missing lens\(es\): engineer/)
+  assert.match(out.statusDetail, /engineer/)
+  assert.match(finalPrompt, /STALLED.*missing lens\(es\): engineer/)
+})
+
+test('pr-panel-loop: a PASS that lists a major finding runs the fixer', async () => {
+  const { labels, out } = await runPanel({
+    lens: (l, r) => (r === 1 && l === 'tester' ? lensResult(l, 'PASS', ['major']) : lensResult(l, 'PASS')),
+    fixer: () => ({ applied: ['canary fix'], skipped: [], pushed: true, commits: ['c0ffee'], notes: 'canary' }),
+  })
+  assert.ok(labels.includes('fixer:#101:r1'), 'fixer must run on a major finding')
+  assert.equal(out.status, 'converged')
+  assert.equal(out.rounds.length, 2)
+})
+
+test('pr-panel-loop: a FAIL with only minor findings does not converge and skips the fixer', async () => {
+  const { labels, out } = await runPanel({ lens: (l) => (l === 'security' ? lensResult(l, 'FAIL', ['minor']) : lensResult(l, 'PASS')) })
+  assert.equal(out.converged, false)
+  assert.ok(!labels.some((l) => l.startsWith('fixer:')), 'fixer must not run on minors only')
+  assert.match(out.rounds[0].fixer, /FAIL with only minor findings: security/)
+})
+
+test('pr-panel-loop: two minor-only FAIL rounds end as stalled, not the maintainer-only exit', async () => {
+  const { labels, out, finalPrompt } = await runPanel({ lens: (l) => (l === 'security' ? lensResult(l, 'FAIL', ['minor']) : lensResult(l, 'PASS')) })
+  assert.equal(out.status, 'stalled')
+  assert.equal(out.stalled, true)
+  assert.equal(out.rounds.length, 2)
+  assert.ok(!labels.includes('engineer:#101:r3'), 'no third round after a 2-round stall')
+  for (const r of out.rounds) assert.doesNotMatch(r.fixer, /maintainer-only/)
+  assert.match(finalPrompt, /STALLED.*round 1 FAIL with only minor findings: security; round 2 FAIL with only minor findings: security/)
+})
+
+test('pr-panel-loop: applied-but-not-pushed stops as push-failed with a JS-built ESCALATE and no final agent', async () => {
+  const { labels, out } = await runPanel({
+    lens: (l) => lensResult(l, 'FAIL', ['blocker']),
+    fixer: () => ({ applied: ['canary fix'], skipped: [], pushed: false, commits: [], notes: 'canary push rejected' }),
+  })
+  assert.equal(out.status, 'push-failed')
+  assert.equal(out.rounds.length, 1)
+  assert.ok(!labels.some((l) => l.endsWith(':r2')), 'no round after a push failure')
+  assert.ok(!labels.includes('bdfl-final:#101'), 'no final-agent call after a push failure')
+  // Same shape as FINAL_SCHEMA: required keys only, right types, honest content.
+  assert.deepEqual(Object.keys(out.final).sort(), ['final', 'merge_notes', 'pr', 'residual_risks', 'summary_comment'])
+  assert.equal(out.final.pr, 101)
+  assert.equal(out.final.final, 'ESCALATE')
+  assert.match(out.final.summary_comment, /did not push/)
+  assert.match(out.final.merge_notes, /^Do not merge/)
+  assert.ok(Array.isArray(out.final.residual_risks) && out.final.residual_risks.every((x) => typeof x === 'string'))
+  assert.ok(out.final.residual_risks.some((x) => x.includes('/canary/scratch/pr-101')))
+})
+
+test('pr-panel-loop: an all-clean round 1 converges without the fixer', async () => {
+  const { labels, out, finalPrompt } = await runPanel({ lens: (l) => lensResult(l, 'PASS') })
+  assert.equal(out.status, 'converged')
+  assert.equal(out.converged, true)
+  assert.equal(out.rounds.length, 1)
+  assert.ok(!labels.some((l) => l.startsWith('fixer:')))
+  assert.match(finalPrompt, /Review loop status: converged clean\./)
+})
