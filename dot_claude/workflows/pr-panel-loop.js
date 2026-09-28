@@ -58,10 +58,14 @@ PRS.forEach((pr, i) => {
   seenN.add(pr.n)
   for (const k of ['title', 'author']) check(isText(pr[k]), `${at}.${k}`, 'must be a string with no control characters')
   const b = pr.branch
+  // Beyond the charset, mirror the `git check-ref-format --branch` rules the
+  // charset lets through; `HEAD` would resolve origin/HEAD, not the PR branch.
   check(
-    typeof b === 'string' && SAFE_BRANCH.test(b) && !b.includes('..') && !b.includes('//') && !b.endsWith('/') && !b.endsWith('.lock'),
+    typeof b === 'string' && SAFE_BRANCH.test(b) && !b.includes('..') && !b.includes('//') && !b.endsWith('/') &&
+      b !== 'HEAD' && !b.includes('@{') &&
+      b.split('/').every((c) => !c.startsWith('.') && !c.endsWith('.') && !c.endsWith('.lock')),
     `${at}.branch`,
-    'must match ^[A-Za-z0-9][A-Za-z0-9._/-]*$ with no "..", "//", trailing "/", or trailing ".lock"'
+    'must match ^[A-Za-z0-9][A-Za-z0-9._/-]*$ and be a valid git branch: not "HEAD", no "..", "//", "@{", or trailing "/", and no path component that starts with "." or ends with "." or ".lock"'
   )
   check(isSafePath(pr.guidanceFile), `${at}.guidanceFile`, 'must be an absolute path of [A-Za-z0-9._/-] only (no spaces)')
   const deps = pr.merge_dependencies

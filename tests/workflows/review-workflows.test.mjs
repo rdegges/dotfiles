@@ -117,6 +117,11 @@ const REJECT = [
   { field: 'branch', name: 'branch with //', mutate: setPr('branch', 'a//b'), error: P0('branch') },
   { field: 'branch', name: 'branch with a trailing /', mutate: setPr('branch', 'a/'), error: P0('branch') },
   { field: 'branch', name: 'branch with a trailing .lock', mutate: setPr('branch', 'a.lock'), error: P0('branch') },
+  { field: 'branch', name: 'branch HEAD', mutate: setPr('branch', 'HEAD'), error: P0('branch') },
+  { field: 'branch', name: 'branch with a component starting with .', mutate: setPr('branch', 'topic/.hidden'), error: P0('branch') },
+  { field: 'branch', name: 'branch ending with .', mutate: setPr('branch', 'topic.'), error: P0('branch') },
+  { field: 'branch', name: 'branch with a component ending with .lock', mutate: setPr('branch', 'topic.lock/child'), error: P0('branch') },
+  { field: 'branch', name: 'branch with @{', mutate: setPr('branch', 'a@{b'), error: P0('branch') },
   { field: 'branch', name: 'branch missing', mutate: delPr('branch'), error: P0('branch') },
   { field: 'branch', name: 'branch not a string', mutate: setPr('branch', 7), error: P0('branch') },
   // n
@@ -137,7 +142,9 @@ const REJECT = [
   { field: 'author', name: 'author with a control character', mutate: setPr('author', 'canary\u001b[31m'), error: P0('author') },
   { field: 'note', name: 'gate PR with no note', mutate: delPr('note'), error: P0('note') },
   { field: 'note', name: 'note not a string', mutate: setPr('note', ['canary']), error: P0('note') },
-  { field: 'note', name: 'note with a control character', mutate: setPr('note', 'canary\u0000'), error: P0('note') },
+  { field: 'note', name: 'note with \\r', mutate: setPr('note', 'canary\r\nnote'), error: P0('note') },
+  { field: 'note', name: 'note with \\0', mutate: setPr('note', 'canary\0'), error: P0('note') },
+  { field: 'note', name: 'note with an escape character', mutate: setPr('note', 'canary\u001b[31m'), error: P0('note') },
   // paths
   { field: 'repo', name: 'repo relative', mutate: setArg('repo', 'canary/repo'), error: /args\.repo\b/ },
   { field: 'repo', name: 'repo with a space', mutate: setArg('repo', '/canary/My Repo'), error: /args\.repo\b/ },
@@ -164,6 +171,7 @@ const REJECT = [
 const ACCEPT = [
   { field: 'n', name: 'canary baseline', mutate: () => {}, inPrompt: 'PR #101' },
   { field: 'branch', name: 'valid branch reaches the first prompt', mutate: setPr('branch', 'feature/Canary-1.2_x'), inPrompt: 'feature/Canary-1.2_x' },
+  { field: 'note', name: 'multi-line note with tabs', mutate: setPr('note', '- canary sibling\n\t- canary detail'), inPrompt: '- canary sibling\n\t- canary detail' },
   { field: 'merge_dependencies', name: 'merge_dependencies omitted', mutate: delPr('merge_dependencies'), inPrompt: 'canary/branch-1' },
   { field: 'n', name: 'args passed as a JSON string', mutate: () => {}, asString: true, inPrompt: 'PR #101' },
 ]

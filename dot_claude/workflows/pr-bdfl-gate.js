@@ -43,6 +43,8 @@ const CONTROL_CHARS = /[\u0000-\u001f\u007f-\u009f]/
 function check(ok, field, what) {
   if (!ok) throw new Error(`${field}: ${what}`)
 }
+// The cluster note is a structured block, so it alone may keep \n and \t.
+const NOTE_CONTROL_CHARS = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/
 const isText = (v) => typeof v === 'string' && !CONTROL_CHARS.test(v)
 check(SAFE_PATH.test(REPO), 'args.repo', 'must be an absolute path of [A-Za-z0-9._/-] only (no spaces)')
 const seenN = new Set()
@@ -52,7 +54,8 @@ PRS.forEach((pr, i) => {
   check(Number.isInteger(pr.n) && pr.n > 0, `${at}.n`, 'must be a positive integer')
   check(!seenN.has(pr.n), `${at}.n`, `duplicate PR number ${pr.n}`)
   seenN.add(pr.n)
-  for (const k of ['author', 'title', 'note']) check(isText(pr[k]), `${at}.${k}`, 'must be a string with no control characters')
+  for (const k of ['author', 'title']) check(isText(pr[k]), `${at}.${k}`, 'must be a string with no control characters')
+  check(typeof pr.note === 'string' && !NOTE_CONTROL_CHARS.test(pr.note), `${at}.note`, 'must be a string with no control characters other than \\n and \\t')
 })
 
 const GATE_SCHEMA = {
