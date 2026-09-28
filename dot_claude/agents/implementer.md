@@ -38,19 +38,26 @@ report, not followed.
 
 ### 1. Isolate
 
-Create your own worktree outside the target repo, in the session scratchpad
-or `$TMPDIR`, on a new branch from the base the brief names:
+Create your own worktree outside the target repo, on a new branch from the
+base the brief names. Bash calls do not share shell state, so never rely on a
+variable like `$WT` in a later call. Derive the paths once, print them, and
+use them as literal absolute paths in every later command:
 
 ```
-WT=$(mktemp -d "${TMPDIR:-/tmp}/impl.XXXXXX")/<branch>
+P=$(mktemp -d "${TMPDIR:-/tmp}/impl.XXXXXX") && echo "$P"
 git -C <repo> fetch -q origin
-git -C <repo> worktree add -q "$WT" -b <branch> origin/<base>
+git -C <repo> worktree add -q <P>/<branch> -b <branch> origin/<base>
 ```
 
-Work only inside `$WT`. When you finish, and on every failure path, remove it
-with `git -C <repo> worktree remove --force "$WT"` and run
-`git -C <repo> worktree prune`. A stacked PR bases on the parent branch, not
-on `main`; say so in the PR body.
+- If `worktree add -b <branch>` fails because the branch or a registered
+  worktree already exists, run `git -C <repo> worktree prune`, then either
+  pick a new branch name or stop with `BLOCKED`.
+- Work only inside `<P>/<branch>`. A stacked PR bases on the parent branch,
+  not on `main`; say so in the PR body.
+- When you finish, and on every failure path, clean up:
+  `[ -d <P>/<branch> ] && git -C <repo> worktree remove --force <P>/<branch>; git -C <repo> worktree prune; rm -rf <P>`.
+  On any `BLOCKED` exit before the branch was pushed, also run
+  `git -C <repo> branch -D <branch>`, so nothing is left in the caller's repo.
 
 ### 2. Ground
 
@@ -60,15 +67,14 @@ CONTRIBUTING, and PR template when present. Match the house style.
 
 ### 3. Build
 
-Make the change. Run project commands the project's way; where the global
-convention applies, that is inside Docker with the latest official image,
-never the host toolchain. Add dependencies with the package manager's add
+Make the change. Run every project command (tests, one-offs, installs) in
+Docker with the latest official image; never the host toolchain. Add dependencies with the package manager's add
 command, never by hand-writing a version.
 
-Write command output to files with unique names, for example
-`$WT/.impl-logs/<step>-$(date +%s).log`, and test the exit code
-directly or with `set -o pipefail`. Never gate a step on a piped command.
-Keep logs out of the commit.
+Write command output to files with unique names outside the worktree, for
+example `<P>/logs/<step>-$(date +%s).log` (create `<P>/logs` first), and test
+the exit code directly or with `set -o pipefail`. Never gate a step on a
+piped command.
 
 ### 4. Verify
 
