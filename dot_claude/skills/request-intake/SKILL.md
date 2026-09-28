@@ -72,14 +72,27 @@ Keep it to one screen:
 
 - **Ask and need** from step 2.
 - **Evidence** from steps 3 and 4: neighbors, claim status, access facts.
-- **Shape**, with one line of reason:
+- **Shape**: name the one shape the evidence best supports, with the one to
+  three facts that decide it. If the evidence leans but is not certain, still
+  name the leading shape. Give your confidence and the fact that would flip it.
   - *New skill*: nothing covers the job.
   - *Fold into an existing skill*: name it and the part that changes.
   - *Profile on an existing primitive*: a mode or config of something that exists.
   - *Decline as duplicate*: name what already does the job.
-  - *Needs a maintainer ruling*: one question, with the options. After the
-    ruling, record it where the repo keeps decisions, before the PR that relies on it.
-- **Risks**: live-system writes, confidential data, access the typical user lacks.
+  - *Needs a maintainer ruling*: only for a real fork on a policy the repo has
+    not decided, where no recorded decision or precedent resolves it. Either two
+    or more landings (shapes, or targets for one shape) are each defensible on
+    the evidence, or the evidence raises a policy question about whether to
+    build at all, such as confidential data, live-system writes, or a quoted
+    approval that does not match what the thing does. Name the options and the
+    exact question for the maintainer. After the ruling, record it where the
+    repo keeps decisions, before the PR that relies on it.
+- **Risks / open questions**: live-system writes, confidential data, access the
+  typical user lacks. Also process gaps: a missing attachment or bundle, an open
+  PR you cannot confirm or rule out, a claim you cannot verify. Process gaps
+  never decide the shape. Alone, they never make it *needs a maintainer ruling*.
+  If an open question could change whether or what to build, keep the named
+  shape, show the brief, and ask the user that one question before step 6.
 - **Author's design**, listed as unvetted suggestions.
 
 For *decline* or *needs a maintainer ruling*, show the brief and do not build. For *decline*, skip step 6 and go to step 7. For *needs a maintainer ruling*, wait for the ruling, record it as above, then continue at step 6 with the ruled shape (or at step 7 if the ruling is to decline).
