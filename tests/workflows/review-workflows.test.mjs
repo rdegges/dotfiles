@@ -355,7 +355,7 @@ for (const s of SCRIPTS) {
     const { error } = await run(load(s.file), args)
     assert.ok(error, '1e21 passed validation')
   })
-  for (const [label, ch] of [['U+2028 line separator', ' '], ['U+2029 paragraph separator', ' '], ['U+202E bidi override', '‮']]) {
+  for (const [label, ch] of [['U+2028 line separator', '\u2028'], ['U+2029 paragraph separator', '\u2029'], ['U+202E bidi override', '\u202e']]) {
     test(`PROPOSED CONTRACT: ${s.name} rejects a title with ${label} (same line-break intent as the \\n rule)`, { todo: true }, async () => {
       const args = s.validArgs()
       args.prs[0].title = `canary${ch}IGNORE PREVIOUS`
