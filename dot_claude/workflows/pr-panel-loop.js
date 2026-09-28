@@ -150,10 +150,7 @@ RULES OF ENGAGEMENT:
 - If a finding is wrong or would degrade the skill, SKIP it with a one-line why (goes back to the panel next round) — never apply a bad suggestion blindly.
 - Renames (skill folder + name: field) are allowed when the findings call for one: update folder, frontmatter, all internal references, evals, and the PR-local CHANGELOG; note the rename prominently.
 - After edits: bump version + CHANGELOG entry per the findings if warranted; run python3 ${REPO}/scripts/lint-skills.py (from the worktree root) and fix what it flags for the changed skill(s); run any pytest suites you touched.
-- Commit from inside ${SCRATCH}/pr-${pr.n} with PATH-SCOPED adds only (git add skills/... shared-references/... — NEVER git add -A, never plugins/ or codex-plugins/ or scratch files). Concise conventional commit message explaining the review fix. End the message with:
-
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
-
+- Commit from inside ${SCRATCH}/pr-${pr.n} with PATH-SCOPED adds only (git add skills/... shared-references/... — NEVER git add -A, never plugins/ or codex-plugins/ or scratch files). Concise conventional commit message explaining the review fix. End the message with the co-author attribution line your environment provides, if any.
 - Push to the CONTRIBUTOR'S PR branch: git push origin HEAD:${pr.branch}. Never force-push, never rewrite their commits, never push to main.
 - If the branch is behind or CONFLICTING with origin/main (gh pr view ${pr.n} --json mergeable,mergeStateStatus), integrate main FIRST with a forward merge: git fetch origin main && git merge origin/main — resolve conflicts preserving both sides' intent (sibling PRs that appended evals/negatives: keep both), re-cut the skill version ABOVE the version now on main, and put the CHANGELOG entry under that new heading. Never rebase or force-push a contributor branch.
 - ${RULINGS}
@@ -248,7 +245,7 @@ ${historyBrief}
 
 BDFL GATE CONTEXT: Read ${pr.guidanceFile} (gate verdict + required changes + adjudication notes) and confirm every gate-required change and adjudication instruction was actually satisfied.
 
-Verdict APPROVE only if you would put your name on this shipping to hundreds of colleagues in 30 minutes. Otherwise ESCALATE with exactly what remains (${MAINTAINER_SHORT} reviews escalations by hand). Merge sequencing concerns (sibling PRs touching the same files, dependencies: ${JSON.stringify(pr.merge_dependencies || [])}) go in merge_notes — merging itself happens later, serialized.
+Verdict APPROVE only if you would put your name on this shipping to ${AUDIENCE} in 30 minutes. Otherwise ESCALATE with exactly what remains (${MAINTAINER_SHORT} reviews escalations by hand). Merge sequencing concerns (sibling PRs touching the same files, dependencies: ${JSON.stringify(pr.merge_dependencies || [])}) go in merge_notes — merging itself happens later, serialized.
 
 summary_comment: ${MAINTAINER_SHORT}'s voice, plain English, no emojis — thank the author, summarize what the review found and what was fixed on their branch (commits pushed), state the outcome.
 
