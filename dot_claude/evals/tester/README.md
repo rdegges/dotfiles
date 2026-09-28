@@ -98,6 +98,9 @@ representation.
 
 ## Known limits
 
-- Visual seed detection depends on the Claude in Chrome extension (or the
-  Docker Playwright fallback) being reachable from the tester.
-- Both fixtures assume node is available on the host; neither uses Docker.
+- Visual seed detection needs the Claude in Chrome extension reachable from
+  the tester for flow driving, and Docker on the host for the Playwright
+  viewport/theme captures.
+- Both fixtures assume node is available on the host; the projects
+  themselves have no Docker convention (the Playwright container is the
+  tester's, not the fixture's).
