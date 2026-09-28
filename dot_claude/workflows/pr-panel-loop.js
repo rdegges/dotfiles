@@ -12,7 +12,7 @@ export const meta = {
 //   repo, project, maintainer, maintainerShort, audience, rules, rulings }
 // No fixed round limit — loop until clean. Exit only on convergence, a stall
 // (two consecutive rounds with zero fixer progress => escalate to the
-// maintainer), a fix that was applied but not pushed, or the runaway backstop below.
+// maintainer), a fix that was made but not pushed, or the runaway backstop below.
 const ROUND_BACKSTOP = 12
 const ARGS = typeof args === 'string' ? JSON.parse(args) : (args || {})
 const PRS = ARGS.prs
@@ -300,11 +300,11 @@ async function reviewPR(pr) {
 
     // Applied but not pushed: the PR branch lacks the fixes, so another round
     // would review code that is not on GitHub. Stop and escalate.
-    if (fix && fix.applied.length > 0 && !fix.pushed) {
+    if (fix && (fix.applied.length > 0 || fix.commits.length > 0) && !fix.pushed) {
       status = 'push-failed'
       escalated = escalation(
         pr,
-        `the round ${round} fixer applied ${fix.applied.length} change(s) but did not push them, so the PR branch does not have them`,
+        `the round ${round} fixer made changes (${fix.applied.length} applied, ${fix.commits.length} commit(s)) but did not push them, so the PR branch does not have them`,
         [`Unpushed fixer changes are in ${SCRATCH}/pr-${pr.n} only.`, `Fixer notes: ${fix.notes}`]
       )
       log(`#${pr.n} round ${round}: fixer applied changes but did not push — escalating`)
@@ -331,10 +331,12 @@ async function reviewPR(pr) {
   const statusDetail = clean
     ? 'converged clean'
     : status === 'push-failed'
-      ? `PUSH FAILED — round ${rounds.length} fixer applied changes but did not push them`
-      : stalled
-        ? `STALLED — ${rounds.length} rounds, no fixer progress in the last 2${lensNotes.length > 0 ? ` (${lensNotes.join('; ')})` : ''}`
-        : `hit the ${ROUND_BACKSTOP}-round runaway backstop without converging`
+      ? `PUSH FAILED — round ${rounds.length} fixer made changes but did not push them`
+      : status === 'maintainer-only'
+        ? `STOPPED EARLY — round ${rounds.length}: only maintainer-only blocker/major findings remain`
+        : stalled
+          ? `STALLED — ${rounds.length} rounds, no fixer progress in the last 2${lensNotes.length > 0 ? ` (${lensNotes.join('; ')})` : ''}`
+          : `hit the ${ROUND_BACKSTOP}-round runaway backstop without converging`
 
   const final = escalated || await agent(
     `You are ${MAINTAINER} — ${PROJECT}'s BDFL — giving the FINAL verdict on PR #${pr.n} ("${pr.title}" by ${pr.author}, branch ${pr.branch}) after ${rounds.length} panel round(s). Review loop status: ${statusDetail}.

@@ -631,7 +631,7 @@ test('pr-panel-loop: a maintainer-only exit after fixer progress does not tell t
   assert.doesNotMatch(finalPrompt, /no fixer progress in the last 2/)
 })
 
-test('PROPOSED CONTRACT: pr-panel-loop treats commits without a push as push-failed even when applied is empty', { todo: true }, async () => {
+test('pr-panel-loop treats commits without a push as push-failed even when applied is empty', async () => {
   const { labels, out } = await runPanel({
     lens: (l) => lensResult(l, 'FAIL', ['blocker']),
     fixer: () => ({ applied: [], skipped: [], pushed: false, commits: ['c0ffee'], notes: 'canary committed, push rejected' }),
