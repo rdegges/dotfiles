@@ -1,7 +1,7 @@
 export const meta = {
   name: 'pr-bdfl-gate',
   description: 'Phase A: cluster-aware BDFL direction gate over every open non-maintainer PR of a skills registry. The project-specific inputs (repo, project, maintainer persona, audience, institutional context) are required args: the orchestrator reads them from the maintainer context note and passes them in.',
-  whenToUse: 'Before the panel loop: pass every open non-maintainer PR as args.prs = [{ n, author, title, note }], plus args.today, and args.repo, args.project, args.maintainer, args.maintainerShort, args.audience, args.context from the maintainer context note. Then pass the ADVANCE verdicts to pr-panel-loop.',
+  whenToUse: 'Before the panel loop: pass every open non-maintainer PR as args.prs = [{ n, author, title, note }], plus args.today, and args.repo, args.project, args.maintainer, args.maintainerShort, args.audience, args.context from the maintainer context note (write the date in args.context as {{today}}; the script fills it from args.today). Then pass the ADVANCE verdicts to pr-panel-loop.',
   phases: [
     { title: 'Gate', detail: 'one BDFL judgment per PR, cluster-aware' },
   ],
@@ -29,8 +29,11 @@ const PROJECT = required('project', 'project display name')
 const MAINTAINER = required('maintainer', 'full name of the maintainer persona')
 const MAINTAINER_SHORT = required('maintainerShort', 'short name used in "in <name>\'s voice"')
 const AUDIENCE = required('audience', 'who a merge ships to, completing "It ships to …"')
-// {{today}} in the context text is replaced with args.today.
-const CONTEXT = required('context', 'the INSTITUTIONAL CONTEXT block: conventions and dated maintainer rulings').trim().split('{{today}}').join(ARGS.today)
+// {{today}} in the context text is replaced with args.today. A ${...}
+// placeholder would reach the agent unfilled, so reject it instead.
+const RAW_CONTEXT = required('context', 'the INSTITUTIONAL CONTEXT block: conventions and dated maintainer rulings')
+if (RAW_CONTEXT.includes('${')) throw new Error('pass args.context with {{today}} as the date placeholder, not ${...} template syntax (from the maintainer context note)')
+const CONTEXT = RAW_CONTEXT.trim().split('{{today}}').join(ARGS.today)
 
 const GATE_SCHEMA = {
   type: 'object',
