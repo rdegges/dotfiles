@@ -21,7 +21,11 @@ description: "Load when building or changing a gate, CI check, eval, prompt, or 
   (reference file, live API, packet capture), not memory and not a mock. For a new
   third-party API client, run at least one live read-only smoke call per endpoint class
   before trusting the mock suite. Record a cause as fact only after a cheap disproof
-  attempt; until then it is an observation.
+  attempt; until then it is an observation. The same holds for a library's contract
+  and a repo's own test gates: before building on two functions agreeing (validate
+  vs. match, parse vs. serialize), find the doc or source line that says so or probe
+  the difference; before adding fixtures to a test corpus, read the suite's gates on
+  that corpus.
 
 ### Gates Fail Closed
 
