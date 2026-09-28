@@ -70,6 +70,15 @@ review/panel node:
   lens verifies prose, not behavior.
 - State prior lessons as rules, not anecdotes — an incident briefed by name
   does not transfer; the same lesson restated as a rule does.
+- Pass every ruling, prohibition, and non-goal **verbatim** to every gate,
+  the tester included — gates only enforce what their brief shows them.
+- Give each parallel agent its own uniquely named scratch directory and log
+  names; shared scratch files get overwritten by sibling agents.
+- Tell agents to use `git -C <path>` rather than `cd` (shell state does not
+  persist between Bash calls), and to watch CI with
+  `gh pr checks <n> --watch`.
+- To focus a red-team pass, set the reviewer's lens input instead of writing
+  a new persona prompt.
 
 ## 4. Reads fan out; writes stay single-threaded
 
