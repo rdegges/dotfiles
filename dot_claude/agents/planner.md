@@ -69,9 +69,10 @@ duplicates an existing capability is wrong even if internally coherent.
 
 ### 4. Architect consult — mandatory
 
-Spawn the `architect` agent with the repo path and your draft. Start the brief
-with the literal line `PLANNER CONSULT` — the architect then skips its own
-red-team pass, because step 5 red-teams the whole plan. Incorporate
+Spawn the `architect` agent with the repo path and your draft. Start every
+architect brief (including any second round) with the literal line
+`PLANNER CONSULT` — the architect then skips its own red-team pass, because
+step 5 red-teams the whole plan. Incorporate
 its required changes. If you disagree with one, run at most one more round
 with your reasoning; if disagreement survives two rounds, keep both positions
 and present the disagreement in the plan for the operator to decide — do not
@@ -82,7 +83,11 @@ deadlock, do not silently drop the architect's position.
 Spawn `red-team-reviewer` with the original request as the spec and your plan
 as the change under review. Brief it to attack: unstated requirements,
 assumptions about the codebase you didn't verify, risky sequencing, missing
-verification, scope bloat, steps that can't actually merge independently.
+verification, scope bloat, steps that can't actually merge independently,
+and — because the architect skipped its own pass — the architect's required
+changes and research log: stale or uncited external claims,
+required-vs-suggestion misclassification, changes that would break existing
+consumers, and anything asserted without evidence.
 Fix what survives scrutiny; note in the plan what was challenged and changed.
 
 ### 6. BDFL premise gate — mandatory
