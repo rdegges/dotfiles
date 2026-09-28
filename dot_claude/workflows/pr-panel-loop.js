@@ -1,7 +1,7 @@
 export const meta = {
   name: 'pr-panel-loop',
-  description: 'Phase B: per-PR evaluate-optimize review loop — 4 parallel lenses, fixer applies blockers on the PR branch, re-review until clean (exits early on a 2-round fixer stall or when only maintainer-only findings remain; 12-round runaway backstop), then a BDFL final verdict. The project-specific inputs (repo, project, maintainer persona, audience, rules, rulings) are required args: the orchestrator reads them from the maintainer context note and passes them in.',
-  whenToUse: 'After the pr-bdfl-gate phase: pass the ADVANCE PRs as args.prs (each with a guidanceFile holding its gate verdict and panel_guidance), plus args.scratch, and args.repo, args.project, args.maintainer, args.maintainerShort, args.audience, args.rules, args.rulings from the maintainer context note. args.repo, args.scratch, and each guidanceFile must be absolute paths of letters, digits, and . _ / - only: paths with spaces (e.g. vault paths) are rejected.',
+  description: 'Phase B: per-PR evaluate-optimize review loop — 4 parallel lenses, fixer applies blockers on the PR branch, re-review until clean (exits early on a 2-round fixer stall or when only maintainer-only findings remain; 12-round runaway backstop), then a BDFL final verdict. Escalates without a final verdict when worktree setup fails, when a fixer push does not land (push-failed), or when the PR head moves away from the reviewed head (head-mismatch); fork PRs escalate for manual handling. The project-specific inputs (repo, project, maintainer persona, audience, rules, rulings) are required args: the orchestrator reads them from the maintainer context note and passes them in.',
+  whenToUse: 'After the pr-bdfl-gate phase: pass the ADVANCE PRs as args.prs (each with a guidanceFile holding its gate verdict and panel_guidance), plus args.scratch (a fresh, empty directory for each run: setup fails if a PR worktree path already exists), and args.repo, args.project, args.maintainer, args.maintainerShort, args.audience, args.rules, args.rulings from the maintainer context note. args.repo, args.scratch, and each guidanceFile must be absolute paths of letters, digits, and . _ / - only: paths with spaces (e.g. vault paths) are rejected.',
   phases: [
     { title: 'Panel', detail: 'engineer + tester + red-team + security lenses per PR, looped with a fixer' },
     { title: 'Final', detail: 'BDFL final verdict per PR' },
@@ -12,7 +12,8 @@ export const meta = {
 //   repo, project, maintainer, maintainerShort, audience, rules, rulings }
 // No fixed round limit — loop until clean. Exit only on convergence, a stall
 // (two consecutive rounds with zero fixer progress => escalate to the
-// maintainer), a fix that was made but not pushed, or the runaway backstop below.
+// maintainer), a fix that was made but not pushed, a PR head that differs from
+// the head under review, or the runaway backstop below.
 const ROUND_BACKSTOP = 12
 const ARGS = typeof args === 'string' ? JSON.parse(args) : (args || {})
 const PRS = ARGS.prs
@@ -72,6 +73,33 @@ PRS.forEach((pr, i) => {
   check(deps === undefined || (Array.isArray(deps) && deps.every(Number.isInteger)), `${at}.merge_dependencies`, 'must be an array of integers when present')
 })
 
+// Head SHAs are agent-reported, so these checks catch drift and mistakes (a
+// push landing mid-review, a fixer push that did not land), not a hostile agent.
+// The input validation above is the security boundary.
+const SHA_RE = /^[0-9a-fA-F]{40}$/
+const isSha = (v) => typeof v === 'string' && SHA_RE.test(v)
+
+const SETUP_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['ok', 'error', 'head_ref', 'head_sha', 'pr_head_sha', 'cross_repository'],
+  properties: {
+    ok: { type: 'boolean' },
+    error: { type: 'string', description: 'the failing command and its error text verbatim; empty when ok' },
+    head_ref: { type: 'string', description: 'headRefName from gh pr view' },
+    head_sha: { type: 'string', description: 'git rev-parse HEAD inside the new worktree' },
+    pr_head_sha: { type: 'string', description: 'headRefOid from gh pr view' },
+    cross_repository: { type: 'boolean', description: 'isCrossRepository from gh pr view' },
+  },
+}
+
+const HEAD_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['pr_head_sha'],
+  properties: { pr_head_sha: { type: 'string', description: 'headRefOid from gh pr view' } },
+}
+
 const FINDINGS_SCHEMA = {
   type: 'object',
   additionalProperties: false,
@@ -100,12 +128,14 @@ const FINDINGS_SCHEMA = {
 const FIX_SCHEMA = {
   type: 'object',
   additionalProperties: false,
-  required: ['applied', 'skipped', 'pushed', 'commits', 'notes'],
+  required: ['applied', 'skipped', 'pushed', 'commits', 'local_head', 'remote_head', 'notes'],
   properties: {
     applied: { type: 'array', items: { type: 'string' } },
     skipped: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['finding', 'why'], properties: { finding: { type: 'string' }, why: { type: 'string' } } } },
     pushed: { type: 'boolean' },
     commits: { type: 'array', items: { type: 'string' } },
+    local_head: { type: 'string', description: 'git rev-parse HEAD in the worktree after your last step; empty if the worktree is missing' },
+    remote_head: { type: 'string', description: 'the SHA from git ls-remote origin for the PR branch after your last step' },
     notes: { type: 'string' },
   },
 }
@@ -113,9 +143,10 @@ const FIX_SCHEMA = {
 const FINAL_SCHEMA = {
   type: 'object',
   additionalProperties: false,
-  required: ['pr', 'final', 'summary_comment', 'merge_notes', 'residual_risks'],
+  required: ['pr', 'head_sha', 'final', 'summary_comment', 'merge_notes', 'residual_risks'],
   properties: {
     pr: { type: 'number' },
+    head_sha: { type: 'string', description: 'headRefOid from gh pr view at the time of your verdict' },
     final: { type: 'string', enum: ['APPROVE', 'ESCALATE'] },
     summary_comment: { type: 'string', description: `PR comment in ${MAINTAINER_SHORT} voice summarizing the review + what was fixed; posted at approval time` },
     merge_notes: { type: 'string', description: 'anything the merge step must know: sequencing, conflicts expected, CI to re-verify' },
@@ -173,7 +204,7 @@ const CHARTERS = {
 function fixerPrompt(pr, round, findingsBrief) {
   return `You are the fixer for ${PROJECT} PR #${pr.n} — "${pr.title}" by ${pr.author}, branch ${pr.branch}, review round ${round}.
 
-A working checkout of the PR branch exists at ${SCRATCH}/pr-${pr.n} (git worktree on branch pr-${pr.n}-review tracking origin/${pr.branch} — verify with git status; if the worktree is missing, create it: cd ${REPO} && git fetch origin ${pr.branch} && git worktree add ${SCRATCH}/pr-${pr.n} -b pr-${pr.n}-review origin/${pr.branch}).
+A working checkout of the PR head exists at ${SCRATCH}/pr-${pr.n} (git worktree on a detached HEAD at the last reviewed head of origin/${pr.branch} — verify with git status). If the worktree is missing, do not create it: change nothing, return pushed false with local_head "" and remote_head "", and say so in notes.
 
 ${RULES}
 
@@ -188,13 +219,15 @@ RULES OF ENGAGEMENT:
 - Renames (skill folder + name: field) are allowed when the findings call for one: update folder, frontmatter, all internal references, evals, and the PR-local CHANGELOG; note the rename prominently.
 - After edits: bump version + CHANGELOG entry per the findings if warranted; run python3 ${REPO}/scripts/lint-skills.py (from the worktree root) and fix what it flags for the changed skill(s); run any pytest suites you touched.
 - Commit from inside ${SCRATCH}/pr-${pr.n} with PATH-SCOPED adds only (git add skills/... shared-references/... — NEVER git add -A, never plugins/ or codex-plugins/ or scratch files). Concise conventional commit message explaining the review fix. End the message with the co-author attribution line your environment provides, if any.
-- Push to the CONTRIBUTOR'S PR branch: git push origin HEAD:${pr.branch}. Never force-push, never rewrite their commits, never push to main.
+- Push to the CONTRIBUTOR'S PR branch: git push origin HEAD:refs/heads/${pr.branch}. Never force-push, never rewrite their commits, never push to main.
 - If the branch is behind or CONFLICTING with origin/main (gh pr view ${pr.n} --json mergeable,mergeStateStatus), integrate main FIRST with a forward merge: git fetch origin main && git merge origin/main — resolve conflicts preserving both sides' intent (sibling PRs that appended evals/negatives: keep both), re-cut the skill version ABOVE the version now on main, and put the CHANGELOG entry under that new heading. Never rebase or force-push a contributor branch.
 - ${RULINGS}
 - The version/CHANGELOG gate is live: every shipped-file change bumps frontmatter version with a matching '## [x.y.z] - <date>' CHANGELOG heading. Backticked file citations in SKILL.md/references must resolve to real files in the repo; bare skill names must be live skills.
 - Do not post PR comments; do not merge; do not touch other PRs' branches or worktrees.
 
-Return the StructuredOutput JSON: what you applied, what you skipped and why, whether you pushed, commit SHAs, and anything the next review round must verify.`
+Before you return, record both heads, pushed or not: local_head = git -C ${SCRATCH}/pr-${pr.n} rev-parse HEAD; remote_head = the SHA from git -C ${SCRATCH}/pr-${pr.n} ls-remote origin refs/heads/${pr.branch}.
+
+Return the StructuredOutput JSON: what you applied, what you skipped and why, whether you pushed, commit SHAs, local_head, remote_head, and anything the next review round must verify.`
 }
 
 function summarizeFindings(reviews) {
@@ -207,9 +240,11 @@ function summarizeFindings(reviews) {
 // An ESCALATE verdict in FINAL_SCHEMA's shape, built here instead of by the
 // final agent: on these exits the PR branch is not the code the panel
 // reviewed, so an agent verdict would judge the wrong head.
-function escalation(pr, reason, risks) {
+// head is the last verified head, or '' when setup never verified one.
+function escalation(pr, reason, risks, head) {
   return {
     pr: pr.n,
+    head_sha: head || '',
     final: 'ESCALATE',
     summary_comment: `Thanks for this PR. The review loop stopped before a final verdict: ${reason}. ${MAINTAINER_SHORT} will review it by hand.`,
     merge_notes: `Do not merge: ${reason}. Re-run the panel on the current branch head first.`,
@@ -217,11 +252,21 @@ function escalation(pr, reason, risks) {
   }
 }
 
+// Why setup's report cannot start a review, or null when it can.
+function setupProblem(pr, s) {
+  if (!s || s.ok !== true) return 'worktree setup failed'
+  if (s.cross_repository !== false) return 'the PR comes from a fork (cross-repository), which this loop does not review or push to'
+  if (!isSha(s.head_sha) || s.head_sha !== s.pr_head_sha) return 'the checked-out head does not match the PR head on GitHub'
+  if (s.head_ref !== pr.branch) return `the PR head branch on GitHub is not ${pr.branch}`
+  return null
+}
+
 async function reviewPR(pr) {
-  // one-time worktree setup for this PR (fixer/tester share it; panel reads it)
-  await agent(
-    `Set up a git worktree for ${PROJECT} PR #${pr.n}. Run exactly: cd ${REPO} && git fetch origin ${pr.branch} && (git worktree add ${SCRATCH}/pr-${pr.n} -b pr-${pr.n}-review origin/${pr.branch} || echo exists). Confirm ${SCRATCH}/pr-${pr.n}/skills exists, then STOP and return "ok" (or the error text verbatim). Do nothing else.`,
-    { label: `worktree:#${pr.n}`, phase: 'Panel', effort: 'low' }
+  // one-time worktree setup for this PR (fixer/tester share it; panel reads it).
+  // Detached, so no local branch collides on a rerun; an existing path fails.
+  const setup = await agent(
+    `Set up a git worktree for ${PROJECT} PR #${pr.n}. Run exactly: cd ${REPO} && test ! -e ${SCRATCH}/pr-${pr.n} && git fetch origin ${pr.branch} && git worktree add --detach ${SCRATCH}/pr-${pr.n} origin/${pr.branch} && test -d ${SCRATCH}/pr-${pr.n}/skills && git -C ${SCRATCH}/pr-${pr.n} rev-parse HEAD && gh pr view ${pr.n} --json headRefName,headRefOid,isCrossRepository. If any command fails, STOP and return ok false with the failing command and its error text verbatim in error. Never remove or reuse an existing path. Otherwise return ok true, error "", head_sha = the rev-parse output, head_ref = headRefName, pr_head_sha = headRefOid, cross_repository = isCrossRepository. Do nothing else.`,
+    { schema: SETUP_SCHEMA, label: `worktree:#${pr.n}`, phase: 'Panel', effort: 'low' }
   )
 
   const rounds = []
@@ -230,10 +275,44 @@ async function reviewPR(pr) {
   let stalled = false
   let status = 'backstop'
   let escalated = null
-  for (let round = 1; round <= ROUND_BACKSTOP && !clean && !stalled; round++) {
+  let stopDetail = ''
+  // expectedHead: the head the PR branch must be at now. reviewedHead: the head
+  // the last lens round reviewed; the final verdict must see the same one.
+  let expectedHead = null
+  let reviewedHead = null
+  const stop = (s, detail, reason, risks) => {
+    status = s
+    stopDetail = detail
+    escalated = escalation(pr, reason, risks, expectedHead)
+    log(`#${pr.n}: ${detail} — escalating`)
+  }
+  const setupWhy = setupProblem(pr, setup)
+  if (setupWhy) {
+    stop('setup-failed', `SETUP FAILED — ${setupWhy}`, setupWhy, [`Setup report: ${JSON.stringify(setup)}`])
+  } else {
+    expectedHead = setup.head_sha
+  }
+  for (let round = 1; round <= ROUND_BACKSTOP && !clean && !stalled && !escalated; round++) {
     const history = rounds
       .map((r, i) => `--- round ${i + 1} findings ---\n${r.findingsBrief}\n--- round ${i + 1} fixer report ---\n${r.fixReport}`)
       .join('\n')
+
+    // Review only the expected head: if the PR moved (a push outside this loop),
+    // the lenses would judge code nobody verified.
+    const head = await agent(
+      `Check the head of ${PROJECT} PR #${pr.n}. Run exactly: cd ${REPO} && gh pr view ${pr.n} --json headRefOid. Return pr_head_sha = headRefOid (or "" if the command fails). Do nothing else.`,
+      { schema: HEAD_SCHEMA, label: `head:#${pr.n}:r${round}`, phase: 'Panel', effort: 'low' }
+    )
+    if (!head || head.pr_head_sha !== expectedHead) {
+      stop(
+        'head-mismatch',
+        `HEAD MISMATCH — before round ${round}, the PR head is not the expected head`,
+        `the PR head changed before round ${round} (expected ${expectedHead})`,
+        [`Head check report: ${JSON.stringify(head)}`]
+      )
+      break
+    }
+    reviewedHead = expectedHead
 
     const reviews = await parallel(
       Object.entries(CHARTERS).map(([lens, charter]) => () =>
@@ -301,13 +380,34 @@ async function reviewPR(pr) {
     // Applied but not pushed: the PR branch lacks the fixes, so another round
     // would review code that is not on GitHub. Stop and escalate.
     if (fix && (fix.applied.length > 0 || fix.commits.length > 0) && !fix.pushed) {
-      status = 'push-failed'
-      escalated = escalation(
-        pr,
+      stop(
+        'push-failed',
+        `PUSH FAILED — round ${round} fixer made changes but did not push them`,
         `the round ${round} fixer made changes (${fix.applied.length} applied, ${fix.commits.length} commit(s)) but did not push them, so the PR branch does not have them`,
         [`Unpushed fixer changes are in ${SCRATCH}/pr-${pr.n} only.`, `Fixer notes: ${fix.notes}`]
       )
-      log(`#${pr.n} round ${round}: fixer applied changes but did not push — escalating`)
+      break
+    }
+    // A push counts only when the branch on GitHub is at the fixer's local head;
+    // that head is what the next round must review.
+    if (fix && fix.pushed) {
+      if (!isSha(fix.local_head) || fix.local_head !== fix.remote_head) {
+        stop(
+          'push-failed',
+          `PUSH FAILED — round ${round} fixer reported a push, but the PR branch is not at its local head`,
+          `the round ${round} fixer reported a push, but the PR branch head on GitHub does not match the fixer's local head`,
+          [`Fixer heads: local ${JSON.stringify(fix.local_head)}, remote ${JSON.stringify(fix.remote_head)}.`, `Fixer notes: ${fix.notes}`]
+        )
+        break
+      }
+      expectedHead = fix.local_head
+    } else if (fix && !isSha(fix.local_head)) {
+      stop(
+        'setup-failed',
+        `SETUP FAILED — round ${round} fixer could not read the worktree head`,
+        `the round ${round} fixer could not read the worktree head at ${SCRATCH}/pr-${pr.n} (missing worktree?)`,
+        [`Fixer notes: ${fix.notes}`]
+      )
       break
     }
 
@@ -328,20 +428,22 @@ async function reviewPR(pr) {
 
   // Name the lenses that kept the last two rounds from converging.
   const lensNotes = rounds.map((r, i) => r.lensNote && `round ${i + 1} ${r.lensNote}`).slice(-2).filter(Boolean)
-  const statusDetail = clean
+  let statusDetail = clean
     ? 'converged clean'
-    : status === 'push-failed'
-      ? `PUSH FAILED — round ${rounds.length} fixer made changes but did not push them`
+    : escalated
+      ? stopDetail
       : status === 'maintainer-only'
         ? `STOPPED EARLY — round ${rounds.length}: only maintainer-only blocker/major findings remain`
         : stalled
           ? `STALLED — ${rounds.length} rounds, no fixer progress in the last 2${lensNotes.length > 0 ? ` (${lensNotes.join('; ')})` : ''}`
           : `hit the ${ROUND_BACKSTOP}-round runaway backstop without converging`
 
-  const final = escalated || await agent(
+  let final = escalated || await agent(
     `You are ${MAINTAINER} — ${PROJECT}'s BDFL — giving the FINAL verdict on PR #${pr.n} ("${pr.title}" by ${pr.author}, branch ${pr.branch}) after ${rounds.length} panel round(s). Review loop status: ${statusDetail}.
 
-REPO: ${REPO}. Verify the CURRENT branch state yourself (gh pr diff ${pr.n}, gh pr checks ${pr.n}, worktree at ${SCRATCH}/pr-${pr.n} — run git -C ${SCRATCH}/pr-${pr.n} pull --ff-only first): do not take the panel's word for anything you can check in two minutes. Non-negotiables before APPROVE: CI checks green or only informational-recall failures; zero unresolved blocker findings; confidentiality clean; conventions met.
+HEAD CHECK FIRST: run cd ${REPO} && gh pr view ${pr.n} --json headRefOid and return headRefOid verbatim as head_sha. The panel last reviewed ${reviewedHead}; if the PR head is anything else, ESCALATE: nobody reviewed that code.
+
+REPO: ${REPO}. Verify the CURRENT branch state yourself (gh pr diff ${pr.n}, gh pr checks ${pr.n}, worktree at ${SCRATCH}/pr-${pr.n}): do not take the panel's word for anything you can check in two minutes. Non-negotiables before APPROVE: CI checks green or only informational-recall failures; zero unresolved blocker findings; confidentiality clean; conventions met.
 
 REVIEW HISTORY:
 ${historyBrief}
@@ -355,6 +457,18 @@ summary_comment: ${MAINTAINER_SHORT}'s voice, plain English, no emojis — thank
 Boundaries: read-only — no posting, approving, merging, or pushing. Output only the StructuredOutput JSON.`,
     { schema: FINAL_SCHEMA, label: `bdfl-final:#${pr.n}`, phase: 'Final' }
   )
+  // An APPROVE counts only for the head the panel reviewed.
+  if (!escalated && final && final.final === 'APPROVE' && final.head_sha !== reviewedHead) {
+    status = 'head-mismatch'
+    statusDetail = `HEAD MISMATCH — the final verdict saw a head other than the last reviewed head ${reviewedHead}`
+    final = escalation(
+      pr,
+      `the PR head moved after the last panel round reviewed ${reviewedHead}`,
+      [`Final verdict head: ${JSON.stringify(final.head_sha)}.`, ...(Array.isArray(final.residual_risks) ? final.residual_risks : [])],
+      reviewedHead
+    )
+    log(`#${pr.n}: ${statusDetail} — APPROVE downgraded to ESCALATE`)
+  }
 
   return {
     pr: pr.n,
