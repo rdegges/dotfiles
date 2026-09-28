@@ -52,13 +52,20 @@ Every spawned agent gets all four, every time:
 4. **Boundaries** — what is explicitly out of scope, so parallel nodes don't
    overlap or leave gaps.
 
+- Give each parallel agent its own uniquely named scratch directory and log
+  names; shared scratch files get overwritten by sibling agents.
+- Tell agents to use `git -C <path>` rather than `cd` (shell state does not
+  persist between Bash calls), and to watch CI with
+  `gh pr checks <n> --watch`.
+
 ### Review briefs
 
 Brief content, not reviewer count, determines what a review finds. For any
 review/panel node:
 
-- Embed the binding decision policy **verbatim** in every persona prompt —
-  reviewers converge on the policy they can see, not the one you meant.
+- Embed the binding decision policy **verbatim** in every persona prompt and
+  every gate brief, the tester included — gates only enforce what their
+  brief shows them, not the policy you meant.
 - Ask what to CUT, not only what is missing. Review briefs that only ask
   "what's missing?" are scored on additions; a review that removed nothing
   is incomplete, not clean.
@@ -70,6 +77,8 @@ review/panel node:
   lens verifies prose, not behavior.
 - State prior lessons as rules, not anecdotes — an incident briefed by name
   does not transfer; the same lesson restated as a rule does.
+- To focus a red-team pass, set the reviewer's lens input instead of writing
+  a new persona prompt.
 
 ## 4. Reads fan out; writes stay single-threaded
 
@@ -95,9 +104,9 @@ Scale the checker to the stakes; the maker never grades its own work:
 
 - **Every non-trivial change**: one fresh-context `red-team-reviewer` pass —
   diff vs. spec, gaps not style.
-- **Risky or subtle diffs**: 3 diverse lenses (correctness, security,
-  spec-compliance) as parallel reviewers; disagreements resolved against the
-  spec, not by vote alone.
+- **Risky or subtle diffs**: 3 parallel `red-team-reviewer` passes with
+  distinct lenses from its lens list (for example security, reliability,
+  protocol/API); disagreements resolved against the spec, not by vote alone.
 - **High-stakes work**: adversarial panel — independent skeptics prompted to
   *refute* each finding/claim; only survivors ship.
 - Cross-model lenses (Codex adversarial review, hermetic-tests) stack on top
