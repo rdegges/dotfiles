@@ -31,6 +31,11 @@ HOMEBREW_NO_ASK=1
 # Sync dotfiles from the repo (git pull + apply). Hourly at :15.
 15 * * * * { date; chezmoi update --force; } > $HOME/.cron/logs/chezmoi.log 2>&1
 
+# Update the official standalone Codex CLI using its built-in updater. Use the
+# explicit path so an asdf shim or old Homebrew install cannot take precedence.
+# Hourly at :20; stdin is closed so this stays non-interactive.
+20 * * * * { date; "$HOME/.local/bin/codex" update < /dev/null; } > "$HOME/.cron/logs/codex.log" 2>&1
+
 # Refresh asdf plugin repos (installed tool versions stay pinned by
 # .tool-versions). Hourly at :30.
 30 * * * * { date; asdf plugin update --all; } > $HOME/.cron/logs/asdf.log 2>&1

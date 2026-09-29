@@ -99,7 +99,11 @@ then `chezmoi add ~/.tool-versions` and commit.
 
 - **Claude Code** (`claude`) — installed to `~/.local/bin` via the official
   installer (`run_once_install-claude-code.sh.tmpl`).
-- **Codex** (`codex`) — installed via the Homebrew cask.
+- **Codex** (`codex`) — installed to `~/.local/bin` via the
+  [official standalone installer](https://learn.chatgpt.com/docs/codex/cli)
+  (`run_once_install-codex.sh.tmpl`). Cron runs the built-in `codex update`
+  hourly at :20 while the machine is awake, with output in `~/.cron/logs/codex.log`.
+  Run `~/.local/bin/codex update` to update immediately.
 - **herdr** — terminal multiplexer for AI agents, installed via Homebrew.
 
 `run_onchange_reconcile-agent-clis.sh.tmpl` keeps exactly one copy of `claude`

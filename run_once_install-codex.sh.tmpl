@@ -1,0 +1,14 @@
+{{- if eq .chezmoi.os "darwin" -}}
+#!/bin/bash
+# Install the official standalone Codex CLI; cron runs its native updater.
+set -euo pipefail
+
+if [ -x "$HOME/.local/bin/codex" ] && [ -d "$HOME/.codex/packages/standalone/current" ]; then
+    echo "Standalone Codex already installed; skipping."
+    "$HOME/.local/bin/codex" --version
+    exit 0
+fi
+
+curl -fsSL https://chatgpt.com/codex/install.sh | CODEX_NON_INTERACTIVE=1 sh
+"$HOME/.local/bin/codex" --version
+{{ end -}}
