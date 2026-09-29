@@ -195,6 +195,9 @@ Gotchas learned on 2026-09-21:
   `POST /rest/api/3/search/approximate-count` with `{"jql": ...}`.
 - Comments and descriptions take Atlassian Document Format:
   `{"type":"doc","version":1,"content":[{"type":"paragraph","content":[{"type":"text","text":"..."}]}]}`.
+- Ticket mentions in ADF are link marks, not markdown:
+  `{"type":"text","text":"AI-1234","marks":[{"type":"link","attrs":{"href":"https://snyksec.atlassian.net/browse/AI-1234"}}]}`.
+  Markdown `[..](..)` inside a text node renders literally.
 - Transition with a comment in one call:
   `POST /issue/{key}/transitions` with `{"transition":{"id":...},"update":{"comment":[{"add":{"body":<adf>}}]}}`.
   Find the id by matching `transitions[].to.name`.
