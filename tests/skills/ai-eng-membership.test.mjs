@@ -360,7 +360,7 @@ test('on add, a given username that is not an org member does not fail the GitHu
   // says the username is "only a cross-check". So the normal onboarding request
   // "add jane@snyk.io, GitHub janedoe" can never reach the email invite.
   const checks = find('2.')
-  assert.match(checks, /For `add`[^\n]*(not an org member|no org membership)[\s\S]*?invite/i)
+  assert.match(checks, /For `add`[^.]*(not an org\s+member|no org\s+membership)[\s\S]*?invite/i)
 })
 
 test('Snyk email matching is case-insensitive', () => {
