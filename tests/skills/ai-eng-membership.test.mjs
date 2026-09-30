@@ -366,7 +366,9 @@ test('on add, a given username that is not an org member does not fail the GitHu
 test('Snyk email matching is case-insensitive', () => {
   // Step 2.2 says "equals". Randall may type Jane.Doe@snyk.io; a strict compare
   // misses the member and, on add, sends a second invitation.
-  assert.match(find('2.'), /case-insensitive|ignore case|lower-?case/i)
+  // Scoped to item 2: since 2081995, item 3's username sentence also says
+  // "lowercase", so a section-wide match passed with item 2's rule deleted.
+  assert.match(identityItems().items['2'], /case-insensitive|ignore case|lower-?case/i)
 })
 
 test('on add, org members without a verified Snyk email are checked before an email invite', () => {
@@ -392,4 +394,72 @@ test('step 4 names the no-call outcomes: already done, invited', () => {
 
 test('the username cross-check ignores case', () => {
   assert.match(find('2.'), /GitHub usernames\s+are not case-sensitive, so compare them in lowercase/)
+})
+
+// --- Tester additions, gate on 2081995 ---------------------------------------
+// Item-scoped checks. The section-wide /lower-?case/ match above became
+// satisfiable by item 3's new sentence alone, so it no longer proved item 2.
+// These pin each numbered item of "### GitHub identity" on its own.
+
+function identityItems() {
+  const body = subsection(find('2.'), 'GitHub identity')
+  assert.ok(body, 'no ### GitHub identity under step 2')
+  const list = body.split(/^Some org members have no verified Snyk email\./m)
+  const out = {}
+  for (const m of list[0].matchAll(/^(\d+)\.\s([\s\S]*?)(?=^\d+\.\s|(?![\s\S]))/gm)) out[m[1]] = m[2]
+  return { items: out, tail: list[1] ?? '' }
+}
+
+test('GitHub identity has items 1-6 and the no-verified-email tail', () => {
+  const { items, tail } = identityItems()
+  assert.deepEqual(Object.keys(items), ['1', '2', '3', '4', '5', '6'])
+  assert.match(tail, /On `add`/)
+  assert.match(tail, /On `remove`/)
+})
+
+test('item 2 lowercases both sides of the email compare', () => {
+  assert.match(identityItems().items['2'], /Lowercase the Snyk email and each verified email before you compare/)
+})
+
+test('item 3 keeps the cross-check, compares usernames in lowercase, and still fails closed on a mismatch', () => {
+  const i3 = identityItems().items['3']
+  const eq = i3.search(/must equal that login/)
+  const lc = i3.search(/compare them in lowercase/)
+  const fail = i3.search(/failed: username does not match <email>/)
+  assert.ok(eq >= 0 && lc > eq && fail > lc, 'order: equality rule, case rule, then the failure mark')
+  assert.match(i3, /Do not\s+guess which one is correct/)
+  // The case rule must not relax the compare into a fuzzy or partial match.
+  assert.doesNotMatch(i3, /contains|starts with|similar|close/i)
+})
+
+test('item 4 lowercases invitation emails before it looks for the Snyk email', () => {
+  assert.match(identityItems().items['4'], /Lowercase each invitation email, then\s+find the one for the Snyk email/)
+})
+
+test('on add, a member without a verified email that Randall names goes to the team PUT, and a no goes to the invite', () => {
+  const { tail } = identityItems()
+  const add = tail.split(/On `remove`/)[0]
+  assert.match(add, /list the org\s+members from item 1 that have no verified Snyk email/)
+  assert.match(add, /use that login and the team membership\s+PUT in step 4/)
+  assert.match(add, /If he says no, plan the invitation/)
+})
+
+test('every row outcome that step 2 or 4 marks is a result the report in step 6 can show', () => {
+  const results = [...find('6.').matchAll(/`([a-z ]+)`/g)].map((m) => m[1])
+  for (const r of ['added', 'invited', 'removed', 'already done', 'skipped', 'failed']) assert.ok(results.includes(r), `step 6 lacks ${r}`)
+  const marks = [...(find('2.') + find('4.')).matchAll(/mark (?:the|this|that)?\s*(?:GitHub |Slack )?row\s+`([^`]+)`/gi)].map((m) => m[1])
+  assert.ok(marks.length >= 8, `expected many row marks, got ${marks.length}`)
+  for (const m of marks) {
+    const head = m.split(':')[0].trim()
+    assert.ok(results.includes(head), `row mark "${m}" is not a step 6 result`)
+  }
+})
+
+test('PROPOSED CONTRACT: the add branch of item 6 applies only when no member matched, so item 3 still runs for an existing member', { todo: true }, () => {
+  // Item 6 says "For `add`, a new hire is not an org member yet. Do not check
+  // the username." with no "if no member matched" guard, while the `remove`
+  // branch has one. An existing Snyk employee who transfers into AI Engineering
+  // IS an org member (step 4 has a PUT path for them); an agent can read
+  // "Do not check the username" as overriding the item 3 cross-check.
+  assert.match(identityItems().items['6'], /For `add`, if no member matched/)
 })
