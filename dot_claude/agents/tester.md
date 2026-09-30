@@ -65,10 +65,7 @@ Tests are code under review too:
 - Flakiness: ordering, timing, shared state, network reliance.
 
 Improve what falls short — rewrite weak tests to assert real behavior, and
-log every modification with the reason. Exception: tests marked in your brief
-as hermetic/spec-owned (the hermetic-tests skill) are blind-written on
-purpose — run them, never modify them; disagreements route to spec
-adjudication and go in your report.
+log every modification with the reason.
 
 ### 4. Expand coverage — the full arsenal
 

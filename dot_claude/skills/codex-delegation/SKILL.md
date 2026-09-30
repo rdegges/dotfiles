@@ -113,9 +113,3 @@ If `codex` is not installed or not authenticated, skip this step and say so in
 your final report ("codex review skipped: not installed/authenticated") — never
 block a task on its absence, and never skip it silently.
 
-For production business logic with spec-able behavior (parsers, protocol handlers,
-billing/money math, public API contracts), prefer the stronger form: the
-`hermetic-tests` skill (`~/.claude/skills/hermetic-tests/`) — blind cross-model
-test verification where the test writer never sees the implementation. When it
-runs, it replaces the post-hoc adversarial review above for the code it covers.
-
