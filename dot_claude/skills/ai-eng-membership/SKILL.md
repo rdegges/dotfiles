@@ -59,12 +59,14 @@ name. Report the person if they are still in the list.
    }'
    ```
 
-2. Find the member whose verified email equals the Snyk email. That login is
-   the GitHub identity.
+2. Lowercase the Snyk email and each verified email before you compare
+   them. Find the member whose verified email equals the Snyk email. That
+   login is the GitHub identity.
 3. If Randall gave a username, it must equal that login. If it does not,
    mark the GitHub row `failed: username does not match <email>`. Do not
    guess which one is correct.
-4. Read the pending org invitations, and find the one for the Snyk email:
+4. Read the pending org invitations. Lowercase each invitation email, then
+   find the one for the Snyk email:
 
    ```sh
    gh api /orgs/snyk-internal/invitations --paginate
@@ -78,8 +80,12 @@ name. Report the person if they are still in the list.
    gh api /orgs/snyk-internal/teams/ai-engineering/memberships/<github-user> -q '.state'
    ```
 
-6. If no member matched and Randall gave a username, find out if the
-   username exists:
+6. For `add`, a new hire is not an org member yet. Do not check the
+   username. Show it in the approval table as `not checked (new hire joins
+   by email)`. Step 4 invites the email.
+
+   For `remove`, if no member matched and Randall gave a username, find out
+   if the username exists:
 
    ```sh
    gh api /users/<github-user>
@@ -90,7 +96,14 @@ name. Report the person if they are still in the list.
    cannot confirm that <github-user> is <email>`. Never mark either case
    `already done`.
 
-Some org members have no verified Snyk email. On `remove`, if no member
+Some org members have no verified Snyk email.
+
+On `add`, if no member matched and no invitation exists, list the org
+members from item 1 that have no verified Snyk email. Ask Randall if one of
+them is the person. If he names one, use that login and the team membership
+PUT in step 4. If he says no, plan the invitation.
+
+On `remove`, if no member
 matched and no invitation exists, list the team members that have no
 verified Snyk email. Ask Randall if one of them is the person.
 Mark the row `already done` only after he says no.
@@ -136,6 +149,10 @@ team membership call only for a person who is already an org member.
 
 For `add`:
 
+- If the team membership state is `active`, or a pending invitation already
+  has team `ai-engineering`, mark the row `already done`. Make no call.
+- If the team membership state is `pending`, mark the row `invited`. Make
+  no call.
 - If the person has no org membership and no invitation, invite the Snyk
   email with the team in the same call:
 
@@ -155,11 +172,16 @@ For `add`:
   the row `failed: pending invitation without the team`. GitHub cannot add
   a team to an invitation.
 
-If the POST returns 422 because the email is already an org member, go back
-to step 2 for this person. Do not retry the invitation.
+If the invitation POST returns any non-2xx status, do not retry the
+invitation. Do not go back to step 2. Mark the GitHub row `failed: <status>
+<GitHub error message>`. In the report, tell Randall to check the org
+membership of the person by hand.
 
 For `remove`:
 
+- If the person is not on the team and has no pending invitation, or has
+  only a pending invitation without `ai-engineering`, mark the row
+  `already done`. Make no call.
 - If the person is on the team, delete the team membership:
 
   ```sh
@@ -216,7 +238,7 @@ A change is done only when you read it back from the system.
 
 | System | After `add` | After `remove` |
 |---|---|---|
-| GitHub | Team membership `active`, or a pending invitation for the email with team `ai-engineering` | Team membership GET returns 404 for the login from step 2, or the invitation is gone |
+| GitHub | Team membership `active`, or team membership `pending` (`invited`), or a pending invitation for the email with team `ai-engineering` | Team membership GET returns 404 for the login from step 2, or the invitation is gone |
 | Google Group | The email is in the members list | The email is not in the members list |
 | Slack | The full name is in the user group member list | The full name is not in the user group member list |
 

@@ -339,7 +339,8 @@ test('step 2 reads the teams of a pending invitation, which the cancel guard in 
 test('step 4 never edits or re-sends an existing invitation', () => {
   const gh = subsection(find('4.'), 'GitHub')
   assert.match(gh, /failed: pending invitation without the team/)
-  assert.match(gh, /422[\s\S]*?Do not retry the invitation/)
+  assert.match(gh, /any non-2xx status, do not retry the\s+invitation\. Do not go back to step 2\./)
+  assert.doesNotMatch(gh, /go back\s+to step 2 for this person/)
   assert.doesNotMatch(gh, /-X PATCH/)
 })
 
@@ -350,10 +351,9 @@ test('read-back accepts a pending invitation only when it carries the ai-enginee
   assert.match(find('5.'), /A pending invitation is not access/)
 })
 
-// PROPOSED CONTRACTS: gaps found in this gate run. Marked todo so they document
-// the gap without failing the suite; the maker may close them another way.
+// Contracts from the rework gate run (42aacb8), now enforced.
 
-test('PROPOSED CONTRACT: on add, a given username that is not an org member does not fail the GitHub row', { todo: true }, () => {
+test('on add, a given username that is not an org member does not fail the GitHub row', () => {
   // Step 2.6 fails the row ("cannot confirm that <github-user> is <email>") for
   // ANY add where Randall supplies the username of a new hire who is not yet an
   // org member. Step 4 invites by email and never uses the username, and step 1
@@ -363,16 +363,29 @@ test('PROPOSED CONTRACT: on add, a given username that is not an org member does
   assert.match(checks, /For `add`[^\n]*(not an org member|no org membership)[\s\S]*?invite/i)
 })
 
-test('PROPOSED CONTRACT: Snyk email matching is case-insensitive', { todo: true }, () => {
+test('Snyk email matching is case-insensitive', () => {
   // Step 2.2 says "equals". Randall may type Jane.Doe@snyk.io; a strict compare
   // misses the member and, on add, sends a second invitation.
   assert.match(find('2.'), /case-insensitive|ignore case|lower-?case/i)
 })
 
-test('PROPOSED CONTRACT: on add, org members without a verified Snyk email are checked before an email invite', { todo: true }, () => {
+test('on add, org members without a verified Snyk email are checked before an email invite', () => {
   // Observed 2026-09-30: 1 of 41 snyk-internal members has no verified Snyk
   // email. The remove path asks Randall about such members; the add path goes
   // straight to an email invite for a person who may already be that member.
   const checks = find('2.')
   assert.match(checks, /On `add`[\s\S]*?no verified Snyk email/)
+})
+
+test('on add, the username check at /users/ is skipped and shown as not checked', () => {
+  const checks = find('2.')
+  assert.match(checks, /`not checked \(new hire joins\s+by email\)`/)
+  assert.match(checks, /For `remove`, if no member matched and Randall gave a username/)
+})
+
+test('step 4 names the no-call outcomes: already done, invited', () => {
+  const gh = subsection(find('4.'), 'GitHub')
+  assert.match(gh, /state is `active`, or a pending invitation already\s+has team `ai-engineering`, mark the row `already done`/)
+  assert.match(gh, /state is `pending`, mark the row `invited`/)
+  assert.match(gh, /not on the team and has no pending invitation[\s\S]*?`already done`\. Make no call\./)
 })
