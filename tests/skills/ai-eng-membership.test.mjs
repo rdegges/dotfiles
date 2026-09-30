@@ -5,8 +5,11 @@
 //   docker run --rm -v "$PWD":/w -w /w node:latest node --test tests/skills/
 //
 // What a pass proves: the SKILL.md text keeps its add AND remove paths for all
-// three systems, only ever mutates the one GitHub team (never the org), asks
-// for approval before any mutation, and reads every change back. It says
+// three systems, invites new people to GitHub by Snyk email (never by a bare
+// username), otherwise mutates only the one team membership or that team's
+// invitation (never org membership), resolves the GitHub login from the
+// verified Snyk email, asks for approval before any mutation, keeps failures
+// local to one system, and reads every change back. It says
 // nothing about whether the live Google, Slack, or GitHub UIs/APIs still match
 // the text; those were checked by hand in the gate run.
 
@@ -91,11 +94,29 @@ test('description triggers on both onboarding and offboarding phrasing', () => {
   }
 })
 
-test('GitHub step has both an add (PUT) and a remove (DELETE) command on the team membership', () => {
+test('GitHub step has add (email invite, team PUT) and remove (team DELETE, invite cancel) commands', () => {
   const gh = subsection(find('4.'), 'GitHub')
   assert.ok(gh, 'no ### GitHub under step 4')
+  assert.match(gh, /-X POST \/orgs\/snyk-internal\/invitations/)
   assert.match(gh, /-X PUT \/orgs\/snyk-internal\/teams\/ai-engineering\/memberships\/<github-user>/)
   assert.match(gh, /-X DELETE \/orgs\/snyk-internal\/teams\/ai-engineering\/memberships\/<github-user>/)
+  assert.match(gh, /-X DELETE \/orgs\/snyk-internal\/invitations\/<invitation-id>/)
+})
+
+test('new people are invited by Snyk email as direct_member, with the ai-engineering team id in the same call', () => {
+  const gh = subsection(find('4.'), 'GitHub')
+  const invite = gh.match(/gh api -X POST \/orgs\/snyk-internal\/invitations[^`]*/)
+  assert.ok(invite, 'no invitation POST')
+  assert.match(invite[0], /-f email=<name>@snyk\.io/)
+  assert.match(invite[0], /-f role=direct_member/)
+  assert.match(invite[0], /team_ids\[\]=19821548/)
+  assert.doesNotMatch(invite[0], /invitee_id/, 'invite must go by email so the person joins through SSO')
+})
+
+test('an invitation is cancelled only when its teams are only ai-engineering', () => {
+  const gh = subsection(find('4.'), 'GitHub')
+  assert.match(gh, /its teams are only\s+`ai-engineering`, cancel it/)
+  assert.match(gh, /If the invitation has other teams, do not cancel it/)
 })
 
 for (const title of ['Google Group', 'Slack user group']) {
@@ -109,12 +130,18 @@ for (const title of ['Google Group', 'Slack user group']) {
 
 // --- Safety invariants ------------------------------------------------------
 
-test('every mutating gh call targets only the ai-engineering team membership, never the org', () => {
+test('every mutating gh call targets the team membership or an org invitation, never org membership', () => {
   const calls = skill.match(MUTATING) ?? []
-  assert.ok(calls.length >= 2, 'expected at least the PUT and DELETE calls')
+  assert.ok(calls.length >= 4, 'expected POST invite, PUT, DELETE team, DELETE invite')
+  const allowed = [
+    /-X PUT \/orgs\/snyk-internal\/teams\/ai-engineering\/memberships\//,
+    /-X DELETE \/orgs\/snyk-internal\/teams\/ai-engineering\/memberships\//,
+    /-X POST \/orgs\/snyk-internal\/invitations\s/,
+    /-X DELETE \/orgs\/snyk-internal\/invitations\/<invitation-id>/,
+  ]
   for (const c of calls) {
-    assert.match(c, /\/orgs\/snyk-internal\/teams\/ai-engineering\/memberships\//, `unexpected mutation target: ${c}`)
-    assert.doesNotMatch(c, /\/orgs\/snyk-internal\/(members|memberships|invitations|outside_collaborators)\//, `org-level mutation: ${c}`)
+    assert.ok(allowed.some((re) => re.test(c)), `unexpected mutation target: ${c}`)
+    assert.doesNotMatch(c, /\/orgs\/snyk-internal\/(members|memberships|outside_collaborators)\//, `org-level mutation: ${c}`)
   }
 })
 
@@ -134,15 +161,19 @@ test('no mutation appears before the approval step', () => {
   assert.equal((before.match(MUTATING) ?? []).length, 0, 'a mutating command sits before approval')
 })
 
-test('the read-only check step does not tell the agent to send an org invitation', () => {
+test('the check step only reads: no mutating gh call and no Edit Members click', () => {
   const checks = find('2.')
-  assert.match(checks, /Do not send an org invitation/)
+  assert.equal((checks.match(MUTATING) ?? []).length, 0)
+  assert.match(checks, /Do not click \*\*Edit Members\*\* in this step/)
 })
 
 test('read-back step covers all three systems and the remove outcome', () => {
   const rb = find('5.')
-  for (const sys of ['GitHub', 'Google Group', 'Slack']) assert.match(rb, new RegExp(`${sys}:`))
-  assert.match(rb, /For `remove`, expect a 404/)
+  for (const sys of ['GitHub', 'Google Group', 'Slack']) assert.match(rb, new RegExp(`^\\| ${sys} \\|`, 'm'))
+  assert.match(rb, /After `add`/)
+  assert.match(rb, /After `remove`/)
+  // A 404 counts only for the login that step 2 matched to the Snyk email.
+  assert.match(rb, /returns 404 for the login from step 2/)
 })
 
 test('report names org removal and IT offboarding as outside the skill', () => {
@@ -159,32 +190,69 @@ test('targets are consistent: one org, one team slug, one group address', () => 
   assert.match(skill, /ai-engineering@snyk\.io/)
 })
 
-// --- PROPOSED CONTRACTS -----------------------------------------------------
-// Gaps found in the gate run (read-only gh calls and a read-only Chrome walk,
-// 2026-09-30). Marked todo so they document the gap without failing the suite.
+// --- Contracts from the first gate run (2026-09-30) -------------------------
+// Each one closes a gap found with read-only gh calls and a read-only Chrome walk.
 
-test('PROPOSED CONTRACT: remove path confirms the GitHub user exists before treating a membership 404 as "already done"', { todo: true }, () => {
-  // Observed: GET /orgs/snyk-internal/memberships/<nonexistent> and the team
-  // membership GET both return the same 404 as a real non-member. A typo'd
-  // username is therefore reported "already done" and the real person keeps access.
-  assert.match(find('2.'), /\/users\/<github-user>/)
+test('a GitHub username that matches no member is checked with /users/ and never counts as "already done"', () => {
+  // A nonexistent username returns the same 404 as a real non-member.
+  const checks = find('2.')
+  assert.match(checks, /gh api \/users\/<github-user>/)
+  assert.match(checks, /failed: unknown username/)
+  assert.match(checks, /Never mark either case\s+`already done`/)
 })
 
-test('PROPOSED CONTRACT: the GitHub username is cross-checked against the Snyk email before approval', { todo: true }, () => {
-  // Observed: organizationVerifiedDomainEmails(login:"snyk-internal") returns the
-  // snyk.io address for all 12 current team members, and the org has 41 members,
-  // so the "cannot get the username from the email" premise does not hold.
-  assert.match(skill, /organizationVerifiedDomainEmails/)
+test('the GitHub login comes from the verified Snyk email, and a given username is only a cross-check', () => {
+  const checks = find('2.')
+  assert.match(checks, /organizationVerifiedDomainEmails\(login: "snyk-internal"\)/)
+  assert.match(checks, /--paginate/)
+  assert.match(checks, /failed: username does not match <email>/)
+  assert.doesNotMatch(skill, /cannot get the username from the email/)
 })
 
-test('PROPOSED CONTRACT: a missing Slack account on remove does not block the GitHub and Google removals', { todo: true }, () => {
-  // Step 2.1 says "If no account exists, stop for this person" for both actions;
-  // offboarded people are often already deactivated in Slack.
-  assert.doesNotMatch(find('2.'), /If no account exists, stop for this person\./)
+test('remove with no email match fails closed: members without a verified email go to Randall', () => {
+  const checks = find('2.')
+  assert.match(checks, /no verified Snyk email/)
+  assert.match(checks, /Mark the row `already done` only after he says no/)
 })
 
-test('PROPOSED CONTRACT: Slack navigation matches the Snyk Org Grid UI (Directories > User Groups)', { todo: true }, () => {
-  // Observed: the Snyk Org sidebar has "Directories" with a "User Groups" tab; no
-  // "People > User groups" path. app.slack.com also opens a workspace picker first.
-  assert.match(subsection(find('4.'), 'Slack user group'), /Directories/)
+test('a missing Slack account skips only the Slack row; other systems still run', () => {
+  assert.doesNotMatch(skill, /stop for this person/i)
+  assert.match(find('2.'), /skipped: no active Slack\s+account/)
+  assert.match(S._preamble + find('1.'), /does not\s+stop the other rows/)
+})
+
+test('Slack navigation matches the Snyk Org Grid UI (Directories > User Groups)', () => {
+  const slack = subsection(find('2.'), 'Slack user group')
+  assert.ok(slack, 'no ### Slack user group under step 2')
+  assert.match(slack, /\*\*Directories\*\*, then the \*\*User Groups\*\* tab/)
+  assert.match(slack, /\*\*Snyk Org\*\*/)
+  assert.doesNotMatch(skill, /People\*\*, then \*\*User groups/)
+})
+
+test('Slack picker is searched by full name, never by email, and ambiguity stops the row', () => {
+  // Observed 2026-09-30: the Edit members picker shows "No items" for an email.
+  const slack = subsection(find('4.'), 'Slack user group')
+  assert.match(slack, /type the full name from `slack_search_users`/)
+  assert.match(slack, /does\s+not find people by email/)
+  assert.match(slack, /If two suggestions\s+match, stop/)
+  assert.match(slack, /If two chips have that display name, stop/)
+})
+
+test('Google add uses the Group members field, not managers or owners', () => {
+  const g = subsection(find('4.'), 'Google Group')
+  assert.match(g, /\*\*Group members\*\*\s+field/)
+  assert.match(g, /Do not use the \*\*Group managers\*\* or \*\*Group owners\*\* fields/)
+})
+
+test('step 2 reads Google Group and Slack user group state before approval', () => {
+  const checks = find('2.')
+  assert.ok(subsection(checks, 'Google Group'), 'no ### Google Group under step 2')
+  assert.ok(subsection(checks, 'Slack user group'), 'no ### Slack user group under step 2')
+})
+
+test('the skill deploys only on work machines', () => {
+  const ignore = readFileSync(new URL('../../.chezmoiignore', import.meta.url), 'utf8')
+  const block = ignore.match(/\{\{ if not \.work \}\}([\s\S]*?)\{\{ end \}\}/)
+  assert.ok(block, 'no work-only block in .chezmoiignore')
+  assert.match(block[1], /^\.claude\/skills\/ai-eng-membership$/m)
 })
