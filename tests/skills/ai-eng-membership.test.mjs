@@ -389,3 +389,7 @@ test('step 4 names the no-call outcomes: already done, invited', () => {
   assert.match(gh, /state is `pending`, mark the row `invited`/)
   assert.match(gh, /not on the team and has no pending invitation[\s\S]*?`already done`\. Make no call\./)
 })
+
+test('the username cross-check ignores case', () => {
+  assert.match(find('2.'), /GitHub usernames\s+are not case-sensitive, so compare them in lowercase/)
+})

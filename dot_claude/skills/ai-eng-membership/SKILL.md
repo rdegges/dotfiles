@@ -62,7 +62,8 @@ name. Report the person if they are still in the list.
 2. Lowercase the Snyk email and each verified email before you compare
    them. Find the member whose verified email equals the Snyk email. That
    login is the GitHub identity.
-3. If Randall gave a username, it must equal that login. If it does not,
+3. If Randall gave a username, it must equal that login. GitHub usernames
+   are not case-sensitive, so compare them in lowercase. If it does not,
    mark the GitHub row `failed: username does not match <email>`. Do not
    guess which one is correct.
 4. Read the pending org invitations. Lowercase each invitation email, then
