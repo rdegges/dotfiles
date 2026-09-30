@@ -387,8 +387,8 @@ test('on add, the username check at /users/ is skipped and shown as not checked'
 
 test('step 4 names the no-call outcomes: already done, invited', () => {
   const gh = subsection(find('4.'), 'GitHub')
-  assert.match(gh, /state is `active`, or a pending invitation already\s+has team `ai-engineering`, mark the row `already done`/)
-  assert.match(gh, /state is `pending`, mark the row `invited`/)
+  assert.match(gh, /state is `active`, mark the row `already done`/)
+  assert.match(gh, /state is `pending`, or a pending invitation\s+already has team `ai-engineering`, mark the row `invited`/)
   assert.match(gh, /not on the team and has no pending invitation[\s\S]*?`already done`\. Make no call\./)
 })
 
@@ -455,7 +455,7 @@ test('every row outcome that step 2 or 4 marks is a result the report in step 6 
   }
 })
 
-test('PROPOSED CONTRACT: the add branch of item 6 applies only when no member matched, so item 3 still runs for an existing member', { todo: true }, () => {
+test('the add branch of item 6 applies only when no member matched, so item 3 still runs for an existing member', () => {
   // Item 6 says "For `add`, a new hire is not an org member yet. Do not check
   // the username." with no "if no member matched" guard, while the `remove`
   // branch has one. An existing Snyk employee who transfers into AI Engineering

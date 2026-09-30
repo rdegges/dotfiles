@@ -81,9 +81,9 @@ name. Report the person if they are still in the list.
    gh api /orgs/snyk-internal/teams/ai-engineering/memberships/<github-user> -q '.state'
    ```
 
-6. For `add`, a new hire is not an org member yet. Do not check the
-   username. Show it in the approval table as `not checked (new hire joins
-   by email)`. Step 4 invites the email.
+6. For `add`, if no member matched, the person is a new hire and not an org
+   member yet. Do not check the username. Show it in the approval table as
+   `not checked (new hire joins by email)`. Step 4 invites the email.
 
    For `remove`, if no member matched and Randall gave a username, find out
    if the username exists:
@@ -150,10 +150,10 @@ team membership call only for a person who is already an org member.
 
 For `add`:
 
-- If the team membership state is `active`, or a pending invitation already
-  has team `ai-engineering`, mark the row `already done`. Make no call.
-- If the team membership state is `pending`, mark the row `invited`. Make
-  no call.
+- If the team membership state is `active`, mark the row `already done`.
+  Make no call.
+- If the team membership state is `pending`, or a pending invitation
+  already has team `ai-engineering`, mark the row `invited`. Make no call.
 - If the person has no org membership and no invitation, invite the Snyk
   email with the team in the same call:
 
