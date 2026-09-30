@@ -1,6 +1,6 @@
 ---
 name: codex-computer-use
-description: Ask the Codex CLI (GPT-5.5) to run local app verification that needs computer use — browser automation, simulators, screenshots, app launching, or independent runtime inspection. This is how GPT-5.5 is invoked for computer-use work. Use when the user asks Claude to test a flow, verify UI behavior, inspect a running app, capture screenshots, or report confirmation and feedback about implemented behavior that benefits from real computer use. Work machine only (requires an authenticated Codex CLI).
+description: Ask the Codex CLI (GPT-5.5) to run local app verification that needs computer use — native apps, simulators, app launching, or independent runtime inspection. Never for web browser work: that goes through Claude in Chrome. This is how GPT-5.5 is invoked for computer-use work. Use when the user asks Claude to test a flow, verify UI behavior, inspect a running app, capture screenshots, or report confirmation and feedback about implemented behavior that benefits from real computer use. Work machine only (requires an authenticated Codex CLI).
 allowed-tools:
   - Bash
   - Read
@@ -9,13 +9,14 @@ allowed-tools:
 # Codex Computer Use
 
 Use Codex (GPT-5.5) as a separate local verification agent when the task needs real
-UI interaction, screenshots, simulator/browser/device state, or an independent
+UI interaction, screenshots, simulator/device state, or an independent
 runtime check outside your current context. OpenAI's local computer use is currently
 well ahead of what Claude can do natively — delegate to it rather than struggling
 with SSH-unfriendly, screenshot-heavy verification yourself.
 
-Do **not** use this for ordinary code reading, typechecking, linting, or tests you
-can run directly. Launching apps, simulators, or browsers to verify the requested
+Do **not** use this for anything in a web browser; use Claude in Chrome (CLAUDE.md
+§Browser). Do **not** use this for ordinary code reading, typechecking, linting, or tests you
+can run directly. Launching apps or simulators to verify the requested
 work is fine without asking; ask first only if the run could disrupt the user's
 environment beyond that (closing their apps, changing system settings, or acting on
 real accounts or production data).
@@ -34,7 +35,7 @@ fragile computer use yourself.
 ## Workflow
 
 1. **Write a single, self-contained prompt.** Codex won't wander or gold-plate, so
-   be literal: name the app/URL/simulator, the exact flow to exercise, what counts
+   be literal: name the app/simulator, the exact flow to exercise, what counts
    as success, and what to report back. Ask it to save screenshots to a known
    directory so you can read them afterward.
 2. **Run it with full local access** (computer use needs to launch apps and capture
@@ -43,7 +44,7 @@ fragile computer use yourself.
    ```bash
    SHOT=$(mktemp -d)
    codex exec -s danger-full-access -C "$PWD" \
-     "Verify <flow> in <app/url>. Steps: <...>. Success = <...>. \
+     "Verify <flow> in <app>. Steps: <...>. Success = <...>. \
       Save each screenshot as PNG into $SHOT and end with a short PASS/FAIL report \
       naming exactly what you observed. Do not modify project files."
    ```

@@ -46,11 +46,9 @@ free, it has no niche.
   migrations, data analysis, digging through large logs, reading giant PDFs/specs,
   wide mechanical refactors. This is exactly the work that burns Claude usage
   fastest and that 5.5 does well, so hand it off.
-- **Computer use / runtime verification → the `codex-computer-use` skill.** Driving
-  a real app or simulator, browser automation, screenshots, launching apps,
-  inspecting a running app. OpenAI's local computer use is currently well ahead of
-  what I can do natively; default to that skill when I ask you to "test a flow" or
-  "verify the UI."
+- **Non-browser computer use → the `codex-computer-use` skill.** Driving a native
+  app or simulator, launching apps, inspecting a running desktop app. Anything in a
+  web browser goes through Claude in Chrome instead (see CLAUDE.md §Browser).
 - **Anything user-facing / taste > 7 → keep on Claude.** UI copy, public API/SDK
   shape, anything I'll ship with my name on it. 5.5 writes TypeScript like a Python
   dev and Rust like a paranoid C++ dev — do not let it own the shape of code I
