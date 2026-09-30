@@ -1,6 +1,6 @@
 ---
 name: codex-computer-use
-description: Ask the Codex CLI (GPT-5.5) to run local app verification that needs computer use — native apps, simulators, app launching, or independent runtime inspection. Never for web browser work: that goes through Claude in Chrome. This is how GPT-5.5 is invoked for computer-use work. Use when the user asks Claude to test a flow, verify UI behavior, inspect a running app, capture screenshots, or report confirmation and feedback about implemented behavior that benefits from real computer use. Work machine only (requires an authenticated Codex CLI).
+description: Ask the Codex CLI (on its default model) to run local app verification that needs computer use — native apps, simulators, app launching, or independent runtime inspection. Never for web browser work: that goes through Claude in Chrome. This is how Codex is invoked for computer-use work. Use when the user asks Claude to test a flow, verify UI behavior, inspect a running app, capture screenshots, or report confirmation and feedback about implemented behavior that benefits from real computer use. Work machine only (requires an authenticated Codex CLI).
 allowed-tools:
   - Bash
   - Read
@@ -8,7 +8,7 @@ allowed-tools:
 
 # Codex Computer Use
 
-Use Codex (GPT-5.5) as a separate local verification agent when the task needs real
+Use Codex as a separate local verification agent when the task needs real
 UI interaction, screenshots, simulator/device state, or an independent
 runtime check outside your current context. OpenAI's local computer use is currently
 well ahead of what Claude can do natively — delegate to it rather than struggling

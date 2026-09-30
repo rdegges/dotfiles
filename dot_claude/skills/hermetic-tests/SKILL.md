@@ -1,6 +1,6 @@
 ---
 name: hermetic-tests
-description: Blind, cross-model test verification. Implementation and tests are written independently from the same frozen spec — the test writer (Codex/GPT-5.5) never sees the implementation, and the implementer never sees the tests. Disagreements are adjudicated against the spec before anything is edited. Use for production business logic with spec-able behavior (parsers, protocol handlers, billing, API contracts). Skip for UI, glue code, or exploratory work.
+description: Blind, cross-model test verification. Implementation and tests are written independently from the same frozen spec — the test writer (Codex, on its default model) never sees the implementation, and the implementer never sees the tests. Disagreements are adjudicated against the spec before anything is edited. Use for production business logic with spec-able behavior (parsers, protocol handlers, billing, API contracts). Skip for UI, glue code, or exploratory work.
 ---
 
 # Hermetic Tests

@@ -1,18 +1,18 @@
 ---
 name: codex-delegation
-description: "Routing policy and invocation gotchas for delegating work to GPT-5.5 via the codex CLI (work machine only). Load before delegating bulk work, running a Codex review, or choosing a model for a subtask."
+description: "Routing policy and invocation gotchas for delegating work to the Codex default model via the codex CLI (work machine only). Load before delegating bulk work, running a Codex review, or choosing a model for a subtask."
 ---
 
-## Model Delegation — Codex / GPT-5.5 (work machine only)
+## Model Delegation — Codex (work machine only)
 
 *This section is applied by chezmoi only on my work laptop, where I have both a
 Claude Code subscription and a Codex/OpenAI subscription. On personal machines it
 is absent, so ignore any instinct to reach for Codex there.*
 
 You (Claude) are the orchestrator. You own the plan, every taste-sensitive call,
-and the final judgment on what ships. **GPT-5.5 — reachable only through the
-`codex` CLI — is a second engine you delegate to when it is the better tool, not a
-fallback.** My Codex sub's usage is very generous, so treat 5.5 as effectively free
+and the final judgment on what ships. **Codex — its default model, set in
+`~/.codex/config.toml` and reachable only through the `codex` CLI — is a second
+engine you delegate to when it is the better tool, not a fallback.** My Codex sub's usage is very generous, so treat Codex as effectively free
 for the work it's good at. The point of delegating is not to save a few tokens; it
 is to (a) not burn my scarcer Claude usage on grunt work, and (b) use the model
 that is genuinely best at each sub-task.
@@ -30,27 +30,27 @@ kind of delegation. Here is the full picture.
 
 | model    | cost | intelligence | taste | reach it via                          |
 | -------- | ---- | ------------ | ----- | ------------------------------------- |
-| gpt-5.5  |  9   |      8       |   5   | `codex` CLI (skills / `codex exec`)   |
+| codex    |  9   |      8       |   5   | `codex` CLI (skills / `codex exec`)   |
 | sonnet-5 |  5   |      5       |   7   | native / sub-agents                   |
 | opus-4.8 |  4   |      7       |   8   | native (my current daily driver)      |
 | fable-5  |  2   |      9       |   9   | native (when I'm running it)          |
 
-`cost` is inverted on purpose: **higher = cheaper/more available to me.** GPT-5.5
+`cost` is inverted on purpose: **higher = cheaper/more available to me.** Codex
 scores 9 because my Codex sub is near-infinite; Fable scores 2 because it's the one
-I most need to spend carefully. Never use Haiku for real work — with 5.5 effectively
+I most need to spend carefully. Never use Haiku for real work — with Codex effectively
 free, it has no niche.
 
 ### Routing rules
 
-- **Bulk mechanical / token-heavy work → GPT-5.5.** Clear-spec implementations,
+- **Bulk mechanical / token-heavy work → Codex.** Clear-spec implementations,
   migrations, data analysis, digging through large logs, reading giant PDFs/specs,
   wide mechanical refactors. This is exactly the work that burns Claude usage
-  fastest and that 5.5 does well, so hand it off.
+  fastest and that Codex does well, so hand it off.
 - **Non-browser computer use → the `codex-computer-use` skill.** Driving a native
   app or simulator, launching apps, inspecting a running desktop app. Anything in a
   web browser goes through Claude in Chrome instead (see CLAUDE.md §Browser).
 - **Anything user-facing / taste > 7 → keep on Claude.** UI copy, public API/SDK
-  shape, anything I'll ship with my name on it. 5.5 writes TypeScript like a Python
+  shape, anything I'll ship with my name on it. Codex writes TypeScript like a Python
   dev and Rust like a paranoid C++ dev — do not let it own the shape of code I
   ship. Use it to *gather information and try things*, then bring the real change
   back to Claude.
@@ -86,9 +86,9 @@ right model. Cost is a tiebreaker only when the other axes genuinely tie.
 - **Bounded implementation on a scratch branch:** `codex exec -s workspace-write`
   inside a git worktree, then review the diff before it goes anywhere near a real
   branch.
-- **Inside a Claude Code workflow you cannot pick 5.5 as a sub-agent model.** Spawn
+- **Inside a Claude Code workflow you cannot pick Codex as a sub-agent model.** Spawn
   a `sonnet` sub-agent on **low** whose only job is to shell out to `codex`, capture
-  5.5's output, and report it back. Prefix such sub-agents (e.g. `[5.5] …`) so I can
+  Codex's output, and report it back. Prefix such sub-agents (e.g. `[codex] …`) so I can
   see at a glance which ones delegated.
 - If a Codex command comes back wrong once or twice, ask it what the correct
   invocation is, then tell me so I can pin the fixed command into the relevant skill.
