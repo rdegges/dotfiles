@@ -474,3 +474,73 @@ test('the Slack account is found by name and confirmed by profile email, never s
   assert.match(slack, /use only the result whose profile email\s+equals the Snyk email\. Never pick a result by name alone\./)
   assert.doesNotMatch(slack, /Find the account with `slack_search_users` and the Snyk email/)
 })
+
+// Item-scoped checks for "### Slack account". The test above matches phrases
+// anywhere in the subsection; these pin each numbered item and the wiring to
+// step 1 (the name input) and step 4 (the picker types the recorded name).
+
+function slackAccount() {
+  const body = subsection(find('2.'), 'Slack account')
+  assert.ok(body, 'no ### Slack account under step 2')
+  const items = {}
+  for (const m of body.matchAll(/^(\d+)\.\s([\s\S]*?)(?=^\d+\.\s|^\S|(?![\s\S]))/gm)) items[m[1]] = m[2]
+  return { body, items }
+}
+
+test('step 1 collects an optional full name and says step 2 uses it for Slack', () => {
+  const inputs = find('1.')
+  assert.match(inputs, /^- \*\*Full name\*\*: optional\. Step 2 uses it to find the Slack account\./m)
+  assert.match(inputs, /If\s+Randall does not give it, step 2 gets it from the email\./)
+})
+
+test('Slack account has items 1-4 in order: name, last-name search, first-name retry, email confirm', () => {
+  const { items } = slackAccount()
+  assert.deepEqual(Object.keys(items), ['1', '2', '3', '4'])
+  assert.match(items['1'], /full name from step 1/)
+  assert.match(items['1'], /`first\.last@snyk\.io` gives `First Last`/)
+  assert.match(items['2'], /last name as the keyword and the full name as the query/)
+  assert.match(items['3'], /If no result has the Snyk email, search again with the first name only/)
+  assert.match(items['4'], /Lowercase both emails/)
+})
+
+test('the Slack email compare is case-insensitive and is the only way a result is accepted', () => {
+  const i4 = slackAccount().items['4']
+  assert.match(i4, /Lowercase both emails, then use only the result whose profile email\s+equals the Snyk email/)
+  assert.match(i4, /Never pick a result by name alone/)
+})
+
+test('no Slack account step tells the agent to search by email', () => {
+  // The only mention of an email search is the warning that it returns nothing.
+  const { body } = slackAccount()
+  const lines = body.split('\n').filter((l) => /search/i.test(l) && /email/i.test(l))
+  for (const l of lines) {
+    assert.ok(
+      /A search by email returns no|If no result has the Snyk email/.test(l),
+      `unexpected email-search instruction: ${l.trim()}`,
+    )
+  }
+})
+
+test('step 2 records the full name and display name that the step 4 picker and chip match on', () => {
+  assert.match(slackAccount().body, /Record the full name, the display name, and the email of that result\./)
+  const add = subsection(find('4.'), 'Slack user group')
+  assert.match(add, /full name\s+and display name both match the values from step 2/)
+  assert.match(add, /chip with the display name from step 2/)
+})
+
+// PROPOSED CONTRACTS: the name search can miss a real account (nickname,
+// married name, an email that is not first.last), and today a miss reads as
+// "no active Slack account", a silent skip on add. Marked todo so they
+// document the gap without failing the suite.
+
+test('PROPOSED CONTRACT: when the name came from the email and no result matches, ask Randall for the full name before skipping Slack', { todo: true }, () => {
+  assert.match(slackAccount().body, /ask Randall for the full name/i)
+})
+
+test('PROPOSED CONTRACT: an email that is not first.last@snyk.io (no dot, or more than one dot) asks Randall for the full name instead of guessing', { todo: true }, () => {
+  assert.match(slackAccount().items['1'], /not (?:in )?the form `first\.last@snyk\.io`|no dot|more than one dot/i)
+})
+
+test('PROPOSED CONTRACT: more than one result with the Snyk email stops the Slack row as failed', { todo: true }, () => {
+  assert.match(slackAccount().body, /(?:two|more than one) results?[^.]*(?:email)[^.]*\.[^.]*failed/i)
+})
