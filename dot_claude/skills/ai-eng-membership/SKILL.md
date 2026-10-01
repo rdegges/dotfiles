@@ -26,6 +26,8 @@ You need these values for each person:
 
 - **Action**: `add` or `remove`.
 - **Snyk email**: `<name>@snyk.io`. All three systems start from this email.
+- **Full name**: optional. Step 2 uses it to find the Slack account. If
+  Randall does not give it, step 2 gets it from the email.
 - **GitHub username**: optional. Step 2 finds it from the email. If Randall
   gives one, step 2 uses it only as a cross-check.
 
@@ -37,8 +39,17 @@ Do only read-only calls in this step. Record one state for each system.
 
 ### Slack account
 
-Find the account with `slack_search_users` and the Snyk email. Record the
-full name, the display name, and the email that it returns.
+Find the account with `slack_search_users`. A search by email returns no
+results, so search by name:
+
+1. Use the full name from step 1. If Randall did not give it, get it from
+   the email: `first.last@snyk.io` gives `First Last`.
+2. Search with the last name as the keyword and the full name as the query.
+3. If no result has the Snyk email, search again with the first name only.
+4. Lowercase both emails, then use only the result whose profile email
+   equals the Snyk email. Never pick a result by name alone.
+
+Record the full name, the display name, and the email of that result.
 
 If no active account exists, mark the Slack row `skipped: no active Slack
 account`. On `remove`, still read the user group list below for the full

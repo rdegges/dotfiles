@@ -463,3 +463,14 @@ test('the add branch of item 6 applies only when no member matched, so item 3 st
   // "Do not check the username" as overriding the item 3 cross-check.
   assert.match(identityItems().items['6'], /For `add`, if no member matched/)
 })
+
+test('the Slack account is found by name and confirmed by profile email, never searched by email', () => {
+  // Observed 2026-09-30: slack_search_users with arthur.castelnau@snyk.io as the
+  // keyword returned no results; the same person was found by last name.
+  const slack = subsection(find('2.'), 'Slack account')
+  assert.ok(slack, 'no ### Slack account under step 2')
+  assert.match(slack, /A search by email returns no\s+results, so search by name/)
+  assert.match(slack, /search again with the first name only/)
+  assert.match(slack, /use only the result whose profile email\s+equals the Snyk email\. Never pick a result by name alone\./)
+  assert.doesNotMatch(slack, /Find the account with `slack_search_users` and the Snyk email/)
+})
