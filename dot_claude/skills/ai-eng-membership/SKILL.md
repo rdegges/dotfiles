@@ -43,11 +43,19 @@ Find the account with `slack_search_users`. A search by email returns no
 results, so search by name:
 
 1. Use the full name from step 1. If Randall did not give it, get it from
-   the email: `first.last@snyk.io` gives `First Last`.
+   the email: `first.last@snyk.io` gives `First Last`. If the email is not
+   in the form `first.last@snyk.io` and Randall did not give a full name,
+   ask Randall for the full name. Do not guess.
 2. Search with the last name as the keyword and the full name as the query.
 3. If no result has the Snyk email, search again with the first name only.
 4. Lowercase both emails, then use only the result whose profile email
    equals the Snyk email. Never pick a result by name alone.
+5. If neither search has a result with the Snyk email, ask Randall for the
+   name the person uses in Slack and repeat items 2-4 once with it. Mark
+   the row `skipped: no active Slack account` only if that search also
+   finds no match or Randall says the person has no account. If more than
+   one result has the Snyk email, stop and mark the Slack row `failed: more
+   than one Slack account for <email>`.
 
 Record the full name, the display name, and the email of that result.
 
