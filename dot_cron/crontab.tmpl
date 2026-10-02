@@ -36,8 +36,8 @@ HOMEBREW_NO_ASK=1
 # Hourly at :20; stdin is closed so this stays non-interactive.
 20 * * * * { date; "$HOME/.local/bin/codex" update < /dev/null; } > "$HOME/.cron/logs/codex.log" 2>&1
 
-# Update the Cloudflare CLI (cf), an npm global on the asdf Node. The script
-# sends a macOS notification on failure. Daily at 10:10.
+# Update the Cloudflare CLI (cf), an npm global on the asdf Node. On failure the
+# script writes ~/.cron/logs/cf.FAILED, which every new shell prints. Daily at 10:10.
 10 10 * * * { date; $HOME/.cron/cf-update.sh; } > $HOME/.cron/logs/cf.log 2>&1
 
 # Refresh asdf plugin repos (installed tool versions stay pinned by

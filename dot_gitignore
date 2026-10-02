@@ -17,3 +17,6 @@ node_modules
 .*.swp
 
 **/.claude/settings.local.json
+
+# Cloudflare CLI (cf) account cache, written into whatever directory cf runs in.
+.cloudflare/cache/

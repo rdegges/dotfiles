@@ -4,7 +4,7 @@
 # cf-update.sh hash: {{ include "dot_cron/executable_cf-update.sh" | sha256sum }}
 #
 # Install the Cloudflare CLI (cf) through the same script cron uses to update
-# it, so there is one code path. Re-runs when the Node pin changes (npm globals
+# it, so there is one code path. Re-runs when ~/.tool-versions changes (npm globals
 # live per Node version) or when the update script changes.
 #
 # This is an `after_` script so it runs after run_onchange_install-tool-versions
