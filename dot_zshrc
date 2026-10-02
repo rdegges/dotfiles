@@ -115,3 +115,7 @@ export PATH="$HOME/.local/bin:$PATH"
 
 # Set up `starship` prompt.
 eval "$(starship init zsh)"
+
+# Surface failed cron jobs: a job that fails writes ~/.cron/logs/<job>.FAILED
+# and removes it on its next success (see dot_cron/executable_cf-update.sh).
+for f in ~/.cron/logs/*.FAILED(N); do print -r -- $'\e[31m'"cron: $(<$f)"$'\e[0m'; done

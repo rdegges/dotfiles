@@ -95,6 +95,18 @@ newer releases, `asdf install <tool> latest`, `asdf set <tool> <version> --home`
 then `chezmoi add ~/.tool-versions` and commit.
 
 
+## Cloudflare (cf)
+
+The [Cloudflare CLI](https://developers.cloudflare.com/cf/) (`cf`) is installed as an npm global on the asdf Node, because Cloudflare ships it only through npm. `~/.cron/cf-update.sh` (source: `dot_cron/executable_cf-update.sh`) does the install. Two things run it:
+
+- `run_onchange_after_install-cloudflare-cli.sh.tmpl`, on `chezmoi apply`, when the Node pin in `~/.tool-versions` or the script changes. npm globals live per Node version, so a Node bump would otherwise drop `cf`.
+- Cron, daily at 10:10, to update to `cf@latest`. Output goes to `~/.cron/logs/cf.log`. A failure writes `~/.cron/logs/cf.FAILED`, and every new shell prints it in red until a later run succeeds.
+
+Run `~/.cron/cf-update.sh` to update immediately.
+
+The only per-machine step is `cf auth login`. `cf` keeps its own credentials, outside the dotfiles, and does not reuse a Wrangler login.
+
+
 ## AI coding tools
 
 - **Claude Code** (`claude`) — installed to `~/.local/bin` via the official

@@ -28,6 +28,7 @@ My words, used loosely in prompts. Use them back to me; correct me if I seem to 
 - GitHub for hosting, `gh` for everything GitHub, GitHub Actions for CI. After a push, watch the checks with `gh` and fix what breaks. "Zero checks reported" is its own state, never green and never pending-forever.
 - Production deploys go to Render via blueprints (https://render.com/docs/blueprint-spec) unless the project already uses something else; watch deploys with the `render` CLI.
 - Dev toolchains come from `asdf`. Dotfiles are chezmoi-managed (`~/.local/share/chezmoi`, github.com/rdegges/dotfiles); edit the source, then apply, never the live file.
+- Cloudflare: `cf` CLI for everything. Find commands with `cf cli search "<task>"`, and run `--dry-run` before a change. Use Wrangler only in a project that has a Wrangler config file, and mention `cf migrate` once there. If `cf` is not logged in, ask me to run `cf auth login`; never run it yourself.
 - Email: `himalaya` CLI (personal and work accounts) unless I ask otherwise.
 - A new or changed scheduled job is done only after one real triggered run and a confirmed failure signal that someone will see. A green run that had nothing to do proves nothing.
 
