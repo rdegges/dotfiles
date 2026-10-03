@@ -39,7 +39,11 @@ A gate is any check that blocks or blesses a merge, deploy, or run.
   report success. "Nothing to do" green is the branch nobody attacks.
 - A new gate counts as installed only after it has been observed rejecting
   a seeded violation. A green run that had nothing to reject proves nothing;
-  making a gate required multiplies the cost of a false green.
+  making a gate required multiplies the cost of a false green. Before you
+  seed a violation or mutation, commit your work (a WIP commit is fine) or
+  seed in a throwaway worktree: `git checkout -- <file>` or `git restore`
+  over uncommitted work removes the work along with the seed. After the
+  revert, confirm `git diff` against your commit is empty.
 
 ### Self-Improving Patterns
 - When fixing a class of recurring issues (flaky tests, lint errors, similar bugs):
