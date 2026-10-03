@@ -1,5 +1,5 @@
 // dot_zshenv: the 1Password CLI app-integration switch and its documented
-// per-command opt-out.
+// session opt-out.
 //
 // Run from the repo root (zsh is needed; without it the shell tests skip):
 //   docker run --rm -v "$PWD":/w -w /w node:latest sh -c \
@@ -7,8 +7,9 @@
 //
 // What a pass proves: dot_zshenv parses; a non-interactive zsh that loads it
 // (the `ssh host cmd` and agent-shell case) hands OP_BIOMETRIC_UNLOCK_ENABLED=true
-// to child processes; the opt-out command written in the comment, run as
-// written against a stub `op`, hands that `op` false; and no later zsh startup
+// to child processes; the session opt-out written in the comment, run as
+// written against a stub `op`, keeps that `op` on false for signin and every
+// later call in the same shell; and no later zsh startup
 // file in the repo reassigns or unsets the variable. It says nothing about the
 // real op binary or the 1Password app; those were checked by hand in the gate run.
 
@@ -68,26 +69,31 @@ test(`non-interactive zsh exports ${VAR}=true to child processes`, { skip: zskip
     assert.ok(r.stdout.split('\n').includes(`${VAR}=true`), r.stdout)
   }))
 
-test('the opt-out command in the comment, run as written, gives op false', { skip: zskip }, () => {
-  const marker = 'opt out per command:'
+test('the session opt-out in the comment keeps op on false for later calls', { skip: zskip }, () => {
+  const marker = 'opt out for the whole session first:'
   const line = read('dot_zshenv').split('\n').find((l) => l.startsWith('#') && l.includes(marker))
   assert.ok(line, `no "${marker}" comment in dot_zshenv`)
   const cmd = line.slice(line.indexOf(marker) + marker.length).trim()
   assert.match(cmd, /\bop\b/, cmd)
   withZdot((run) => {
-    const r = run(cmd)
+    // The session opt-out must outlive signin: with =true still exported, op
+    // ignores the OP_SESSION_* token signin just made.
+    const r = run(`${cmd}; op whoami`)
     assert.equal(r.status, 0, r.stderr)
-    assert.match(r.stdout, new RegExp(`^op .*=false$`, 'm'), r.stdout)
-    // The opt-out is per command: the shell keeps the export for the next op.
-    const after = run(`${cmd} >/dev/null; op whoami`)
-    assert.match(after.stdout, /^op whoami=true$/m, after.stdout)
+    const calls = r.stdout.split('\n').filter((l) => l.startsWith('op '))
+    assert.ok(calls.some((l) => l.startsWith('op signin')), r.stdout)
+    assert.ok(calls.includes('op whoami=false'), r.stdout)
+    for (const l of calls) assert.match(l, /=false$/, r.stdout)
   })
 })
 
 test(`no zsh startup file loaded after .zshenv reassigns or unsets ${VAR}`, () => {
   // .zprofile, .zshrc, and oh-my-zsh custom files run after .zshenv in login
   // and interactive shells, so any of them could silently undo the switch.
-  const files = ['dot_zprofile', 'dot_zshrc', 'dot_zlogin']
+  const files = readdirSync(ROOT).filter((n) =>
+    /^(private_)?(executable_)?dot_z(profile|shrc|login|logout)(\.tmpl)?$/.test(n))
+  // An empty or renamed set must fail, not pass by checking nothing.
+  assert.ok(files.includes('dot_zprofile') && files.includes('dot_zshrc'), files.join(', '))
   const walk = (rel) => {
     for (const name of readdirSync(new URL(rel + '/', ROOT))) {
       const p = `${rel}/${name}`
@@ -98,13 +104,7 @@ test(`no zsh startup file loaded after .zshenv reassigns or unsets ${VAR}`, () =
   walk('dot_oh-my-zsh')
   const hits = []
   for (const f of files) {
-    let text
-    try {
-      text = read(f)
-    } catch {
-      continue // dot_zlogin does not exist today; listed so adding it is covered.
-    }
-    text.split('\n').forEach((l, i) => {
+    read(f).split('\n').forEach((l, i) => {
       if (l.includes(VAR) && !l.trimStart().startsWith('#')) hits.push(`${f}:${i + 1}: ${l}`)
     })
   }

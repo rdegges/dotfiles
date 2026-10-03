@@ -12,5 +12,5 @@ export PATH="$HOME/.local/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bi
 # Group Container, which macOS blocks without Full Disk Access. op then falls
 # back to `eval $(op signin)` with the master password. Forcing app integration
 # skips that read without granting the terminal Full Disk Access.
-# Over SSH (no GUI to approve), opt out per command: OP_BIOMETRIC_UNLOCK_ENABLED=false op signin
+# Over SSH (no GUI to approve), opt out for the whole session first: export OP_BIOMETRIC_UNLOCK_ENABLED=false; eval $(op signin)
 export OP_BIOMETRIC_UNLOCK_ENABLED=true
