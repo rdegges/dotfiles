@@ -80,6 +80,13 @@ reason:
 - **Regression** — a pinning test for the specific behavior this change
   introduces or fixes, so it can never silently regress.
 - **Smoke** — the thing starts, runs end-to-end, and exits clean.
+- **Real-data replay** — when the change rewrites stored data (fixers,
+  migrations, normalizers, link repair): copy the real data the brief or
+  repo provides to a scratch directory outside the repo; never touch the
+  original. Run the change on the copy twice and diff each run against its
+  input. The second run must change nothing, and you must defend every
+  first-run change line by line. No real data provided: say so under Not
+  covered; that is not a pass.
 - **Performance** — where the change touches a hot path or scales with
   input: check the complexity story (N vs. 10N), guard against the obvious
   traps. Proportionate — a micro-benchmark rig for a config change is slop.
