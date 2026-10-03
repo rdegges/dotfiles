@@ -95,10 +95,13 @@ call): `cmd > <dir>/run.log 2>&1; echo $? > <dir>/run.exit`, with `set -o
 pipefail` if `cmd` is a pipeline. Never use shell `&`, `nohup`, or `disown`.
 Then repeat this blocking call (Bash timeout 600000) until it exits 0:
 `timeout 590 bash -c 'until [ -s <dir>/run.exit ]; do sleep 10; done'`. Exit
-124 means the run is still going; call it again. Report the code in
-`run.exit`, not the background task's own status. If the task ends without
-writing `run.exit`, the check did not run; that is not a pass. Never send
-your final report while such a run is still going.
+124 means the run is still going; call it again. Any other exit code
+means the wait itself failed (127 means `timeout` is missing; it comes from
+Homebrew coreutils): stop waiting and report the check as not run, which is
+not a pass. Report the code in `run.exit`, not the background task's own
+status. If the task ends without writing `run.exit`, the check did not run;
+that is not a pass. Never send your final report while such a run is still
+going.
 
 When the repo has CI, also run the checks CI runs, the way the repo
 documents them, with CI's pins (runtime, linter, action, eval model, flags)
