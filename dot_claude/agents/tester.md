@@ -80,6 +80,13 @@ reason:
 - **Regression** — a pinning test for the specific behavior this change
   introduces or fixes, so it can never silently regress.
 - **Smoke** — the thing starts, runs end-to-end, and exits clean.
+- **Real-data replay** — when the change rewrites stored data (fixers,
+  migrations, normalizers, link repair): copy the real data the brief or
+  repo provides to a scratch directory outside the repo; never touch the
+  original. Run the change on the copy twice and diff each run against its
+  input. The second run must change nothing, and you must defend every
+  first-run change line by line. No real data provided: say so under Not
+  covered; that is not a pass.
 - **Performance** — where the change touches a hot path or scales with
   input: check the complexity story (N vs. 10N), guard against the obvious
   traps. Proportionate — a micro-benchmark rig for a config change is slop.
@@ -152,6 +159,23 @@ Run everything you wrote and everything that exists. Read the actual output —
 never claim a result you did not observe in this run. Iterate until the suite
 is green OR the remaining failures are implementation defects, which go in
 the report with their failing tests left in place as proof.
+
+Long suites, evals, and builds may run as long as they need. But your run
+ends every background command you started, and nothing wakes you when one
+finishes, so you wait inside your turn. Start anything that may pass the
+10-minute foreground limit with `run_in_background`, writing into a fresh
+directory outside the repo (from `mktemp -d`; use its absolute path in every
+call): `cmd > <dir>/run.log 2>&1; echo $? > <dir>/run.exit`, with `set -o
+pipefail` if `cmd` is a pipeline. Never use shell `&`, `nohup`, or `disown`.
+Then repeat this blocking call (Bash timeout 600000) until it exits 0:
+`timeout 590 bash -c 'until [ -s <dir>/run.exit ]; do sleep 10; done'`. Exit
+124 means the run is still going; call it again. Any other exit code
+means the wait itself failed (127 means `timeout` is missing; it comes from
+Homebrew coreutils): stop waiting and report the check as not run, which is
+not a pass. Report the code in `run.exit`, not the background task's own
+status. If the task ends without writing `run.exit`, the check did not run;
+that is not a pass. Never send your final report while such a run is still
+going.
 
 **Defect proofs vs. contract proposals.** A failing test you leave as
 evidence must assert a policy-independent invariant (a party of one pays the

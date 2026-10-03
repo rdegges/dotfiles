@@ -79,7 +79,7 @@ of no record lists. `_template.md` and the records themselves never count.
        /^mined:/ { m = 1; next }
        m && /^[[:space:]]*$/ { next }
        m && /^[[:space:]]*- / {
-         s = $0; sub(/^[[:space:]]*- [[:space:]]*/, "", s)
+         s = $(0); sub(/^[[:space:]]*- [[:space:]]*/, "", s)
          sub(/[[:space:]]+#.*$/, "", s); sub(/[[:space:]]+$/, "", s)
          c = substr(s, 1, 1)
          if (length(s) > 1 && (c == "\"" || c == q) && substr(s, length(s)) == c)
