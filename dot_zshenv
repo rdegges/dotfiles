@@ -7,3 +7,10 @@
 # exists (Apple Silicon = /opt/homebrew, Intel = /usr/local), the other is a
 # harmless no-op.
 export PATH="$HOME/.local/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/local/sbin:$PATH"
+
+# 1Password CLI finds the desktop app by reading a settings file in 1Password's
+# Group Container, which macOS blocks without Full Disk Access. op then falls
+# back to `eval $(op signin)` with the master password. Forcing app integration
+# skips that read without granting the terminal Full Disk Access.
+# Over SSH (no GUI to approve), opt out for the whole session first: export OP_BIOMETRIC_UNLOCK_ENABLED=false; eval $(op signin)
+export OP_BIOMETRIC_UNLOCK_ENABLED=true
