@@ -86,6 +86,14 @@ Make the change. Run every project command (tests, one-offs, installs) in
 Docker with the latest official image; never the host toolchain. Add dependencies with the package manager's add
 command, never by hand-writing a version.
 
+When the change enforces an invariant (a privacy rule, a uniqueness
+promise, an allowlist) and the code has one point every output passes
+through, enforce it there, keyed on the identity of what it protects (an
+`@id`, a primary key), not on the code paths you know reach it. When a gate
+reports a bypass, move the guard to that point instead of adding the new
+path to a list. If the code has no such point, do not build one: guard the
+paths you have and name the bypass class under **Not done**.
+
 Write command output to files with unique names outside the worktree, for
 example `<P>/logs/<step>-$(date +%s).log` (create `<P>/logs` first), and test
 the exit code directly or with `set -o pipefail`. Never gate a step on a
