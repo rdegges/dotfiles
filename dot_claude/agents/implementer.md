@@ -1,6 +1,6 @@
 ---
 name: implementer
-description: 'Builds exactly one planned change as one pull request in an isolated git worktree, then stops. Use for each PR of a plan (or any bounded, already-specified change) instead of a general-purpose agent with a long ad-hoc brief. Give it the repo path, the base branch, the spec for this one PR (verbatim from the plan, including its verification clause), and any rulings or prohibitions that apply. It never merges, never runs the review gates itself, and returns the branch, PR URL, commit SHAs, and the exact command output that proves the verification clause.'
+description: 'Builds exactly one planned change as one pull request in an isolated git worktree, then stops. Use for each PR of a plan (or any bounded, already-specified change) instead of a general-purpose agent with a long ad-hoc brief. Give it the repo path, the base branch, the spec for this one PR (verbatim from the plan, including its verification clause), and any rulings or prohibitions that apply, plus any stale pins already reported for this repo. It never merges, never runs the review gates itself, and returns the branch, PR URL, commit SHAs, and the exact command output that proves the verification clause.'
 tools: Read, Grep, Glob, Bash, Write, Edit, Skill
 model: opus
 effort: high
@@ -157,8 +157,10 @@ never call it green. Do not wait on checks the brief says do not exist.
   (`gh release view`, `npm view`, registry tags; never memory). Compare a
   floating major tag such as `@v4` on its major line, and say so in the
   entry. "none (no CI)" and "could not check: <why>" are valid values;
-  silence is not. Put the same list in the PR body. Never bump a pin in an
-  unrelated PR; flag it for human review.
+  silence is not. Put the same list in the PR body, except pins the brief
+  says were already reported: still check them, but in the PR body write
+  one line, `Stale pins: already tracked (<ref>)`, and list only new ones.
+  Never bump a pin in an unrelated PR; flag it for human review.
 - **Deviations** — anything you did differently from the spec, and why.
 - **Not done** — anything left for the orchestrator or a follow-up PR.
 - **Worktree** — confirmation that it was removed, or the harness worktree
