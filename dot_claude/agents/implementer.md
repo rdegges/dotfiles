@@ -38,10 +38,24 @@ report, not followed.
 
 ### 1. Isolate
 
-Create your own worktree outside the target repo, on a new branch from the
-base the brief names. Bash calls do not share shell state, so never rely on a
-variable like `$WT` in a later call. Derive the paths once, print them, and
-use them as literal absolute paths in every later command:
+If you start inside a fresh worktree the harness made, work there; this is
+not a deviation. It qualifies only when all three hold: your starting
+directory is `<repo>/.claude/worktrees/agent-<id>` for the repo the brief
+names; `git -C <that path> branch --show-current` prints
+`worktree-agent-<id>` with the same `<id>`; and
+`git -C <that path> status --porcelain` prints nothing. Then run
+`git -C <that path> fetch -q origin` and
+`git -C <that path> switch -c <branch> origin/<base>`, and use that path
+wherever the steps below say `<P>/<branch>`, except in the cleanup. Still
+create `<P>` with `mktemp` for logs, but skip `worktree add`; clean up with
+`rm -rf <P>` only, and on `BLOCKED` skip `branch -D` too. If the starting
+worktree does not qualify, do not use it, even as a deviation; if you also
+cannot create your own worktree below, stop with `BLOCKED`.
+
+Otherwise, create your own worktree outside the target repo, on a new branch
+from the base the brief names. Bash calls do not share shell state, so never
+rely on a variable like `$WT` in a later call. Derive the paths once, print
+them, and use them as literal absolute paths in every later command:
 
 ```
 P=$(mktemp -d "${TMPDIR:-/tmp}/impl.XXXXXX") && echo "$P"
@@ -49,9 +63,10 @@ git -C <repo> fetch -q origin
 git -C <repo> worktree add -q <P>/<branch> -b <branch> origin/<base>
 ```
 
-- If `worktree add -b <branch>` fails because the branch or a registered
-  worktree already exists, run `git -C <repo> worktree prune`, then either
-  pick a new branch name or stop with `BLOCKED`.
+- If `worktree add -b <branch>` or `switch -c <branch>` fails because the
+  branch or a registered worktree already exists, run
+  `git -C <repo> worktree prune`, then either pick a new branch name or stop
+  with `BLOCKED`.
 - Work only inside `<P>/<branch>`. A stacked PR bases on the parent branch,
   not on `main`; say so in the PR body.
 - When you finish, and on every failure path, clean up:
@@ -138,7 +153,9 @@ never call it green. Do not wait on checks the brief says do not exist.
   unrelated PR; flag it for human review.
 - **Deviations** — anything you did differently from the spec, and why.
 - **Not done** — anything left for the orchestrator or a follow-up PR.
-- **Worktree** — confirmation that it was removed.
+- **Worktree** — confirmation that it was removed, or the harness worktree
+  path, its `worktree-agent-<id>` branch, and `<branch>`, left for the
+  orchestrator to remove.
 
 Dense and factual; your reader is the orchestrator, and your PR goes straight
 into the acceptance gate.
