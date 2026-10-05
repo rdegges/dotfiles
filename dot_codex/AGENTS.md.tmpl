@@ -1,0 +1,2 @@
+{{- /* Codex reads ~/.codex/AGENTS.md. Render it from the Claude rules so the two never drift. */ -}}
+{{- includeTemplate "dot_claude/CLAUDE.md.tmpl" (merge (dict "reader" "codex") .) -}}
