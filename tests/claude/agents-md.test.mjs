@@ -14,13 +14,14 @@
 // Claude product or Claude-only tool; Delegation is Claude-only; Work tracking
 // follows the work flag in both; and Codex carries the Navia standing
 // exception that the navia-fsa-claims skill cites. It also proves the old
-// ~/AGENTS.md stays retired: .chezmoiremove lists it, and no source entry
-// renders a file there. It says nothing about how either agent reads the
+// ~/AGENTS.md stays retired: rendered .chezmoiremove lists it, no source entry
+// renders a file there, and a real apply (twice) deletes a stale file or
+// symlink there while every nested project AGENTS.md survives. It says nothing about how either agent reads the
 // text; that needs a live session.
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -77,10 +78,51 @@ function sentences(text) {
     .flatMap((l) => l.split(/(?<=[.!?])\s+(?=[A-Z*`"~])/))
 }
 
-test('.chezmoiremove retires the top-level ~/AGENTS.md', () => {
-  const lines = readFileSync(join(SOURCE, '.chezmoiremove'), 'utf8').split('\n')
-  assert.ok(lines.includes('AGENTS.md'))
+// chezmoi renders .chezmoiremove as a template, so the raw file can list a
+// pattern that the render drops (an `if`, a comment that swallows it).
+test('.chezmoiremove retires the top-level ~/AGENTS.md once rendered', () => {
+  const home = mkdtempSync(join(tmpdir(), 'agents-md-'))
+  try {
+    const r = spawnSync(
+      'chezmoi',
+      ['--source', SOURCE, '--destination', home, 'execute-template'],
+      { encoding: 'utf8', input: readFileSync(join(SOURCE, '.chezmoiremove'), 'utf8'), env: { PATH: process.env.PATH, HOME: home } },
+    )
+    assert.ifError(r.error)
+    assert.equal(r.status, 0, `chezmoi execute-template exited ${r.status}: ${r.stderr}`)
+    assert.ok(r.stdout.split('\n').includes('AGENTS.md'), JSON.stringify(r.stdout))
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
 })
+
+// Seeds a throwaway HOME the way a real one looks (a stale ~/AGENTS.md next
+// to project AGENTS.md files the user owns), runs a real apply twice, and
+// hands the HOME to check. Scripts and externals stay off: they install
+// software and fetch from the network.
+function applied(work, seed, check) {
+  const home = mkdtempSync(join(tmpdir(), 'agents-md-'))
+  try {
+    seed(home)
+    for (const pass of [1, 2]) {
+      const r = spawnSync(
+        'chezmoi',
+        ['--source', SOURCE, '--destination', home, '--override-data', JSON.stringify({ work }), '--no-tty', 'apply', '--force', '--exclude=scripts,externals'],
+        { encoding: 'utf8', env: { PATH: process.env.PATH, HOME: home } },
+      )
+      assert.ifError(r.error)
+      assert.equal(r.status, 0, `chezmoi apply pass ${pass} (work=${work}) exited ${r.status}: ${r.stderr}`)
+      check(home, pass)
+    }
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+}
+
+function project(home, dir) {
+  mkdirSync(join(home, dir), { recursive: true })
+  writeFileSync(join(home, dir, 'AGENTS.md'), `project rules in ${dir}\n`)
+}
 
 for (const work of [false, true]) {
   const claude = () => render('.claude/CLAUDE.md', work)
@@ -135,6 +177,45 @@ for (const work of [false, true]) {
     // A real target proves the list is not empty for some unrelated reason.
     assert.ok(targets.includes('.codex/AGENTS.md'), 'chezmoi managed does not list .codex/AGENTS.md')
     assert.ok(!targets.includes('AGENTS.md'))
+  })
+
+  test(`work=${work}: apply deletes a stale ~/AGENTS.md and keeps every nested AGENTS.md`, () => {
+    applied(
+      work,
+      (home) => {
+        writeFileSync(join(home, 'AGENTS.md'), 'stale copy\n')
+        project(home, 'Code/rdegges/site')
+        project(home, 'Code/work/snyk/cli')
+        project(home, '.config/thing')
+      },
+      (home, pass) => {
+        assert.ok(!existsSync(join(home, 'AGENTS.md')), `pass ${pass}: ~/AGENTS.md survived`)
+        for (const dir of ['Code/rdegges/site', 'Code/work/snyk/cli', '.config/thing']) {
+          assert.equal(readFileSync(join(home, dir, 'AGENTS.md'), 'utf8'), `project rules in ${dir}\n`, `pass ${pass}: ${dir}/AGENTS.md changed`)
+        }
+        assert.match(readFileSync(join(home, '.codex/AGENTS.md'), 'utf8'), /^# /, `pass ${pass}: ~/.codex/AGENTS.md not rendered`)
+      },
+    )
+  })
+
+  test(`work=${work}: apply removes a ~/AGENTS.md symlink but not the file it points at`, () => {
+    applied(
+      work,
+      (home) => {
+        project(home, 'Code/rdegges/site')
+        symlinkSync(join(home, 'Code/rdegges/site/AGENTS.md'), join(home, 'AGENTS.md'))
+      },
+      (home, pass) => {
+        assert.throws(() => lstatSync(join(home, 'AGENTS.md')), { code: 'ENOENT' }, `pass ${pass}: ~/AGENTS.md link survived`)
+        assert.equal(readFileSync(join(home, 'Code/rdegges/site/AGENTS.md'), 'utf8'), 'project rules in Code/rdegges/site\n')
+      },
+    )
+  })
+
+  test(`work=${work}: apply on a HOME with no ~/AGENTS.md creates none`, () => {
+    applied(work, () => {}, (home, pass) => {
+      assert.throws(() => lstatSync(join(home, 'AGENTS.md')), { code: 'ENOENT' }, `pass ${pass}: apply created ~/AGENTS.md`)
+    })
   })
 
   test(`work=${work}: Codex carries the Navia standing exception word for word`, () => {
