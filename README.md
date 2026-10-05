@@ -119,6 +119,7 @@ The only per-machine step is `cf auth login`. `cf` keeps its own credentials, ou
 - **Codex rules** — `~/.codex/AGENTS.md` is rendered from
   `dot_claude/CLAUDE.md.tmpl` with `reader=codex` (`dot_codex/AGENTS.md.tmpl`),
   so Claude Code and Codex share one set of global rules.
+  `.chezmoiremove` deletes the old `~/AGENTS.md` copy.
 - **herdr** — terminal multiplexer for AI agents, installed via Homebrew.
 
 `run_onchange_reconcile-agent-clis.sh.tmpl` keeps exactly one copy of `claude`

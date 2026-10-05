@@ -13,12 +13,14 @@
 // (so a shared rule cannot drift between the two); the Codex render names no
 // Claude product or Claude-only tool; Delegation is Claude-only; Work tracking
 // follows the work flag in both; and Codex carries the Navia standing
-// exception that the navia-fsa-claims skill cites. It says nothing about how
-// either agent reads the text; that needs a live session.
+// exception that the navia-fsa-claims skill cites. It also proves the old
+// ~/AGENTS.md stays retired: .chezmoiremove lists it, and no source entry
+// renders a file there. It says nothing about how either agent reads the
+// text; that needs a live session.
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -45,6 +47,22 @@ function render(target, work) {
   }
 }
 
+function managed(work) {
+  const home = mkdtempSync(join(tmpdir(), 'agents-md-'))
+  try {
+    const r = spawnSync(
+      'chezmoi',
+      ['--source', SOURCE, '--destination', home, '--override-data', JSON.stringify({ work }), 'managed'],
+      { encoding: 'utf8', env: { PATH: process.env.PATH, HOME: home } },
+    )
+    assert.ifError(r.error)
+    assert.equal(r.status, 0, `chezmoi managed (work=${work}) exited ${r.status}: ${r.stderr}`)
+    return r.stdout.split('\n')
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+}
+
 function withoutDelegation(text) {
   return text.replace(/^## Delegation \(work machine\)\n[\s\S]*?(?=^## )/m, '')
 }
@@ -58,6 +76,11 @@ function sentences(text) {
     .filter(Boolean)
     .flatMap((l) => l.split(/(?<=[.!?])\s+(?=[A-Z*`"~])/))
 }
+
+test('.chezmoiremove retires the top-level ~/AGENTS.md', () => {
+  const lines = readFileSync(join(SOURCE, '.chezmoiremove'), 'utf8').split('\n')
+  assert.ok(lines.includes('AGENTS.md'))
+})
 
 for (const work of [false, true]) {
   const claude = () => render('.claude/CLAUDE.md', work)
@@ -105,6 +128,13 @@ for (const work of [false, true]) {
   test(`work=${work}: Work tracking renders in both targets only on a work machine`, () => {
     assert.equal(claude().includes(WORK_TRACKING), work)
     assert.equal(codex().includes(WORK_TRACKING), work)
+  })
+
+  test(`work=${work}: no source entry renders a top-level ~/AGENTS.md`, () => {
+    const targets = managed(work)
+    // A real target proves the list is not empty for some unrelated reason.
+    assert.ok(targets.includes('.codex/AGENTS.md'), 'chezmoi managed does not list .codex/AGENTS.md')
+    assert.ok(!targets.includes('AGENTS.md'))
   })
 
   test(`work=${work}: Codex carries the Navia standing exception word for word`, () => {

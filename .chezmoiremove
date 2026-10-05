@@ -1,3 +1,7 @@
 .claude/agents/vault-archivist.md
 .claude/agents/vault-librarian.md
 .claude/skills/hermetic-tests
+{{/* Codex reads ~/.codex/AGENTS.md now. ~/AGENTS.md was a stale copy that
+     Claude Code also loads as project rules anywhere under ~, and it says it
+     wins on conflict. The pattern matches only the file at the top of ~. */}}
+AGENTS.md
