@@ -24,7 +24,7 @@ My words, used loosely in prompts. Use them back to me; correct me if I seem to 
 
 - Run every project command (tests, one-offs, installs) in Docker with the latest official image; never run `uv`, `npm`, `go`, etc. on the host. If Docker is down, check Docker Desktop first.
 - Add dependencies with the package manager's add command inside the project's Docker wrapper (`uv add <pkg>`, `pnpm add <pkg>`, `go get <mod>@latest`) so the current version is resolved for you. Never hand-write a version into a manifest from memory.
-- Never gate a next step on a piped command (`cmd | tail && next`): capture to a file and test `$?`, or `set -o pipefail`.
+- Never gate a next step on a piped command (`cmd | tail && next`): capture to a file and test `$?`, or `set -o pipefail`. Never let a write depend on an earlier `cd`, in the same command or a previous one: name the target with absolute paths or `git -C <path>`, or, where a `cd` is unavoidable, write `cd <path> || exit 1`. `set -e` is no guard: it is off inside `&&`/`||` lists and `if` tests, and the Bash tool runs every command inside one.
 - GitHub for hosting, `gh` for everything GitHub, GitHub Actions for CI. After a push, watch the checks with `gh` and fix what breaks. "Zero checks reported" is its own state, never green and never pending-forever.
 - Production deploys go to Render via blueprints (https://render.com/docs/blueprint-spec) unless the project already uses something else; watch deploys with the `render` CLI.
 - Dev toolchains come from `asdf`. Dotfiles are chezmoi-managed (`~/.local/share/chezmoi`, github.com/rdegges/dotfiles); edit the source, then apply, never the live file.
