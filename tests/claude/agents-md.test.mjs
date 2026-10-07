@@ -17,7 +17,10 @@
 // ~/AGENTS.md stays retired: rendered .chezmoiremove lists it, no source entry
 // renders a file there, and a real apply (twice) deletes a stale file or
 // symlink there while every nested project AGENTS.md survives. It says nothing about how either agent reads the
-// text; that needs a live session.
+// text; that needs a live session. The gate checks below prove Codex gets the
+// open-a-PR-and-stop rule in place of Claude's gate machinery, Claude keeps
+// that machinery, and an apply deletes only the top-level
+// ~/.codex/agents/*.toml copies.
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -27,7 +30,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 const SOURCE = new URL('../../', import.meta.url).pathname
-const CLAUDE_ONLY = ['switch_browser', 'WebFetch', 'WebSearch', 'codex-computer-use', 'Bash tool', 'mcp__']
+const CLAUDE_ONLY = ['switch_browser', 'WebFetch', 'WebSearch', 'codex-computer-use', 'Bash tool', 'mcp__', 'acceptance-gate', 'tester', 'red-team-reviewer', 'bdfl', 'planner']
 const DELEGATION = '## Delegation (work machine)'
 const WORK_TRACKING = '## Work tracking (work machine)'
 
@@ -66,6 +69,12 @@ function managed(work) {
 
 function withoutDelegation(text) {
   return text.replace(/^## Delegation \(work machine\)\n[\s\S]*?(?=^## )/m, '')
+}
+
+// Codex swaps both gate bullets whole, so none of their sentences is shared,
+// even the ones that name no Claude-only tool.
+function withoutGates(text) {
+  return text.replace(/^- (Non-trivial changes merge only when|Every plan goes through) .*\n/gm, '')
 }
 
 // Lines, less list markers, cut at sentence ends. A wrong cut only makes the
@@ -148,7 +157,7 @@ for (const work of [false, true]) {
 
   test(`work=${work}: every shared Claude sentence appears word for word in Codex`, () => {
     const c = codex()
-    const shared = sentences(withoutDelegation(claude())).filter(
+    const shared = sentences(withoutGates(withoutDelegation(claude()))).filter(
       (s) => !/claude/i.test(s) && !CLAUDE_ONLY.some((t) => s.includes(t)),
     )
     assert.ok(shared.length > 40, `only ${shared.length} shared sentences found`)
@@ -222,6 +231,75 @@ for (const work of [false, true]) {
     const m = claude().match(/Standing exception: while you follow the `navia-fsa-claims` skill[^\n]*?needs my confirmation\./)
     assert.ok(m, 'no Navia standing exception in the Claude render')
     assert.ok(codex().includes(m[0]))
+  })
+}
+
+// Gates. Codex runs no review gates: it gets one open-a-PR-and-stop rule where
+// Claude has the gate bullets, and chezmoi deletes its unmanaged agent copies.
+const CODEX_PR_RULE = '- Never run review gates or merge a PR. Finish on a branch, open the PR with `gh`, state what you verified (each command and its result), and stop. The PR merges only after a separate review gate passes.\n'
+const CLAUDE_GATES = [
+  '`verification-gates` skill.\n- Non-trivial changes merge only when the `acceptance-gate` workflow (tester, then `red-team-reviewer`, then `bdfl`, in one call) returns APPROVE, or APPROVE WITH CONDITIONS once every condition has landed.',
+  'Never run those gates one at a time.',
+  '\n- Every plan goes through the `bdfl` agent too. On every path, honor its verdict: never merge over REVISE or REJECT, and relay its guidance verbatim. Multi-PR work goes through the `planner` agent first.\n\n## Vault and sessions\n',
+  "instead. Only exception: the tester agent's Docker Playwright runs as defined in tester.md (the viewport/color-scheme matrix, and the whole web pass when Chrome is unreachable); the stop-and-wait rule below does not apply to it. Reading a public page",
+]
+const AGENT_COPIES = ['architect', 'bdfl', 'planner', 'red-team-reviewer', 'tester']
+
+test('.chezmoiremove deletes the Codex agent copies once rendered', () => {
+  const home = mkdtempSync(join(tmpdir(), 'agents-md-'))
+  try {
+    const r = spawnSync(
+      'chezmoi',
+      ['--source', SOURCE, '--destination', home, 'execute-template'],
+      { encoding: 'utf8', input: readFileSync(join(SOURCE, '.chezmoiremove'), 'utf8'), env: { PATH: process.env.PATH, HOME: home } },
+    )
+    assert.ifError(r.error)
+    assert.equal(r.status, 0, `chezmoi execute-template exited ${r.status}: ${r.stderr}`)
+    assert.ok(r.stdout.split('\n').includes('.codex/agents/*.toml'), JSON.stringify(r.stdout))
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+})
+
+for (const work of [false, true]) {
+  const claude = () => render('.claude/CLAUDE.md', work)
+  const codex = () => render('.codex/AGENTS.md', work)
+
+  test(`work=${work}: Codex gets the PR rule in place of the gate bullets`, () => {
+    const cx = codex()
+    assert.ok(cx.includes('`verification-gates` skill.\n' + CODEX_PR_RULE + '\n## Vault and sessions\n'), 'Codex render lacks the PR rule in place')
+    assert.ok(cx.includes('or Computer Use instead. Reading a public page with web search is not a browser task.'))
+    for (const t of ['acceptance-gate', 'tester.md', 'red-team-reviewer', 'bdfl', 'planner']) assert.ok(!cx.includes(t), `Codex render contains ${t}`)
+  })
+
+  test(`work=${work}: Claude keeps the gate bullets and the tester exception`, () => {
+    const cl = claude()
+    for (const t of CLAUDE_GATES) assert.ok(cl.includes(t), `Claude render lacks ${JSON.stringify(t.slice(0, 60))}`)
+    assert.ok(!cl.includes(CODEX_PR_RULE), 'Claude render contains the Codex PR rule')
+  })
+
+  test(`work=${work}: apply deletes ~/.codex/agents/*.toml and keeps the rest of ~/.codex`, () => {
+    applied(
+      work,
+      (home) => {
+        mkdirSync(join(home, '.codex/agents/nested'), { recursive: true })
+        for (const n of AGENT_COPIES) writeFileSync(join(home, '.codex/agents', `${n}.toml`), `name = "${n}"\n`)
+        writeFileSync(join(home, '.codex/agents/notes.md'), 'mine\n')
+        writeFileSync(join(home, '.codex/agents/nested/keep.toml'), 'mine\n')
+        writeFileSync(join(home, '.codex/AGENTS.md'), 'stale\n')
+        writeFileSync(join(home, '.codex/config.toml'), 'stale\n')
+      },
+      (home, pass) => {
+        for (const n of AGENT_COPIES) {
+          assert.throws(() => lstatSync(join(home, '.codex/agents', `${n}.toml`)), { code: 'ENOENT' }, `pass ${pass}: ${n}.toml survived`)
+        }
+        assert.ok(lstatSync(join(home, '.codex/agents')).isDirectory(), `pass ${pass}: ~/.codex/agents is gone`)
+        assert.equal(readFileSync(join(home, '.codex/agents/notes.md'), 'utf8'), 'mine\n', `pass ${pass}: notes.md changed`)
+        assert.equal(readFileSync(join(home, '.codex/agents/nested/keep.toml'), 'utf8'), 'mine\n', `pass ${pass}: nested .toml changed`)
+        assert.ok(readFileSync(join(home, '.codex/AGENTS.md'), 'utf8').startsWith('# Global AGENTS.md'), `pass ${pass}: ~/.codex/AGENTS.md not rendered`)
+        assert.equal(readFileSync(join(home, '.codex/config.toml'), 'utf8'), readFileSync(join(SOURCE, 'dot_codex/config.toml'), 'utf8'), `pass ${pass}: ~/.codex/config.toml not applied`)
+      },
+    )
   })
 }
 

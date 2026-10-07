@@ -5,3 +5,8 @@
      Claude Code also loads as project rules anywhere under ~, and it says it
      wins on conflict. The pattern matches only the file at the top of ~. */}}
 AGENTS.md
+
+{{/* Codex runs no review gates, so its unmanaged copies of the Claude agents
+     only drift. The source tree has no .codex/agents, and `*` stops at `/`, so
+     this deletes only the top-level .toml files and leaves the directory. */}}
+.codex/agents/*.toml
