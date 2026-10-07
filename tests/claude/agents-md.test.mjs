@@ -272,3 +272,23 @@ for (const work of [false, true]) {
     for (const r of [claude(), codex()]) assert.doesNotMatch(r, /\{\{|\}\}|\$codex|<no value>/)
   })
 }
+
+// Agent worktrees: Claude's harness parks them under <repo>/.claude/worktrees,
+// so the porcelain exception and the cleanup rule are Claude-only. Codex keeps
+// the plain porcelain rule word for word.
+const PORCELAIN = 'Launch the next gate only when `git status --porcelain` is empty, and name any leftover path to me.'
+const PORCELAIN_CLAUDE = 'Launch the next gate only when `git status --porcelain` is empty or `git status --porcelain -uall` prints only `?? .claude/worktrees/agent-*/` lines, and name any leftover path to me.'
+const CLEANUP = 'After a PR merges or is abandoned, clean up every worktree'
+
+for (const work of [false, true]) {
+  test(`work=${work}: agent worktree rules render for Claude only`, () => {
+    const cl = render('.claude/CLAUDE.md', work)
+    const cx = render('.codex/AGENTS.md', work)
+    assert.ok(cl.includes(PORCELAIN_CLAUDE), 'Claude render lacks the porcelain exception')
+    assert.ok(cl.includes(CLEANUP), 'Claude render lacks the worktree cleanup rule')
+    assert.ok(cl.includes('name a dirty or unmerged one to me and never force-remove it.'))
+    assert.ok(cx.includes(PORCELAIN),'Codex render lost the plain porcelain rule')
+    assert.ok(!cx.includes(CLEANUP), 'Codex render contains the worktree cleanup rule')
+    assert.ok(!cx.includes('.claude/worktrees'))
+  })
+}
