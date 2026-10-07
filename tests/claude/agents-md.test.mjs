@@ -77,6 +77,11 @@ function withoutGates(text) {
   return text.replace(/^- (Non-trivial changes merge only when|Every plan goes through) .*\n/gm, '')
 }
 
+// The worktree cleanup bullet is Claude-only: Codex has no harness worktrees.
+function withoutCleanup(text) {
+  return text.replace(/^- After a PR merges or is abandoned, clean up the worktrees[^\n]*\n/m, '')
+}
+
 // Lines, less list markers, cut at sentence ends. A wrong cut only makes the
 // pieces smaller, which keeps the word-for-word check sound.
 function sentences(text) {
@@ -157,7 +162,7 @@ for (const work of [false, true]) {
 
   test(`work=${work}: every shared Claude sentence appears word for word in Codex`, () => {
     const c = codex()
-    const shared = sentences(withoutGates(withoutDelegation(claude()))).filter(
+    const shared = sentences(withoutGates(withoutCleanup(withoutDelegation(claude())))).filter(
       (s) => !/claude/i.test(s) && !CLAUDE_ONLY.some((t) => s.includes(t)),
     )
     assert.ok(shared.length > 40, `only ${shared.length} shared sentences found`)
@@ -348,5 +353,37 @@ for (const work of [false, true]) {
 
   test(`work=${work}: neither render leaks template syntax`, () => {
     for (const r of [claude(), codex()]) assert.doesNotMatch(r, /\{\{|\}\}|\$codex|<no value>/)
+  })
+}
+
+// Agent worktrees: Claude's harness parks them under <repo>/.claude/worktrees,
+// so the porcelain exception and the cleanup bullet are Claude-only. Codex
+// gets neither porcelain rule: it runs no gates. Each SAFETY entry is one
+// guard; deleting any of them from the template turns this test red.
+const PORCELAIN = 'Launch the next gate only when `git status --porcelain` is empty, and name any leftover path to me.'
+const PORCELAIN_CLAUDE = 'Launch the next gate only when `git status --porcelain` is empty, or when `git status --porcelain -uall` prints only `?? .claude/worktrees/agent-*/` lines and `git -C <wt> status --porcelain` exits 0 and prints nothing in each of those worktrees, and name any leftover path to me.'
+const CLEANUP = '- After a PR merges or is abandoned, clean up the worktrees its implementer, tester, and gates reported.'
+const SAFETY = [
+  'Use the exact paths from their reports and never pick worktrees by pattern, because another agent may be working in one.',
+  'First run `git -C <repo> fetch -q origin`.',
+  'Run `git worktree remove` (never `--force`) on a worktree only when `git -C <wt> status --porcelain` exits 0 and prints nothing, and one of these holds:',
+  '`git -C <wt> merge-base --is-ancestor HEAD origin/<base>` passes',
+  'or `gh pr view <n> --json state,headRefOid` shows `MERGED` and `headRefOid` equals `git -C <wt> rev-parse HEAD`.',
+  'Then run `git worktree prune` and delete the branches those agents created.',
+  'Use `git branch -d`, or `git branch -D` only for a branch whose tip equals that merged `headRefOid`.',
+  'Name to me any worktree that is dirty, unmerged, or orphaned (a dir under `.claude/worktrees` that `git worktree list` does not show), and any branch that `git branch -d` refuses and `git branch -D` is not allowed to delete, and leave them in place.',
+]
+
+for (const work of [false, true]) {
+  test(`work=${work}: agent worktree rules render for Claude only`, () => {
+    const cl = render('.claude/CLAUDE.md', work)
+    const cx = render('.codex/AGENTS.md', work)
+    assert.ok(cl.includes(PORCELAIN_CLAUDE), 'Claude render lacks the per-worktree porcelain exception')
+    assert.ok(cl.includes(`\n${CLEANUP} `), 'Claude render lacks the worktree cleanup bullet')
+    for (const s of SAFETY) assert.ok(cl.includes(s), `Claude render lost: ${s}`)
+    assert.ok(!cx.includes(PORCELAIN), 'Codex render contains the gate porcelain rule')
+    assert.ok(!cx.includes(CLEANUP), 'Codex render contains the worktree cleanup bullet')
+    assert.ok(!cx.includes('.claude/worktrees'))
+    assert.ok(!cx.includes('headRefOid'))
   })
 }
