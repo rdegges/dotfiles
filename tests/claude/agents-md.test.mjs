@@ -224,3 +224,51 @@ for (const work of [false, true]) {
     assert.ok(codex().includes(m[0]))
   })
 }
+
+// Tester additions. The checks above prove the Codex side drops Claude-only
+// text; these prove each side still says what it should, so a swapped or
+// emptied {{ if $codex }} branch cannot pass silently.
+const CODEX_ONLY = [
+  'the Codex Chrome plugin (`chrome`, which drives my real Chrome through the ChatGPT Chrome Extension)',
+  'or Computer Use instead',
+  'Reading a public page with web search is not a browser task.',
+  'none chosen: ask me which one to use.',
+  'switch to the Codex Chrome plugin.',
+  'the ChatGPT Chrome Extension installed and signed in to my ChatGPT account',
+]
+
+for (const work of [false, true]) {
+  const claude = () => render('.claude/CLAUDE.md', work)
+  const codex = () => render('.codex/AGENTS.md', work)
+
+  test(`work=${work}: each target names its own rules file in the title and precedence line`, () => {
+    const cl = claude()
+    const cx = codex()
+    assert.ok(cl.startsWith('# Global CLAUDE.md – Personal Defaults\n'), JSON.stringify(cl.slice(0, 60)))
+    assert.ok(cx.startsWith('# Global AGENTS.md – Personal Defaults\n'), JSON.stringify(cx.slice(0, 60)))
+    assert.match(cl, /Project `CLAUDE\.md` rules win on conflict\./)
+    assert.match(cx, /Project `AGENTS\.md` rules win on conflict\./)
+  })
+
+  test(`work=${work}: Claude render keeps every Claude-only tool clause`, () => {
+    const cl = claude()
+    for (const t of CLAUDE_ONLY) assert.ok(cl.includes(t), `Claude render lost ${t}`)
+    assert.ok(cl.includes('and the Bash tool runs every command inside one.'))
+    assert.ok(cl.includes('`/chrome` in Claude Code to connect or reconnect'))
+  })
+
+  test(`work=${work}: Claude render carries no Codex-only replacement text`, () => {
+    const cl = claude()
+    for (const t of CODEX_ONLY) assert.ok(!cl.includes(t), `Claude render contains ${t}`)
+  })
+
+  test(`work=${work}: Codex render carries every Codex replacement clause`, () => {
+    const cx = codex()
+    for (const t of CODEX_ONLY) assert.ok(cx.includes(t), `Codex render lacks ${t}`)
+    assert.ok(cx.includes('`set -e` is no guard: it is off inside `&&`/`||` lists and `if` tests.\n'))
+  })
+
+  test(`work=${work}: neither render leaks template syntax`, () => {
+    for (const r of [claude(), codex()]) assert.doesNotMatch(r, /\{\{|\}\}|\$codex|<no value>/)
+  })
+}
