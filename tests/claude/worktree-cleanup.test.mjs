@@ -300,7 +300,7 @@ function ruleCommand(text, re) {
 }
 const fill = (cmd, f) => cmd.replaceAll('<repo>', f.repo).replaceAll('<wt>', f.wt).replaceAll('<base>', 'main')
 
-test('gate exception: the parent repo prints the same line for a clean, dirty, or orphaned worktree; only the per-worktree status tells them apart', () => {
+test('gate exception: the parent repo prints the same line for a clean or dirty worktree; only the per-worktree status tells them apart, and it exits non-zero on an orphan', () => {
   const t = render(false)
   const { re } = porcelainGlob(t)
   const st = ruleCommand(t, /and `(git -C <wt> status --porcelain)` exits 0 and prints nothing in each of those worktrees/)
@@ -317,8 +317,13 @@ test('gate exception: the parent repo prints the same line for a clean, dirty, o
     assert.equal(dirty.out, '?? dirt.txt', 'dirty worktree keeps the gate closed')
     rmSync(join(f.wt, 'dirt.txt'))
     ok(`git -C ${f.repo} worktree remove ${f.wt} && mkdir -p ${f.wt} && echo 'gitdir: /nonexistent' > ${f.wt}/.git`)
+    // An orphan holding only its dead .git file prints NO line in the parent,
+    // so the gate exception never reaches it (and has nothing to lose there).
+    // The cleanup rule does reach it by exact path: only the exit code stops
+    // that status from reading as clean.
+    assert.equal(ok(`git -C ${f.repo} status --porcelain -uall`), '')
     const orphan = sh(fill(st, f))
-    assert.notEqual(orphan.code, 0, 'orphan: only the exit code keeps the gate closed')
+    assert.notEqual(orphan.code, 0, 'orphan: only the exit code says it is not clean')
     assert.equal(orphan.out, '')
   } finally {
     rmSync(f.root, { recursive: true, force: true })
@@ -380,6 +385,55 @@ test('squash merge, HEAD moved past headRefOid: neither removal condition holds,
     assert.notEqual(sh(fill(anc, f)).code, 0)
     assert.notEqual(ok(fill(rev, f)), headRefOid)
     assert.notEqual(ok(`git -C ${f.repo} rev-parse feat`), headRefOid, 'the -D condition fails too')
+  } finally {
+    rmSync(f.root, { recursive: true, force: true })
+  }
+})
+
+// GitHub's "Rebase and merge" rewrites the PR commits onto main, so (like a
+// squash) HEAD is never an ancestor of origin/main and only the headRefOid
+// path can clean it up.
+test('rebase merge, HEAD equals headRefOid: the ancestor path fails, the headRefOid path removes it, and -D is needed for the branch', () => {
+  const t = render(false)
+  const anc = ruleCommand(t, /`(git -C <wt> merge-base --is-ancestor HEAD origin\/<base>)` passes/)
+  const rev = ruleCommand(t, /`headRefOid` equals `(git -C <wt> rev-parse HEAD)`/)
+  const f = fixture()
+  try {
+    const headRefOid = ok(`git -C ${f.repo} rev-parse origin/feat`)
+    ok(`cd gh && ${E} commit -q --allow-empty -m 'other PR' && git push -q origin HEAD:main`, f.root)
+    ok(`cd gh && git fetch -q origin && git switch -q -c tmp origin/feat && ${E} rebase -q main && git switch -q main && git merge -q --ff-only tmp && git push -q origin HEAD:main`, f.root)
+    ok(`git -C ${f.repo} push -q origin --delete feat && git -C ${f.repo} fetch -q --prune origin`)
+    assert.equal(ok(`git -C ${f.wt} diff HEAD origin/main -- f`), '', 'the rebase landed the PR content')
+    assert.notEqual(sh(fill(anc, f)).code, 0, 'rebased commits are new SHAs')
+    assert.equal(ok(fill(rev, f)), headRefOid)
+    assert.equal(ok(`git -C ${f.wt} status --porcelain`), '')
+    ok(`git -C ${f.repo} worktree remove ${f.wt}`)
+    assert.notEqual(sh(`git -C ${f.repo} branch -d feat`).code, 0)
+    assert.equal(ok(`git -C ${f.repo} rev-parse feat`), headRefOid)
+    ok(`git -C ${f.repo} branch -D feat`)
+  } finally {
+    rmSync(f.root, { recursive: true, force: true })
+  }
+})
+
+// Pins a git behavior the rule leans on: `status --porcelain` hides ignored
+// files, and `worktree remove` WITHOUT --force deletes them. So "clean" in
+// the rule does not protect an ignored .env or local build output.
+test('ignored files: status reads clean and worktree remove without --force deletes them', () => {
+  const f = fixture()
+  try {
+    mergeCommit(f)
+    ok(`git -C ${f.repo} fetch -q origin`)
+    // A repo-local ignore (info/exclude), so the fixture needs no tracked .gitignore.
+    const exclude = ok(`git -C ${f.wt} rev-parse --path-format=absolute --git-path info/exclude`)
+    mkdirSync(join(exclude, '..'), { recursive: true })
+    writeFileSync(exclude, '.env\n')
+    writeFileSync(join(f.wt, '.env'), 'SECRET=1')
+    assert.equal(ok(`git -C ${f.wt} status --porcelain --ignored`), '!! .env')
+    assert.equal(ok(`git -C ${f.wt} status --porcelain`), '', 'the rule reads this worktree as clean')
+    assert.equal(isAncestor(f.wt, 'origin/main'), 0)
+    ok(`git -C ${f.repo} worktree remove ${f.wt}`)
+    assert.equal(existsSync(join(f.wt, '.env')), false, 'the ignored file is gone')
   } finally {
     rmSync(f.root, { recursive: true, force: true })
   }
