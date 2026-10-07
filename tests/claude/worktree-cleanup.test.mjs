@@ -11,14 +11,18 @@
 // with a bare origin: a harness worktree under .claude/worktrees/agent-<id>
 // makes plain `git status --porcelain` non-empty (so the exception is needed),
 // and `-uall` prints exactly one glob-matching line per worktree no matter
-// what is inside it, while any other untracked path, an orphaned harness dir,
-// or a look-alike file prints a line outside the glob (so the gate stays
-// closed). After a merge-commit merge, the cleanup steps as written remove the
-// worktree without --force and delete both branches with -d. It also pins the
-// edges the rule leaves to judgment: the ancestor check against a stale local
-// base or after a squash merge says "unmerged", status on an orphaned dir
-// exits non-zero with EMPTY stdout, `worktree remove` refuses a dirty tree,
-// and `branch -d` refuses while the worktree still holds the branch.
+// what is inside it (so the exception must also run each worktree's own
+// status, which tells clean from dirty or orphaned), while any other untracked
+// path, an orphaned harness dir, or a look-alike file prints a line outside
+// the glob (so the gate stays closed). After a merge-commit merge, the cleanup
+// steps as written remove the worktree without --force and delete both
+// branches with -d; the rule's fetch plus origin/<base> says merged while
+// local main is stale. After a squash merge, the headRefOid path removes the
+// worktree without --force and deletes the branch with -D, and does not apply
+// once HEAD has moved past the PR head. It also pins the edges: the ancestor
+// check after a squash merge says "unmerged", status on an orphaned dir exits
+// non-zero with EMPTY stdout, `worktree remove` refuses a dirty tree, and
+// `branch -d` refuses while the worktree still holds the branch.
 // It says nothing about how Claude reads the text, or whether Claude Code
 // still names its worktrees .claude/worktrees/agent-<id>.
 
@@ -103,7 +107,7 @@ for (const work of [false, true]) {
   test(`work=${work}: Claude render names the cleanup steps this file runs`, () => {
     const t = render(work).replace(/\s*\n\s*/g, ' ')
     porcelainGlob(t)
-    for (const s of ['`git -C <wt> status --porcelain`', '`git merge-base --is-ancestor`', '`git worktree remove`', '`git worktree prune`', '`git branch -d`', 'never force-remove it']) {
+    for (const s of ['`git -C <wt> status --porcelain` exits 0 and prints nothing', '`git -C <repo> fetch -q origin`', '`git -C <wt> merge-base --is-ancestor HEAD origin/<base>`', '`git worktree remove` (never `--force`)', '`gh pr view <n> --json state,headRefOid`', '`git -C <wt> rev-parse HEAD`', '`git worktree prune`', '`git branch -d`', '`git branch -D`']) {
       assert.ok(t.includes(s), `Claude render lost ${s}`)
     }
   })
@@ -151,8 +155,8 @@ test('an orphaned harness dir prints file lines outside the glob, and its status
     ok(`git -C ${f.repo} worktree remove --force ${f.wt} && mkdir -p ${f.wt} && echo 'gitdir: /nonexistent' > ${f.wt}/.git && echo x > ${f.wt}/f`)
     const outside = ok(`git -C ${f.repo} status --porcelain -uall`).split('\n').filter((l) => !re.test(l))
     assert.ok(outside.length > 0, 'orphaned dir slipped through the glob')
-    // The cleanup rule says "if `git -C <wt> status --porcelain` is empty":
-    // on an orphan the stdout IS empty, only the exit code says otherwise.
+    // On an orphan the stdout IS empty; only the exit code says otherwise,
+    // which is why the rule requires exit 0 as well as no output.
     const st = sh(`git -C ${f.wt} status --porcelain`)
     assert.notEqual(st.code, 0)
     assert.equal(st.out, '')
@@ -211,9 +215,9 @@ test('merged on GitHub: is-ancestor against stale local main says unmerged; agai
   }
 })
 
-// Pins the squash-merge gap: the content landed, but the ancestor test can
-// never pass, so every squash-merged PR's worktree goes to the user.
-test('squash merge: HEAD is never an ancestor of origin/main, so the rule names the worktree to the user', () => {
+// The content landed, but the ancestor test can never pass, which is why the
+// rule has a second path through the PR's headRefOid.
+test('squash merge: HEAD is never an ancestor of origin/main, so the ancestor path alone cannot clean it up', () => {
   const f = fixture()
   try {
     squash(f)
@@ -285,6 +289,98 @@ test('harness BLOCKED: branch -d judges <branch> against its auto-set upstream o
   }
 })
 
-test.todo('PROPOSED CONTRACT: the cleanup rule names the base ref as a fetched `origin/<base>` (not local `<base>`), so a merged worktree is not reported as unmerged')
-test.todo('PROPOSED CONTRACT: the cleanup rule handles squash merges (e.g. PR state MERGED and worktree HEAD == the PR headRefOid), or says squash-merged worktrees always go to the user')
-test.todo('PROPOSED CONTRACT: "status --porcelain is empty" also requires exit 0, so an orphaned harness dir is never read as clean')
+// --- Rule text run as written -----------------------------------------------
+
+// Pulls a command out of the rendered rule and fills its placeholders, so
+// these tests run what the rule says, not a copy that could drift from it.
+function ruleCommand(text, re) {
+  const m = text.match(re)
+  assert.ok(m, `Claude render lost ${re}`)
+  return m[1]
+}
+const fill = (cmd, f) => cmd.replaceAll('<repo>', f.repo).replaceAll('<wt>', f.wt).replaceAll('<base>', 'main')
+
+test('gate exception: the parent repo prints the same line for a clean, dirty, or orphaned worktree; only the per-worktree status tells them apart', () => {
+  const t = render(false)
+  const { re } = porcelainGlob(t)
+  const st = ruleCommand(t, /and `(git -C <wt> status --porcelain)` exits 0 and prints nothing in each of those worktrees/)
+  const f = fixture()
+  try {
+    const line = `?? .claude/worktrees/agent-${f.id}/`
+    assert.equal(ok(`git -C ${f.repo} status --porcelain -uall`), line)
+    assert.match(line, re)
+    assert.deepEqual([sh(fill(st, f)).code, sh(fill(st, f)).out], [0, ''], 'clean worktree opens the gate')
+    writeFileSync(join(f.wt, 'dirt.txt'), 'x')
+    assert.equal(ok(`git -C ${f.repo} status --porcelain -uall`), line, 'the parent repo cannot see dirt inside a worktree')
+    const dirty = sh(fill(st, f))
+    assert.equal(dirty.code, 0)
+    assert.equal(dirty.out, '?? dirt.txt', 'dirty worktree keeps the gate closed')
+    rmSync(join(f.wt, 'dirt.txt'))
+    ok(`git -C ${f.repo} worktree remove ${f.wt} && mkdir -p ${f.wt} && echo 'gitdir: /nonexistent' > ${f.wt}/.git`)
+    const orphan = sh(fill(st, f))
+    assert.notEqual(orphan.code, 0, 'orphan: only the exit code keeps the gate closed')
+    assert.equal(orphan.out, '')
+  } finally {
+    rmSync(f.root, { recursive: true, force: true })
+  }
+})
+
+test('merged on GitHub: the rule\'s fetch and is-ancestor commands, run as written, say merged while local main is stale', () => {
+  const t = render(false)
+  const fetch = ruleCommand(t, /First run `(git -C <repo> fetch -q origin)`\./)
+  const anc = ruleCommand(t, /`(git -C <wt> merge-base --is-ancestor HEAD origin\/<base>)` passes/)
+  const f = fixture()
+  try {
+    mergeCommit(f)
+    assert.notEqual(sh(fill(anc, f)).code, 0, 'not fetched yet')
+    ok(fill(fetch, f))
+    assert.equal(isAncestor(f.wt, 'main'), 1, 'local main is still stale')
+    assert.equal(sh(fill(anc, f)).code, 0)
+  } finally {
+    rmSync(f.root, { recursive: true, force: true })
+  }
+})
+
+// headRefOid is the PR head SHA GitHub records: here, the pushed origin/feat.
+// GitHub's branch auto-delete then removes feat from origin.
+test('squash merge, HEAD equals headRefOid: worktree remove works without --force, and branch -D deletes what -d refuses', () => {
+  const rev = ruleCommand(render(false), /`headRefOid` equals `(git -C <wt> rev-parse HEAD)`/)
+  const f = fixture()
+  try {
+    const headRefOid = ok(`git -C ${f.repo} rev-parse origin/feat`)
+    squash(f)
+    ok(`git -C ${f.repo} push -q origin --delete feat && git -C ${f.repo} fetch -q --prune origin`)
+    assert.equal(isAncestor(f.wt, 'origin/main'), 1, 'the ancestor path does not apply')
+    assert.equal(ok(fill(rev, f)), headRefOid)
+    assert.equal(ok(`git -C ${f.wt} status --porcelain`), '')
+    ok(`git -C ${f.repo} worktree remove ${f.wt}`)
+    ok(`git -C ${f.repo} worktree prune`)
+    assert.notEqual(sh(`git -C ${f.repo} branch -d feat`).code, 0, '-d refuses a squash-merged branch')
+    assert.equal(ok(`git -C ${f.repo} rev-parse feat`), headRefOid, 'tip equals headRefOid, so -D is allowed')
+    ok(`git -C ${f.repo} branch -D feat`)
+    ok(`git -C ${f.repo} branch -d worktree-agent-${f.id}`)
+    assert.equal(existsSync(f.wt), false)
+    assert.equal(ok(`git -C ${f.repo} branch --list feat worktree-agent-${f.id}`), '')
+  } finally {
+    rmSync(f.root, { recursive: true, force: true })
+  }
+})
+
+test('squash merge, HEAD moved past headRefOid: neither removal condition holds, so the worktree stays', () => {
+  const t = render(false)
+  const anc = ruleCommand(t, /`(git -C <wt> merge-base --is-ancestor HEAD origin\/<base>)` passes/)
+  const rev = ruleCommand(t, /`headRefOid` equals `(git -C <wt> rev-parse HEAD)`/)
+  const f = fixture()
+  try {
+    const headRefOid = ok(`git -C ${f.repo} rev-parse origin/feat`)
+    squash(f)
+    ok(`git -C ${f.repo} fetch -q origin`)
+    ok(`${E} -C ${f.wt} commit -q --allow-empty -m later`)
+    assert.equal(ok(`git -C ${f.wt} status --porcelain`), '', 'clean, so only the merge conditions protect it')
+    assert.notEqual(sh(fill(anc, f)).code, 0)
+    assert.notEqual(ok(fill(rev, f)), headRefOid)
+    assert.notEqual(ok(`git -C ${f.repo} rev-parse feat`), headRefOid, 'the -D condition fails too')
+  } finally {
+    rmSync(f.root, { recursive: true, force: true })
+  }
+})
