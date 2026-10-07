@@ -24,7 +24,7 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -385,5 +385,98 @@ for (const work of [false, true]) {
     assert.ok(!cx.includes(CLEANUP), 'Codex render contains the worktree cleanup bullet')
     assert.ok(!cx.includes('.claude/worktrees'))
     assert.ok(!cx.includes('headRefOid'))
+  })
+}
+
+// Tester additions for the Codex PR rule (PR #38). The rule replaces only the
+// gate bullets: the rules Codex still needs to produce a trustworthy PR must
+// survive the swap, and the agent-copy removal must cover every agent this
+// source tree manages, not only the five the seed above names.
+const CODEX_KEEPS = [
+  '- Never say "done", "should work", or "tests pass" without fresh evidence from a command you ran in this session.\n',
+  '- A gate must state what a pass proves and fail closed on "cannot evaluate" (tool missing, empty input, API cap). Details: `verification-gates` skill.\n',
+  '- Three-strike rule: after 3 failed fixes, stop and question the design with me before fix #4.',
+  '- GitHub for hosting, `gh` for everything GitHub, GitHub Actions for CI. After a push, watch the checks with `gh` and fix what breaks.',
+]
+
+const SOURCE_AGENTS = readdirSync(join(SOURCE, 'dot_claude/agents'))
+  .filter((f) => f.endsWith('.md'))
+  .map((f) => f.slice(0, -3))
+
+for (const work of [false, true]) {
+  const codex = () => render('.codex/AGENTS.md', work)
+
+  test(`work=${work}: Codex keeps the evidence, fail-closed, three-strike, and CI-watch rules`, () => {
+    const cx = codex()
+    for (const t of CODEX_KEEPS) assert.ok(cx.includes(t), `Codex render lost: ${t.trim()}`)
+  })
+
+  test(`work=${work}: Codex "Verification and gates" is exactly evidence, fail-closed, PR rule`, () => {
+    const m = codex().match(/^## Verification and gates\n\n([\s\S]*?)\n## /m)
+    assert.ok(m, 'no Verification and gates section in the Codex render')
+    assert.equal(m[1], CODEX_KEEPS[0] + CODEX_KEEPS[1] + CODEX_PR_RULE)
+  })
+
+  test(`work=${work}: apply deletes a Codex .toml copy of every agent the source manages`, () => {
+    assert.ok(SOURCE_AGENTS.length >= 8, `only ${SOURCE_AGENTS.length} agents under dot_claude/agents`)
+    applied(
+      work,
+      (home) => {
+        mkdirSync(join(home, '.codex/agents'), { recursive: true })
+        for (const n of SOURCE_AGENTS) writeFileSync(join(home, '.codex/agents', `${n}.toml`), `name = "${n}"\n`)
+      },
+      (home, pass) => {
+        assert.deepEqual(readdirSync(join(home, '.codex/agents')), [], `pass ${pass}: agent copies survived`)
+        for (const n of SOURCE_AGENTS) assert.ok(existsSync(join(home, '.claude/agents', `${n}.md`)), `pass ${pass}: ~/.claude/agents/${n}.md not applied`)
+      },
+    )
+  })
+
+  // Observed chezmoi behavior, pinned so a change to it is noticed: the
+  // pattern follows a symlinked ~/.codex/agents into its target and deletes
+  // .toml files there, and it deletes a directory named *.toml with its
+  // contents. Neither shape exists on the real machine today (eight regular
+  // files); this records the blast radius the .chezmoiremove comment omits.
+  test(`work=${work}: .codex/agents/*.toml blast radius (symlinked dir, *.toml dir)`, () => {
+    applied(
+      work,
+      (home) => {
+        mkdirSync(join(home, 'elsewhere'), { recursive: true })
+        writeFileSync(join(home, 'elsewhere/mine.toml'), 'mine\n')
+        writeFileSync(join(home, 'elsewhere/keep.md'), 'mine\n')
+        mkdirSync(join(home, '.codex'), { recursive: true })
+        symlinkSync(join(home, 'elsewhere'), join(home, '.codex/agents'))
+      },
+      (home, pass) => {
+        assert.ok(lstatSync(join(home, '.codex/agents')).isSymbolicLink(), `pass ${pass}: symlink replaced`)
+        assert.ok(!existsSync(join(home, 'elsewhere/mine.toml')), `pass ${pass}: chezmoi no longer follows the symlink`)
+        assert.equal(readFileSync(join(home, 'elsewhere/keep.md'), 'utf8'), 'mine\n')
+      },
+    )
+    applied(
+      work,
+      (home) => {
+        mkdirSync(join(home, '.codex/agents/dir.toml'), { recursive: true })
+        writeFileSync(join(home, '.codex/agents/dir.toml/inner'), 'mine\n')
+      },
+      (home, pass) => {
+        assert.ok(!existsSync(join(home, '.codex/agents/dir.toml')), `pass ${pass}: chezmoi no longer removes a *.toml directory`)
+      },
+    )
+  })
+
+  // Follow-ups the PR left open. These are proposals, not agreed contracts:
+  // they stay todo so they do not fail the suite.
+  test(`PROPOSED CONTRACT: work=${work}: Codex render names no Claude-plugin-only pkms agents or slash skills`, { todo: true }, () => {
+    const cx = codex()
+    for (const t of ['pkms:librarian', 'pkms:archivist', '/pkms:process-inbox']) assert.ok(!cx.includes(t), `Codex render contains ${t}`)
+  })
+
+  test(`PROPOSED CONTRACT: work=${work}: Codex three-strike rule does not count gate REVISE rounds Codex never sees`, { todo: true }, () => {
+    assert.ok(!codex().includes('Gate REVISE rounds'))
+  })
+
+  test(`PROPOSED CONTRACT: work=${work}: Codex PR rule says the branch is not the default branch`, { todo: true }, () => {
+    assert.match(codex(), /Never run review gates or merge a PR\. Finish on a (non-default|feature) branch/)
   })
 }
