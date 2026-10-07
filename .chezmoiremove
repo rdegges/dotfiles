@@ -7,6 +7,8 @@
 AGENTS.md
 
 {{/* Codex runs no review gates, so its unmanaged copies of the Claude agents
-     only drift. The source tree has no .codex/agents, and `*` stops at `/`, so
-     this deletes only the top-level .toml files and leaves the directory. */}}
+     only drift. chezmoi deletes whatever this glob matches on every apply on
+     every machine, so any future ~/.codex/agents/*.toml goes too, by design.
+     A directory named *.toml goes with its contents. If ~/.codex/agents is a
+     symlink, chezmoi follows it and deletes the .toml files in its target. */}}
 .codex/agents/*.toml

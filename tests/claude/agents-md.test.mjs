@@ -30,7 +30,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 const SOURCE = new URL('../../', import.meta.url).pathname
-const CLAUDE_ONLY = ['switch_browser', 'WebFetch', 'WebSearch', 'codex-computer-use', 'Bash tool', 'mcp__', 'acceptance-gate', 'tester', 'red-team-reviewer', 'bdfl', 'planner']
+const CLAUDE_ONLY = ['switch_browser', 'WebFetch', 'WebSearch', 'codex-computer-use', 'Bash tool', 'mcp__', 'acceptance-gate', 'tester', 'red-team-reviewer', 'bdfl', 'planner', 'Gate REVISE rounds']
 const DELEGATION = '## Delegation (work machine)'
 const WORK_TRACKING = '## Work tracking (work machine)'
 
@@ -241,7 +241,7 @@ for (const work of [false, true]) {
 
 // Gates. Codex runs no review gates: it gets one open-a-PR-and-stop rule where
 // Claude has the gate bullets, and chezmoi deletes its unmanaged agent copies.
-const CODEX_PR_RULE = '- Never run review gates or merge a PR. Finish on a branch, open the PR with `gh`, state what you verified (each command and its result), and stop. The PR merges only after a separate review gate passes.\n'
+const CODEX_PR_RULE = '- Never run review gates or merge a PR. Finish on a non-default branch, open the PR with `gh`, watch its checks, state what you verified (each command and its result), and stop. The PR merges only after a separate review gate passes. When the prompt asks you only to review, or to leave your changes uncommitted, do exactly that and skip the branch and PR.\n'
 const CLAUDE_GATES = [
   '`verification-gates` skill.\n- Non-trivial changes merge only when the `acceptance-gate` workflow (tester, then `red-team-reviewer`, then `bdfl`, in one call) returns APPROVE, or APPROVE WITH CONDITIONS once every condition has landed.',
   'Never run those gates one at a time.',
@@ -465,18 +465,22 @@ for (const work of [false, true]) {
     )
   })
 
-  // Follow-ups the PR left open. These are proposals, not agreed contracts:
-  // they stay todo so they do not fail the suite.
+  test(`work=${work}: Codex three-strike rule counts red CI runs, not gate REVISE rounds Codex never sees`, () => {
+    const cx = codex()
+    assert.ok(!cx.includes('Gate REVISE rounds'))
+    assert.ok(cx.includes('before fix #4. Red CI runs count as failed fixes when they hit the same defect class;'))
+  })
+
+  test(`work=${work}: Codex PR rule says the branch is not the default branch and honors review-only prompts`, () => {
+    const cx = codex()
+    assert.match(cx, /Never run review gates or merge a PR\. Finish on a non-default branch/)
+    assert.ok(cx.includes('When the prompt asks you only to review, or to leave your changes uncommitted'))
+  })
+
+  // Follow-up the PR left open. It is a proposal, not an agreed contract: it
+  // stays todo so it does not fail the suite.
   test(`PROPOSED CONTRACT: work=${work}: Codex render names no Claude-plugin-only pkms agents or slash skills`, { todo: true }, () => {
     const cx = codex()
     for (const t of ['pkms:librarian', 'pkms:archivist', '/pkms:process-inbox']) assert.ok(!cx.includes(t), `Codex render contains ${t}`)
-  })
-
-  test(`PROPOSED CONTRACT: work=${work}: Codex three-strike rule does not count gate REVISE rounds Codex never sees`, { todo: true }, () => {
-    assert.ok(!codex().includes('Gate REVISE rounds'))
-  })
-
-  test(`PROPOSED CONTRACT: work=${work}: Codex PR rule says the branch is not the default branch`, { todo: true }, () => {
-    assert.match(codex(), /Never run review gates or merge a PR\. Finish on a (non-default|feature) branch/)
   })
 }
