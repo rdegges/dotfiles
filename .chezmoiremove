@@ -5,3 +5,10 @@
      Claude Code also loads as project rules anywhere under ~, and it says it
      wins on conflict. The pattern matches only the file at the top of ~. */}}
 AGENTS.md
+
+{{/* Codex runs no review gates, so its unmanaged copies of the Claude agents
+     only drift. chezmoi deletes whatever this glob matches on every apply on
+     every machine, so any future ~/.codex/agents/*.toml goes too, by design.
+     A directory named *.toml goes with its contents. If ~/.codex/agents is a
+     symlink, chezmoi follows it and deletes the .toml files in its target. */}}
+.codex/agents/*.toml

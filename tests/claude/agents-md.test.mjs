@@ -17,17 +17,20 @@
 // ~/AGENTS.md stays retired: rendered .chezmoiremove lists it, no source entry
 // renders a file there, and a real apply (twice) deletes a stale file or
 // symlink there while every nested project AGENTS.md survives. It says nothing about how either agent reads the
-// text; that needs a live session.
+// text; that needs a live session. The gate checks below prove Codex gets the
+// open-a-PR-and-stop rule in place of Claude's gate machinery, Claude keeps
+// that machinery, and an apply deletes only the top-level
+// ~/.codex/agents/*.toml copies.
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 const SOURCE = new URL('../../', import.meta.url).pathname
-const CLAUDE_ONLY = ['switch_browser', 'WebFetch', 'WebSearch', 'codex-computer-use', 'Bash tool', 'mcp__']
+const CLAUDE_ONLY = ['switch_browser', 'WebFetch', 'WebSearch', 'codex-computer-use', 'Bash tool', 'mcp__', 'acceptance-gate', 'tester', 'red-team-reviewer', 'bdfl', 'planner', 'Gate REVISE rounds']
 const DELEGATION = '## Delegation (work machine)'
 const WORK_TRACKING = '## Work tracking (work machine)'
 
@@ -66,6 +69,12 @@ function managed(work) {
 
 function withoutDelegation(text) {
   return text.replace(/^## Delegation \(work machine\)\n[\s\S]*?(?=^## )/m, '')
+}
+
+// Codex swaps both gate bullets whole, so none of their sentences is shared,
+// even the ones that name no Claude-only tool.
+function withoutGates(text) {
+  return text.replace(/^- (Non-trivial changes merge only when|Every plan goes through) .*\n/gm, '')
 }
 
 // The worktree cleanup bullet is Claude-only: Codex has no harness worktrees.
@@ -153,7 +162,7 @@ for (const work of [false, true]) {
 
   test(`work=${work}: every shared Claude sentence appears word for word in Codex`, () => {
     const c = codex()
-    const shared = sentences(withoutCleanup(withoutDelegation(claude()))).filter(
+    const shared = sentences(withoutGates(withoutCleanup(withoutDelegation(claude())))).filter(
       (s) => !/claude/i.test(s) && !CLAUDE_ONLY.some((t) => s.includes(t)),
     )
     assert.ok(shared.length > 40, `only ${shared.length} shared sentences found`)
@@ -230,6 +239,75 @@ for (const work of [false, true]) {
   })
 }
 
+// Gates. Codex runs no review gates: it gets one open-a-PR-and-stop rule where
+// Claude has the gate bullets, and chezmoi deletes its unmanaged agent copies.
+const CODEX_PR_RULE = '- Never run review gates or merge a PR. Finish on a non-default branch, open the PR with `gh`, watch its checks, state what you verified (each command and its result), and stop. The PR merges only after a separate review gate passes. When the prompt asks you only to review, or to leave your changes uncommitted, do exactly that and skip the branch and PR.\n'
+const CLAUDE_GATES = [
+  '`verification-gates` skill.\n- Non-trivial changes merge only when the `acceptance-gate` workflow (tester, then `red-team-reviewer`, then `bdfl`, in one call) returns APPROVE, or APPROVE WITH CONDITIONS once every condition has landed.',
+  'Never run those gates one at a time.',
+  '\n- Every plan goes through the `bdfl` agent too. On every path, honor its verdict: never merge over REVISE or REJECT, and relay its guidance verbatim. Multi-PR work goes through the `planner` agent first.\n\n## Vault and sessions\n',
+  "instead. Only exception: the tester agent's Docker Playwright runs as defined in tester.md (the viewport/color-scheme matrix, and the whole web pass when Chrome is unreachable); the stop-and-wait rule below does not apply to it. Reading a public page",
+]
+const AGENT_COPIES = ['architect', 'bdfl', 'planner', 'red-team-reviewer', 'tester']
+
+test('.chezmoiremove deletes the Codex agent copies once rendered', () => {
+  const home = mkdtempSync(join(tmpdir(), 'agents-md-'))
+  try {
+    const r = spawnSync(
+      'chezmoi',
+      ['--source', SOURCE, '--destination', home, 'execute-template'],
+      { encoding: 'utf8', input: readFileSync(join(SOURCE, '.chezmoiremove'), 'utf8'), env: { PATH: process.env.PATH, HOME: home } },
+    )
+    assert.ifError(r.error)
+    assert.equal(r.status, 0, `chezmoi execute-template exited ${r.status}: ${r.stderr}`)
+    assert.ok(r.stdout.split('\n').includes('.codex/agents/*.toml'), JSON.stringify(r.stdout))
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+})
+
+for (const work of [false, true]) {
+  const claude = () => render('.claude/CLAUDE.md', work)
+  const codex = () => render('.codex/AGENTS.md', work)
+
+  test(`work=${work}: Codex gets the PR rule in place of the gate bullets`, () => {
+    const cx = codex()
+    assert.ok(cx.includes('`verification-gates` skill.\n' + CODEX_PR_RULE + '\n## Vault and sessions\n'), 'Codex render lacks the PR rule in place')
+    assert.ok(cx.includes('or Computer Use instead. Reading a public page with web search is not a browser task.'))
+    for (const t of ['acceptance-gate', 'tester.md', 'red-team-reviewer', 'bdfl', 'planner']) assert.ok(!cx.includes(t), `Codex render contains ${t}`)
+  })
+
+  test(`work=${work}: Claude keeps the gate bullets and the tester exception`, () => {
+    const cl = claude()
+    for (const t of CLAUDE_GATES) assert.ok(cl.includes(t), `Claude render lacks ${JSON.stringify(t.slice(0, 60))}`)
+    assert.ok(!cl.includes(CODEX_PR_RULE), 'Claude render contains the Codex PR rule')
+  })
+
+  test(`work=${work}: apply deletes ~/.codex/agents/*.toml and keeps the rest of ~/.codex`, () => {
+    applied(
+      work,
+      (home) => {
+        mkdirSync(join(home, '.codex/agents/nested'), { recursive: true })
+        for (const n of AGENT_COPIES) writeFileSync(join(home, '.codex/agents', `${n}.toml`), `name = "${n}"\n`)
+        writeFileSync(join(home, '.codex/agents/notes.md'), 'mine\n')
+        writeFileSync(join(home, '.codex/agents/nested/keep.toml'), 'mine\n')
+        writeFileSync(join(home, '.codex/AGENTS.md'), 'stale\n')
+        writeFileSync(join(home, '.codex/config.toml'), 'stale\n')
+      },
+      (home, pass) => {
+        for (const n of AGENT_COPIES) {
+          assert.throws(() => lstatSync(join(home, '.codex/agents', `${n}.toml`)), { code: 'ENOENT' }, `pass ${pass}: ${n}.toml survived`)
+        }
+        assert.ok(lstatSync(join(home, '.codex/agents')).isDirectory(), `pass ${pass}: ~/.codex/agents is gone`)
+        assert.equal(readFileSync(join(home, '.codex/agents/notes.md'), 'utf8'), 'mine\n', `pass ${pass}: notes.md changed`)
+        assert.equal(readFileSync(join(home, '.codex/agents/nested/keep.toml'), 'utf8'), 'mine\n', `pass ${pass}: nested .toml changed`)
+        assert.ok(readFileSync(join(home, '.codex/AGENTS.md'), 'utf8').startsWith('# Global AGENTS.md'), `pass ${pass}: ~/.codex/AGENTS.md not rendered`)
+        assert.equal(readFileSync(join(home, '.codex/config.toml'), 'utf8'), readFileSync(join(SOURCE, 'dot_codex/config.toml'), 'utf8'), `pass ${pass}: ~/.codex/config.toml not applied`)
+      },
+    )
+  })
+}
+
 // Tester additions. The checks above prove the Codex side drops Claude-only
 // text; these prove each side still says what it should, so a swapped or
 // emptied {{ if $codex }} branch cannot pass silently.
@@ -280,7 +358,7 @@ for (const work of [false, true]) {
 
 // Agent worktrees: Claude's harness parks them under <repo>/.claude/worktrees,
 // so the porcelain exception and the cleanup bullet are Claude-only. Codex
-// keeps the plain porcelain rule word for word. Each SAFETY entry is one
+// gets neither porcelain rule: it runs no gates. Each SAFETY entry is one
 // guard; deleting any of them from the template turns this test red.
 const PORCELAIN = 'Launch the next gate only when `git status --porcelain` is empty, and name any leftover path to me.'
 const PORCELAIN_CLAUDE = 'Launch the next gate only when `git status --porcelain` is empty, or when `git status --porcelain -uall` prints only `?? .claude/worktrees/agent-*/` lines and `git -C <wt> status --porcelain` exits 0 and prints nothing in each of those worktrees, and name any leftover path to me.'
@@ -303,9 +381,106 @@ for (const work of [false, true]) {
     assert.ok(cl.includes(PORCELAIN_CLAUDE), 'Claude render lacks the per-worktree porcelain exception')
     assert.ok(cl.includes(`\n${CLEANUP} `), 'Claude render lacks the worktree cleanup bullet')
     for (const s of SAFETY) assert.ok(cl.includes(s), `Claude render lost: ${s}`)
-    assert.ok(cx.includes(PORCELAIN), 'Codex render lost the plain porcelain rule')
+    assert.ok(!cx.includes(PORCELAIN), 'Codex render contains the gate porcelain rule')
     assert.ok(!cx.includes(CLEANUP), 'Codex render contains the worktree cleanup bullet')
     assert.ok(!cx.includes('.claude/worktrees'))
     assert.ok(!cx.includes('headRefOid'))
+  })
+}
+
+// Tester additions for the Codex PR rule (PR #38). The rule replaces only the
+// gate bullets: the rules Codex still needs to produce a trustworthy PR must
+// survive the swap, and the agent-copy removal must cover every agent this
+// source tree manages, not only the five the seed above names.
+const CODEX_KEEPS = [
+  '- Never say "done", "should work", or "tests pass" without fresh evidence from a command you ran in this session.\n',
+  '- A gate must state what a pass proves and fail closed on "cannot evaluate" (tool missing, empty input, API cap). Details: `verification-gates` skill.\n',
+  '- Three-strike rule: after 3 failed fixes, stop and question the design with me before fix #4.',
+  '- GitHub for hosting, `gh` for everything GitHub, GitHub Actions for CI. After a push, watch the checks with `gh` and fix what breaks.',
+]
+
+const SOURCE_AGENTS = readdirSync(join(SOURCE, 'dot_claude/agents'))
+  .filter((f) => f.endsWith('.md'))
+  .map((f) => f.slice(0, -3))
+
+for (const work of [false, true]) {
+  const codex = () => render('.codex/AGENTS.md', work)
+
+  test(`work=${work}: Codex keeps the evidence, fail-closed, three-strike, and CI-watch rules`, () => {
+    const cx = codex()
+    for (const t of CODEX_KEEPS) assert.ok(cx.includes(t), `Codex render lost: ${t.trim()}`)
+  })
+
+  test(`work=${work}: Codex "Verification and gates" is exactly evidence, fail-closed, PR rule`, () => {
+    const m = codex().match(/^## Verification and gates\n\n([\s\S]*?)\n## /m)
+    assert.ok(m, 'no Verification and gates section in the Codex render')
+    assert.equal(m[1], CODEX_KEEPS[0] + CODEX_KEEPS[1] + CODEX_PR_RULE)
+  })
+
+  test(`work=${work}: apply deletes a Codex .toml copy of every agent the source manages`, () => {
+    assert.ok(SOURCE_AGENTS.length >= 8, `only ${SOURCE_AGENTS.length} agents under dot_claude/agents`)
+    applied(
+      work,
+      (home) => {
+        mkdirSync(join(home, '.codex/agents'), { recursive: true })
+        for (const n of SOURCE_AGENTS) writeFileSync(join(home, '.codex/agents', `${n}.toml`), `name = "${n}"\n`)
+      },
+      (home, pass) => {
+        assert.deepEqual(readdirSync(join(home, '.codex/agents')), [], `pass ${pass}: agent copies survived`)
+        for (const n of SOURCE_AGENTS) assert.ok(existsSync(join(home, '.claude/agents', `${n}.md`)), `pass ${pass}: ~/.claude/agents/${n}.md not applied`)
+      },
+    )
+  })
+
+  // Observed chezmoi behavior, pinned so a change to it is noticed: the
+  // pattern follows a symlinked ~/.codex/agents into its target and deletes
+  // .toml files there, and it deletes a directory named *.toml with its
+  // contents. Neither shape exists on the real machine today (eight regular
+  // files); this records the blast radius the .chezmoiremove comment omits.
+  test(`work=${work}: .codex/agents/*.toml blast radius (symlinked dir, *.toml dir)`, () => {
+    applied(
+      work,
+      (home) => {
+        mkdirSync(join(home, 'elsewhere'), { recursive: true })
+        writeFileSync(join(home, 'elsewhere/mine.toml'), 'mine\n')
+        writeFileSync(join(home, 'elsewhere/keep.md'), 'mine\n')
+        mkdirSync(join(home, '.codex'), { recursive: true })
+        symlinkSync(join(home, 'elsewhere'), join(home, '.codex/agents'))
+      },
+      (home, pass) => {
+        assert.ok(lstatSync(join(home, '.codex/agents')).isSymbolicLink(), `pass ${pass}: symlink replaced`)
+        assert.ok(!existsSync(join(home, 'elsewhere/mine.toml')), `pass ${pass}: chezmoi no longer follows the symlink`)
+        assert.equal(readFileSync(join(home, 'elsewhere/keep.md'), 'utf8'), 'mine\n')
+      },
+    )
+    applied(
+      work,
+      (home) => {
+        mkdirSync(join(home, '.codex/agents/dir.toml'), { recursive: true })
+        writeFileSync(join(home, '.codex/agents/dir.toml/inner'), 'mine\n')
+      },
+      (home, pass) => {
+        assert.ok(!existsSync(join(home, '.codex/agents/dir.toml')), `pass ${pass}: chezmoi no longer removes a *.toml directory`)
+      },
+    )
+  })
+
+  test(`work=${work}: Codex three-strike rule counts red CI runs, not gate REVISE rounds Codex never sees`, () => {
+    const cx = codex()
+    assert.ok(!cx.includes('Gate REVISE rounds'))
+    assert.ok(cx.includes('before fix #4. Red CI runs count as failed fixes when they hit the same defect class;'))
+  })
+
+  test(`work=${work}: Codex PR rule says the branch is not the default branch and honors review-only prompts`, () => {
+    const cx = codex()
+    assert.match(cx, /Never run review gates or merge a PR\. Finish on a non-default branch/)
+    assert.ok(cx.includes('When the prompt asks you only to review, or to leave your changes uncommitted'))
+  })
+
+  // Follow-up the PR left open. It is a proposal, not an agreed contract: it
+  // stays todo so it does not fail the suite.
+  test(`PROPOSED CONTRACT: work=${work}: Codex render names no Claude-plugin-only pkms agents or slash skills`, { todo: true }, () => {
+    const cx = codex()
+    for (const t of ['pkms:librarian', 'pkms:archivist', '/pkms:process-inbox']) assert.ok(!cx.includes(t), `Codex render contains ${t}`)
   })
 }
