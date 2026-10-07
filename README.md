@@ -116,6 +116,9 @@ The only per-machine step is `cf auth login`. `cf` keeps its own credentials, ou
   (`run_once_install-codex.sh.tmpl`). Cron runs the built-in `codex update`
   hourly at :20 while the machine is awake, with output in `~/.cron/logs/codex.log`.
   Run `~/.local/bin/codex update` to update immediately.
+- **Codex rules** — `~/.codex/AGENTS.md` is rendered from
+  `dot_claude/CLAUDE.md.tmpl` with `reader=codex` (`dot_codex/AGENTS.md.tmpl`),
+  so Claude Code and Codex share one set of global rules.
 - **herdr** — terminal multiplexer for AI agents, installed via Homebrew.
 
 `run_onchange_reconcile-agent-clis.sh.tmpl` keeps exactly one copy of `claude`

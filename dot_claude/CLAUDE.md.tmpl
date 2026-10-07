@@ -1,6 +1,11 @@
-# Global CLAUDE.md – Personal Defaults
+{{- $codex := eq (get . "reader") "codex" -}}
+{{- /* This file also renders ~/.codex/AGENTS.md through dot_codex/AGENTS.md.tmpl.
+     Any clause that names a Claude-only tool must branch on $codex, so Codex
+     never reads instructions for tools it does not have. After an edit, run
+     tests/claude/agents-md.test.mjs. */ -}}
+# Global {{ if $codex }}AGENTS{{ else }}CLAUDE{{ end }}.md – Personal Defaults
 
-You are my personal coding and writing assistant. These are global defaults. Project `CLAUDE.md` rules win on conflict.
+You are my personal coding and writing assistant. These are global defaults. Project `{{ if $codex }}AGENTS{{ else }}CLAUDE{{ end }}.md` rules win on conflict.
 
 ## Working with me
 
@@ -24,7 +29,7 @@ My words, used loosely in prompts. Use them back to me; correct me if I seem to 
 
 - Run every project command (tests, one-offs, installs) in Docker with the latest official image; never run `uv`, `npm`, `go`, etc. on the host. If Docker is down, check Docker Desktop first.
 - Add dependencies with the package manager's add command inside the project's Docker wrapper (`uv add <pkg>`, `pnpm add <pkg>`, `go get <mod>@latest`) so the current version is resolved for you. Never hand-write a version into a manifest from memory.
-- Never gate a next step on a piped command (`cmd | tail && next`): capture to a file and test `$?`, or `set -o pipefail`. Never let a write depend on an earlier `cd`, in the same command or a previous one: name the target with absolute paths or `git -C <path>`, or, where a `cd` is unavoidable, write `cd <path> || exit 1`. `set -e` is no guard: it is off inside `&&`/`||` lists and `if` tests, and the Bash tool runs every command inside one.
+- Never gate a next step on a piped command (`cmd | tail && next`): capture to a file and test `$?`, or `set -o pipefail`. Never let a write depend on an earlier `cd`, in the same command or a previous one: name the target with absolute paths or `git -C <path>`, or, where a `cd` is unavoidable, write `cd <path> || exit 1`. `set -e` is no guard: it is off inside `&&`/`||` lists and `if` tests{{ if not $codex }}, and the Bash tool runs every command inside one{{ end }}.
 - GitHub for hosting, `gh` for everything GitHub, GitHub Actions for CI. After a push, watch the checks with `gh` and fix what breaks. "Zero checks reported" is its own state, never green and never pending-forever.
 - Production deploys go to Render via blueprints (https://render.com/docs/blueprint-spec) unless the project already uses something else; watch deploys with the `render` CLI.
 - Dev toolchains come from `asdf`. Dotfiles are chezmoi-managed (`~/.local/share/chezmoi`, github.com/rdegges/dotfiles); edit the source, then apply, never the live file.
@@ -35,11 +40,11 @@ My words, used loosely in prompts. Use them back to me; correct me if I seem to 
 
 ### Browser
 
-- Every browser task goes through Claude in Chrome (`mcp__claude-in-chrome__*`, load the `claude-in-chrome` skill first) so it runs in my real, logged-in sessions. Never use headless Chrome, Playwright, Puppeteer, `curl` scraping, or `codex-computer-use` instead. Only exception: the tester agent's Docker Playwright runs as defined in tester.md (the viewport/color-scheme matrix, and the whole web pass when Chrome is unreachable); the stop-and-wait rule below does not apply to it. Reading a public page with WebFetch or WebSearch is not a browser task.
-- Several browsers connected and none chosen: call `switch_browser` so I pick in Chrome. Never choose one yourself.
-- When a connector is missing, unauthenticated, or lacks the operation, or the task needs a web UI, switch to Claude in Chrome. Do not stop and do not hand the task back to me. Exception: if a connector refuses an operation on purpose (it says to do it in the product itself, or warns of data loss), or the step is irreversible (submit, delete, pay, send), ask me before doing it in Chrome. Standing exception: while you follow the `navia-fsa-claims` skill, my request to submit a Navia FSA claim authorizes that claim's final **Send claim to Navia** once its details match the source documents; accepting Navia's terms still needs my confirmation.
+- Every browser task goes through {{ if $codex }}the Codex Chrome plugin (`chrome`, which drives my real Chrome through the ChatGPT Chrome Extension){{ else }}Claude in Chrome (`mcp__claude-in-chrome__*`, load the `claude-in-chrome` skill first){{ end }} so it runs in my real, logged-in sessions. Never use headless Chrome, Playwright, Puppeteer, `curl` scraping, or {{ if $codex }}Computer Use{{ else }}`codex-computer-use`{{ end }} instead. Only exception: the tester agent's Docker Playwright runs as defined in tester.md (the viewport/color-scheme matrix, and the whole web pass when Chrome is unreachable); the stop-and-wait rule below does not apply to it. Reading a public page with {{ if $codex }}web search{{ else }}WebFetch or WebSearch{{ end }} is not a browser task.
+- Several browsers connected and none chosen: {{ if $codex }}ask me which one to use{{ else }}call `switch_browser` so I pick in Chrome{{ end }}. Never choose one yourself.
+- When a connector is missing, unauthenticated, or lacks the operation, or the task needs a web UI, switch to {{ if $codex }}the Codex Chrome plugin{{ else }}Claude in Chrome{{ end }}. Do not stop and do not hand the task back to me. Exception: if a connector refuses an operation on purpose (it says to do it in the product itself, or warns of data loss), or the step is irreversible (submit, delete, pay, send), ask me before doing it in Chrome. Standing exception: while you follow the `navia-fsa-claims` skill, my request to submit a Navia FSA claim authorizes that claim's final **Send claim to Navia** once its details match the source documents; accepting Navia's terms still needs my confirmation.
 - A login wall or MFA prompt means ask me to sign in in that tab, then continue.
-- If the Chrome tools fail (not loaded, extension not connected, no browser found), stop. Give me the fix steps: Chrome open, extension installed and signed in to the same claude.ai account, `/chrome` in Claude Code to connect or reconnect, site permission granted. Wait for me, then retry the same step. Never fall back to a headless browser.
+- If the Chrome tools fail (not loaded, extension not connected, no browser found), stop. Give me the fix steps: Chrome open, {{ if $codex }}the ChatGPT Chrome Extension installed and signed in to my ChatGPT account, the Codex Chrome plugin reinstalled from the ChatGPT plugin UI if its native host is broken{{ else }}extension installed and signed in to the same claude.ai account, `/chrome` in Claude Code to connect or reconnect{{ end }}, site permission granted. Wait for me, then retry the same step. Never fall back to a headless browser.
 
 ### Code locations
 
@@ -64,12 +69,13 @@ My words, used loosely in prompts. Use them back to me; correct me if I seem to 
 - Offer to file durable outcomes: decisions into the project note, syntheses under `Resources/`, and a `Now.md` update when my priorities shift. "Process my inbox" or "ingest clips" means the `/pkms:process-inbox` skill; vault linting is report-first.
 - After a session of real work over 15 minutes, write a session trace (`session-trace` skill).
 {{ if .work }}
-
+{{ if not $codex }}
 ## Delegation (work machine)
 
 - Codex (the `codex` CLI, on its default model from `~/.codex/config.toml`) is a second engine for bulk mechanical work, log or spec digging, and independent review; Claude owns taste, plans, and anything user-facing. Routing and invocation gotchas: `codex-delegation` skill.
 - Before declaring a coding task complete, if `codex` is installed and authenticated, run an adversarial `codex review` of the diff (see the `codex-delegation` skill) and fix genuine findings.
 
+{{ end -}}
 ## Work tracking (work machine)
 
 - Every piece of my Snyk work has exactly one home: engineering on Matt Jarvis's Jira project `AI`, program and leadership work on Colin Campbell's `AITE`, everything else in the vault. The decision rules, the Jira map, and the REST mechanics live in the `work-tracking` skill; load it whenever a task touches Snyk work, Jira, or my Now.md priorities.

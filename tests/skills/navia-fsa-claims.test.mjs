@@ -172,7 +172,3 @@ test('receipt screenshots carry health data and stay in the session scratch dire
   assert.match(s7, /Keep any screenshot in the session scratch directory only/)
   assert.match(s7, /Never commit it, put it in the vault, or attach it anywhere else/)
 })
-
-// Codex reads ~/AGENTS.md / ~/.codex/AGENTS.md, which chezmoi does not manage;
-// on the test machine both lacked the Navia exception this Codex skill cites.
-test.todo('PROPOSED CONTRACT: the global rules Codex loads carry the Navia exception the codex skill cites')
