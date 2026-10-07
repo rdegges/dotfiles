@@ -293,7 +293,7 @@ const SAFETY = [
   'or `gh pr view <n> --json state,headRefOid` shows `MERGED` and `headRefOid` equals `git -C <wt> rev-parse HEAD`.',
   'Then run `git worktree prune` and delete the branches those agents created.',
   'Use `git branch -d`, or `git branch -D` only for a branch whose tip equals that merged `headRefOid`.',
-  'Name to me any worktree that is dirty, unmerged, or orphaned (a dir under `.claude/worktrees` that `git worktree list` does not show), and leave it in place.',
+  'Name to me any worktree that is dirty, unmerged, or orphaned (a dir under `.claude/worktrees` that `git worktree list` does not show), and any branch that `git branch -d` refuses and `git branch -D` is not allowed to delete, and leave them in place.',
 ]
 
 for (const work of [false, true]) {
