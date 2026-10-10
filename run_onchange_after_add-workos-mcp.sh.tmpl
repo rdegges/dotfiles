@@ -18,7 +18,7 @@ if [ ! -x "$CLAUDE" ]; then
 fi
 
 current="$("$CLAUDE" mcp get workos 2>/dev/null)"
-if printf '%s\n' "$current" | grep -qF "$URL"; then
+if printf '%s\n' "$current" | grep -qxF "  URL: $URL"; then
   echo "workos-mcp: already registered"
   exit 0
 fi

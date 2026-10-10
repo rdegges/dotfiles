@@ -345,7 +345,7 @@ function render(target, work) {
 
 const AUTH = '- Auth in my personal and side projects: WorkOS (AuthKit), unless the project already uses something else. '
 const MCP = 'Manage my WorkOS teams through the `workos` MCP server (`mcp__workos__*`); if it is not signed in, ask me to run `/mcp`. '
-const CLI = 'For app setup, use the `workos` CLI (`npx workos@latest install`).\n'
+const CLI = 'For app setup, ask me to run `npx workos@latest install` in the project; it is interactive and signs in through the browser, so never run it yourself.\n'
 
 for (const work of [false, true]) {
   for (const [target, reader] of [['.claude/CLAUDE.md', 'claude'], ['.codex/AGENTS.md', 'codex']]) {
