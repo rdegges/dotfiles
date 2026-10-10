@@ -123,6 +123,13 @@ The only per-machine step is `cf auth login`. `cf` keeps its own credentials, ou
   `~/.codex/agents/*.toml` agent copies: Codex opens PRs but runs no review gates.
 - **herdr** — terminal multiplexer for AI agents, installed via Homebrew.
 
+- **WorkOS MCP** — on personal machines (`work = false`),
+  `run_onchange_after_add-workos-mcp.sh.tmpl` registers the
+  [WorkOS management MCP server](https://workos.com/docs/mcp) at user scope
+  with `claude mcp add`. It does not manage `~/.claude.json`, which is Claude
+  Code state. The only per-machine step is to run `/mcp` in Claude Code once and
+  finish the WorkOS OAuth sign-in.
+
 `run_onchange_reconcile-agent-clis.sh.tmpl` keeps exactly one copy of `claude`
 and `codex` on each box: it removes stray installs from other channels (npm
 globals, an extra Homebrew cask) so the managed install is the only one on PATH.
