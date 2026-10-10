@@ -1,4 +1,6 @@
 tap "snyk/tap"
+# opencode's own tap: upstream recommends it over homebrew-core, which lags.
+tap "anomalyco/tap"
 # Trust taps for packages installed outside this Brewfile so Homebrew 6.x stops
 # skipping their upgrades (the install script auto-trusts every tap listed here).
 # Tap-only (no package line) so trust propagates to all boxes without
@@ -36,5 +38,6 @@ brew "uv"
 brew "vercel-cli"
 brew "zlib"
 brew "snyk/tap/snyk"
+brew "anomalyco/tap/opencode"
 cask "1password-cli"
 cask "vorssaint"

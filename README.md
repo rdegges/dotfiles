@@ -122,6 +122,12 @@ The only per-machine step is `cf auth login`. `cf` keeps its own credentials, ou
   `.chezmoiremove` deletes the old `~/AGENTS.md` copy and the unmanaged
   `~/.codex/agents/*.toml` agent copies: Codex opens PRs but runs no review gates.
 - **herdr** — terminal multiplexer for AI agents, installed via Homebrew.
+- **opencode** (`opencode`) — installed via Homebrew from upstream's
+  `anomalyco/tap`, which ships releases sooner than homebrew-core.
+  `~/.config/opencode/AGENTS.md` is rendered from `dot_claude/CLAUDE.md.tmpl`
+  unchanged (`dot_config/opencode/AGENTS.md.tmpl`), so opencode reads the same
+  bytes as `~/.claude/CLAUDE.md`. opencode would fall back to that file anyway;
+  the managed copy keeps the rules in place if the fallback is ever disabled.
 - **WorkOS MCP** — on personal machines (`work = false`),
   `run_onchange_after_add-workos-mcp.sh.tmpl` registers the
   [WorkOS management MCP server](https://workos.com/docs/mcp) at user scope
