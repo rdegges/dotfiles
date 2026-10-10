@@ -1,0 +1,34 @@
+{{- if and (eq .chezmoi.os "darwin") (not .work) -}}
+#!/bin/bash
+# Register the WorkOS management MCP server (https://workos.com/docs/mcp) at
+# user scope on personal machines, so Claude Code can manage my WorkOS teams
+# from any project. Claude Code keeps user-scope servers in ~/.claude.json, a
+# state file chezmoi must not own, so this drives `claude mcp` instead.
+#
+# This is an `after_` script so it runs after run_once_install-claude-code.
+# Sign-in is per machine: run /mcp in Claude Code once to finish OAuth.
+set -uo pipefail
+
+CLAUDE="$HOME/.local/bin/claude"
+URL="https://mcp.workos.com/mcp"
+
+if [ ! -x "$CLAUDE" ]; then
+  echo "workos-mcp: $CLAUDE not found; install Claude Code, then re-run chezmoi apply" >&2
+  exit 1
+fi
+
+current="$("$CLAUDE" mcp get workos 2>/dev/null)"
+if printf '%s\n' "$current" | grep -qxF "  URL: $URL"; then
+  echo "workos-mcp: already registered"
+  exit 0
+fi
+
+# A user-scope `workos` entry with another URL is stale; replace it. Entries in
+# other scopes belong to a project, so leave them alone.
+if printf '%s\n' "$current" | grep -qF "Scope: User config"; then
+  "$CLAUDE" mcp remove --scope user workos || exit 1
+fi
+
+"$CLAUDE" mcp add --scope user --transport http workos "$URL" || exit 1
+echo "workos-mcp: registered; run /mcp in Claude Code to sign in"
+{{ end -}}
