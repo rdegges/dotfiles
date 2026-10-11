@@ -9,7 +9,7 @@
 // What a pass proves: for work=false and work=true, chezmoi renders both
 // targets from this source tree with a throwaway HOME, neither is empty, and
 // they are byte-identical, so opencode and Claude Code read the same rules.
-// It also proves the Brewfile installs opencode from upstream's tap. It says
+// It also proves the Brewfile installs opencode from homebrew-core only. It says
 // nothing about how opencode reads the file; that needs a live session.
 
 import { test } from 'node:test'
@@ -46,9 +46,8 @@ for (const work of [false, true]) {
   })
 }
 
-test('Brewfile installs opencode from the anomalyco tap', () => {
+test('Brewfile installs opencode from homebrew-core, not the v1 tap', () => {
   const lines = readFileSync(join(SOURCE, 'dot_brew/Brewfile'), 'utf8').split('\n')
-  assert.ok(lines.includes('tap "anomalyco/tap"'))
-  assert.ok(lines.includes('brew "anomalyco/tap/opencode"'))
-  assert.ok(!lines.includes('brew "opencode"'), 'homebrew-core opencode would install a second copy')
+  assert.ok(lines.includes('brew "opencode"'))
+  assert.ok(!lines.some((l) => !l.startsWith('#') && l.includes('anomalyco/tap')), 'anomalyco/tap ships OpenCode 1 and would install a second copy')
 })

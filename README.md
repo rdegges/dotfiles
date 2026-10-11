@@ -122,8 +122,8 @@ The only per-machine step is `cf auth login`. `cf` keeps its own credentials, ou
   `.chezmoiremove` deletes the old `~/AGENTS.md` copy and the unmanaged
   `~/.codex/agents/*.toml` agent copies: Codex opens PRs but runs no review gates.
 - **herdr** — terminal multiplexer for AI agents, installed via Homebrew.
-- **opencode** (`opencode`) — installed via Homebrew from upstream's
-  `anomalyco/tap`, which ships releases sooner than homebrew-core.
+- **opencode** (`opencode`) — installed via Homebrew from homebrew-core.
+  Not from upstream's `anomalyco/tap`: it still ships OpenCode 1.
   `~/.config/opencode/AGENTS.md` is rendered from `dot_claude/CLAUDE.md.tmpl`
   unchanged (`dot_config/opencode/AGENTS.md.tmpl`), so opencode reads the same
   bytes as `~/.claude/CLAUDE.md`. opencode would fall back to that file anyway;
