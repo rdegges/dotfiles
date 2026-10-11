@@ -1,0 +1,28 @@
+# Codex CLI config. Durable prefs only. Per-project trust entries are deliberately
+# not synced because they leak absolute paths and differ per machine.
+approval_policy = "never"
+file_opener = "cursor"
+model = "gpt-6-astra"
+model_reasoning_effort = "medium"
+sandbox_mode = "danger-full-access"
+
+model_reasoning_summary = "auto"
+show_raw_agent_reasoning = true
+web_search = "live"
+
+[history]
+persistence = "save-all"
+
+[notice]
+hide_full_access_warning = true
+
+# REA (https://rea.tools): the same entry `rea setup --client codex` writes.
+# chezmoi owns this entry because it owns this file, so `rea setup` must not
+# write it. ~/.cron/rea-update.sh installs the binary it names and fails if
+# `rea doctor --client codex` stops accepting this entry after an update.
+{{- $node := include "dot_tool-versions" | regexFind "(?m)^nodejs\\s+\\S+" | replace "nodejs" "" | trim }}
+{{- if not $node }}{{ fail "dot_tool-versions pins no nodejs version" }}{{ end }}
+[mcp_servers.rea]
+command = "{{ .chezmoi.homeDir }}/.asdf/installs/nodejs/{{ $node }}/bin/rea"
+args = [ "mcp" ]
+startup_timeout_sec = 30

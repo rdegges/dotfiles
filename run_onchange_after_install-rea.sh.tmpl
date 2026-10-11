@@ -1,0 +1,16 @@
+{{- if eq .chezmoi.os "darwin" -}}
+#!/bin/bash
+# ~/.tool-versions hash: {{ include "dot_tool-versions" | sha256sum }}
+# rea-update.sh hash: {{ include "dot_cron/executable_rea-update.sh" | sha256sum }}
+#
+# Install REA through the same script cron uses to update it, so there is one
+# code path. Re-runs when ~/.tool-versions changes (npm globals live per Node
+# version, and the registered server path names the Node version) or when the
+# update script changes.
+#
+# This is an `after_` script so it runs after run_onchange_install-tool-versions
+# has installed the pinned Node. A failure here blocks no other file.
+set -uo pipefail
+
+exec "$HOME/.cron/rea-update.sh"
+{{ end -}}

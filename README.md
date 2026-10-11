@@ -132,6 +132,21 @@ The only per-machine step is `cf auth login`. `cf` keeps its own credentials, ou
   `~/.config/opencode/AGENTS.md` is rendered from `dot_claude/CLAUDE.md.tmpl`
   with `reader=opencode` (`dot_config/opencode/AGENTS.md.tmpl`), so opencode reads the same
   bytes as `~/.claude/CLAUDE.md` except the Browser section. OpenCode 2 reads only `~/.config/opencode/AGENTS.md` for global rules and has no `~/.claude/CLAUDE.md` fallback, so this managed file is the only way the rules reach opencode. Outside the Browser section the copy is verbatim on purpose, so opencode also sees Claude-only rules (the acceptance-gate agents) that it cannot run. The Browser section points opencode at its built-in `browser` tools (Code Mode `tools.browser.*`). These tools work only in sessions that run in the OpenCode desktop app (`cask "opencode-desktop"`, the official cask from opencode.ai/download), and they drive the app's browser pane, not the real Chrome profile. In the terminal, opencode tells me the task needs the desktop app and stops. Codex and opencode are both told to use only their own browser tool. The desktop app updates itself and bundles its own opencode, while the CLI comes from homebrew-core; when the two versions differ, the app restarts the shared opencode background service (`version-mismatch`), which may interrupt a running terminal session.
+- **REA** ([rea.tools](https://rea.tools)) — reverse-engineering MCP server
+  and skill. `~/.cron/rea-update.sh` installs `rea-agents@latest` as an npm global on the
+  asdf Node, the same way as `cf`. Cron runs it daily at 10:25, and
+  `run_onchange_after_install-rea.sh.tmpl` runs it when `~/.tool-versions`
+  changes. After each install it runs REA's own `rea setup` for Claude Code and
+  opencode, which registers the server and installs the matching
+  `reverse-engineer-anything` skill. chezmoi owns `~/.codex/config.toml`, so the
+  Codex entry is in `dot_codex/config.toml.tmpl` instead. The script then runs
+  `rea doctor --client codex`. If a new REA release expects a different entry,
+  the script writes `~/.cron/logs/rea.FAILED`. The optional native engines
+  (Hopper, Ghidra, IDA) are not installed. Static JavaScript, .NET, and web
+  analysis work without them. Codex reads the skill from `~/.agents/skills`,
+  which the opencode setup step writes. Setup re-enables the opencode entry
+  each day if you disable it, and leaves `~/.claude.json.rea.backup` and
+  `opencode.json.rea.backup` beside the live files.
 - **WorkOS MCP** — on personal machines (`work = false`),
   `run_onchange_after_add-workos-mcp.sh.tmpl` registers the
   [WorkOS management MCP server](https://workos.com/docs/mcp) at user scope

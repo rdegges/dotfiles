@@ -302,7 +302,13 @@ for (const work of [false, true]) {
         assert.equal(readFileSync(join(home, '.codex/agents/notes.md'), 'utf8'), 'mine\n', `pass ${pass}: notes.md changed`)
         assert.equal(readFileSync(join(home, '.codex/agents/nested/keep.toml'), 'utf8'), 'mine\n', `pass ${pass}: nested .toml changed`)
         assert.ok(readFileSync(join(home, '.codex/AGENTS.md'), 'utf8').startsWith('# Global AGENTS.md'), `pass ${pass}: ~/.codex/AGENTS.md not rendered`)
-        assert.equal(readFileSync(join(home, '.codex/config.toml'), 'utf8'), readFileSync(join(SOURCE, 'dot_codex/config.toml'), 'utf8'), `pass ${pass}: ~/.codex/config.toml not applied`)
+        const config = spawnSync('chezmoi', ['--source', SOURCE, '--destination', home, 'execute-template'], {
+          encoding: 'utf8',
+          input: readFileSync(join(SOURCE, 'dot_codex/config.toml.tmpl'), 'utf8'),
+          env: { PATH: process.env.PATH, HOME: home },
+        })
+        assert.equal(config.status, 0, config.stderr)
+        assert.equal(readFileSync(join(home, '.codex/config.toml'), 'utf8'), config.stdout, `pass ${pass}: ~/.codex/config.toml not applied`)
       },
     )
   })
