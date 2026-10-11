@@ -104,6 +104,8 @@ for (const work of [false, true]) {
       assert.ok(files.includes(`.claude/skills/${n}/SKILL.md`), `~/.claude/skills/${n}/SKILL.md is not managed`)
     }
     assert.equal(links.includes('.agents/skills/work-tracking'), work, 'work-tracking link must follow the work flag')
+    assert.deepEqual(files.filter((f) => f.startsWith('.agents/skills/')), [], 'managed regular files under ~/.agents/skills')
+    assert.deepEqual(managed(work, 'dirs').filter((d) => d.startsWith('.agents/skills/')), [], 'managed directories under ~/.agents/skills')
   })
 
   test(`work=${work}: forced apply replaces a stale copy with a link and leaves the skills tool's entries alone`, () => {
@@ -169,12 +171,8 @@ for (const work of [false, true]) {
     })
   })
 
-  // PROPOSED CONTRACT: the links hand Codex the live Claude skill text, so the
-  // rule that keeps gate machinery and Claude-only tools out of the Codex
-  // render (agents-md.test.mjs) does not reach the skills Codex now loads.
-  // session-trace tells Codex to route adopted proposals through `planner` and
-  // `bdfl`, which Codex does not have. Todo, so the maker picks the fix.
-  test(`PROPOSED CONTRACT: work=${work}: skills linked into Codex name no gate agents or Claude-only tools`, { todo: true }, () => {
+  // Extends agents-md.test.mjs CLAUDE_ONLY to the skills Codex loads through the links.
+  test(`work=${work}: skills linked into Codex name no gate agents or Claude-only tools`, () => {
     const hits = []
     for (const n of linkedNames(work)) {
       for (const f of skillFiles(join(SOURCE, 'dot_claude/skills', n))) {
