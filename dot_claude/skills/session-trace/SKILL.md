@@ -126,8 +126,7 @@ of no record lists. `_template.md` and the records themselves never count.
    - `hill-climb: skipped (<n> unmined, need 3)`
    - `hill-climb trigger FAILED: <why>`
 
-Hill-climber's proposals go to me. Any that I adopt go through `planner` and
-`bdfl` like other work.
+Hill-climber's proposals go to me. Any that I adopt are planned and reviewed like other work.
 
 
 ### Loop Hygiene

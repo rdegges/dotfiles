@@ -15,4 +15,7 @@ Library/Application Support/com.vorssaint.utils
 .claude/skills/codex-delegation
 {{/* AI Engineering membership needs Snyk accounts. */}}
 .claude/skills/ai-eng-membership
+{{/* The Codex render names work-tracking only in its .work branch, so Codex
+     gets the link to it only on a work machine. */}}
+.agents/skills/work-tracking
 {{ end }}
