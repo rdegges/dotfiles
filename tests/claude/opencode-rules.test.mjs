@@ -14,7 +14,8 @@
 // (Code Mode `tools.browser.*`, which need the OpenCode desktop app), and it
 // names no other agent's browser tool. A pass does not prove that the tools
 // work; that needs a session in the desktop app.
-// It also proves the Brewfile installs opencode from homebrew-core only. It says
+// It also proves the Brewfile installs opencode from homebrew-core only, and
+// the OpenCode desktop app once from homebrew-cask. It says
 // nothing about how opencode reads the file; that needs a live session.
 
 import { test } from 'node:test'
@@ -200,6 +201,27 @@ test('Brewfile has exactly one opencode entry and no tap that also ships one', (
   assert.deepEqual(opencode, [{ kind: 'brew', name: 'opencode' }])
   const taps = entries.filter(({ kind, name }) => kind === 'tap' && /^(anomalyco|sst)\//.test(name))
   assert.deepEqual(taps, [])
+})
+
+// Tester addition (opencode-desktop-browser). The opencode Browser section
+// sends every browser task to the desktop app's `browser` tools, so the
+// Brewfile must install that app, or every opencode browser task ends in
+// "needs the OpenCode desktop app". The homebrew-cask `opencode-desktop` cask
+// (2.0.26) ships only OpenCode.app and no `binary` stanza, which is why the
+// one-opencode-binary test above deliberately does not match it. A pass does
+// not prove the cask still exists upstream; `brew bundle` on a Mac does that.
+test('Brewfile installs the OpenCode desktop app the opencode Browser section depends on, exactly once, from homebrew-cask', () => {
+  const raw = readFileSync(join(SOURCE, 'dot_brew/Brewfile'), 'utf8').split('\n')
+  const active = raw.map((l) => l.trim()).filter((l) => !l.startsWith('#'))
+  const desktop = active.filter((l) => /^cask\s+"([^"]*\/)?opencode-desktop"/.test(l))
+  // Bare name only: a tap-qualified name would pull a third-party copy.
+  assert.deepEqual(desktop, ['cask "opencode-desktop"'])
+  // Any other desktop-app spelling would install a second OpenCode.app.
+  const others = active.filter((l) => /^cask\s+"[^"]*opencode/.test(l) && l !== 'cask "opencode-desktop"')
+  assert.deepEqual(others, [])
+  // The rule and the install must agree: if this test fails because the cask
+  // was removed, the opencode Browser section must change with it.
+  assert.ok(OPENCODE_BROWSER.includes('OpenCode desktop app'), 'opencode Browser section no longer depends on the desktop app')
 })
 
 // run_onchange_ scripts re-run only when their rendered text changes. The
