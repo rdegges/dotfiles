@@ -30,7 +30,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 const SOURCE = new URL('../../', import.meta.url).pathname
-const CLAUDE_ONLY = ['switch_browser', 'WebFetch', 'WebSearch', 'codex-computer-use', 'Bash tool', 'mcp__', 'acceptance-gate', 'tester', 'red-team-reviewer', 'bdfl', 'planner', 'Gate REVISE rounds']
+const CLAUDE_ONLY = ['switch_browser', 'WebFetch', 'WebSearch', 'codex-computer-use', 'Bash tool', 'mcp__', 'acceptance-gate', 'tester', 'red-team-reviewer', 'bdfl', 'planner', 'Gate REVISE rounds', 'SendMessage']
 const DELEGATION = '## Delegation (work machine)'
 const WORK_TRACKING = '## Work tracking (work machine)'
 
@@ -78,8 +78,11 @@ function withoutGates(text) {
 }
 
 // The worktree cleanup bullet is Claude-only: Codex has no harness worktrees.
+// The subagent resume bullet is Claude-only too: it names SendMessage.
 function withoutCleanup(text) {
-  return text.replace(/^- After a PR merges or is abandoned, clean up the worktrees[^\n]*\n/m, '')
+  return text
+    .replace(/^- After a PR merges or is abandoned, clean up the worktrees[^\n]*\n/m, '')
+    .replace(/^- A subagent that stops on a network or API error[^\n]*\n/m, '')
 }
 
 // Lines, less list markers, cut at sentence ends. A wrong cut only makes the
@@ -245,7 +248,8 @@ const CODEX_PR_RULE = '- Never run review gates or merge a PR. Finish on a non-d
 const CLAUDE_GATES = [
   '`verification-gates` skill.\n- Non-trivial changes merge only when the `acceptance-gate` workflow (tester, then `red-team-reviewer`, then `bdfl`, in one call) returns APPROVE, or APPROVE WITH CONDITIONS once every condition has landed.',
   'Never run those gates one at a time.',
-  '\n- Every plan goes through the `bdfl` agent too. On every path, honor its verdict: never merge over REVISE or REJECT, and relay its guidance verbatim. Multi-PR work goes through the `planner` agent first.\n\n## Vault and sessions\n',
+  '\n- Every plan goes through the `bdfl` agent too. On every path, honor its verdict: never merge over REVISE or REJECT, and relay its guidance verbatim. Multi-PR work goes through the `planner` agent first.\n- A subagent that stops on a network or API error',
+  'Resume that same agent with `SendMessage` and ask it to continue. Never start a new agent for the same task: a new agent loses the context the old one built. If `SendMessage` cannot reach it (the agent ran inside a workflow, or you lack the tool), rerun it once and tell me the first run dropped. If the rerun also fails, stop and tell me.\n\n## Vault and sessions\n',
   "instead. Only exception: the tester agent's Docker Playwright runs as defined in tester.md (the viewport/color-scheme matrix, and the whole web pass when Chrome is unreachable); the stop-and-wait rule below does not apply to it. Reading a public page",
 ]
 const AGENT_COPIES = ['architect', 'bdfl', 'planner', 'red-team-reviewer', 'tester']
@@ -489,5 +493,43 @@ for (const work of [false, true]) {
   test(`PROPOSED CONTRACT: work=${work}: Codex render names no Claude-plugin-only pkms agents or slash skills`, { todo: true }, () => {
     const cx = codex()
     for (const t of ['pkms:librarian', 'pkms:archivist', '/pkms:process-inbox']) assert.ok(!cx.includes(t), `Codex render contains ${t}`)
+  })
+}
+
+// Tester additions for the subagent resume rule. CLAUDE_GATES pins only the
+// bullet's two ends, so the middle clause (a short or cut-off return counts as
+// unfinished) could be cut without a red test; this pins the whole bullet, its
+// place in the Claude gate block, and its absence from Codex, which has no
+// SendMessage to resume with.
+const RESUME = '- A subagent that stops on a network or API error, or returns a cut-off result or one without the output format it was asked for, has not finished. Do not act on that result. Resume that same agent with `SendMessage` and ask it to continue. Never start a new agent for the same task: a new agent loses the context the old one built. If `SendMessage` cannot reach it (the agent ran inside a workflow, or you lack the tool), rerun it once and tell me the first run dropped. If the rerun also fails, stop and tell me.\n'
+
+for (const work of [false, true]) {
+  const claude = () => render('.claude/CLAUDE.md', work)
+  const codex = () => render('.codex/AGENTS.md', work)
+
+  test(`work=${work}: Claude closes "Verification and gates" with the whole resume bullet, once`, () => {
+    const cl = claude()
+    assert.equal(cl.split(RESUME).length - 1, 1, 'resume bullet is missing, reworded, or repeated')
+    const m = cl.match(/^## Verification and gates\n\n([\s\S]*?)\n## /m)
+    assert.ok(m, 'no Verification and gates section in the Claude render')
+    assert.ok(m[1].endsWith(RESUME), 'resume bullet is not the last bullet of Verification and gates')
+  })
+
+  test(`work=${work}: Codex carries no part of the resume bullet`, () => {
+    const cx = codex()
+    for (const t of ['SendMessage', 'network or API error', 'cut-off result', 'has not finished', 'Resume that same agent', 'Never start a new agent', 'loses the context']) {
+      assert.ok(!cx.includes(t), `Codex render contains ${t}`)
+    }
+  })
+
+  // The shared-sentence check skips what withoutCleanup strips; an over-broad
+  // strip would hide drift in neighbouring shared lines.
+  test(`work=${work}: withoutCleanup strips exactly the cleanup and resume bullets`, () => {
+    const cl = claude()
+    const kept = withoutCleanup(cl).split('\n')
+    const gone = cl.split('\n').filter((l) => !kept.includes(l))
+    assert.equal(gone.length, 2, JSON.stringify(gone.map((l) => l.slice(0, 60))))
+    assert.ok(gone[0].startsWith('- After a PR merges or is abandoned, clean up the worktrees'))
+    assert.equal(gone[1] + '\n', RESUME)
   })
 }

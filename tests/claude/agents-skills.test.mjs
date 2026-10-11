@@ -70,7 +70,7 @@ const linkedNames = (work) => managed(work, 'symlinks').filter((l) => l.startsWi
 
 // Terms the Codex render may not carry (agents-md.test.mjs CLAUDE_ONLY): Codex
 // runs no review gates and has no Claude tools.
-const CODEX_BANNED = ['switch_browser', 'WebFetch', 'WebSearch', 'codex-computer-use', 'Bash tool', 'mcp__', 'acceptance-gate', 'red-team-reviewer', '`bdfl`', '`planner`', '`tester`']
+const CODEX_BANNED = ['switch_browser', 'WebFetch', 'WebSearch', 'codex-computer-use', 'Bash tool', 'mcp__', 'acceptance-gate', 'red-team-reviewer', '`bdfl`', '`planner`', '`tester`', 'SendMessage']
 
 function skillFiles(dir) {
   return readdirSync(dir, { recursive: true, withFileTypes: true })
