@@ -33,7 +33,8 @@ const ARGS = () => ({
 })
 
 const TESTER_OK = 'TESTS: PASS — canary 3/3, 1 added, 0 modified — canary read.\n\nWhat ran: canary'
-const REDTEAM_OK = 'CANARY RED-TEAM REPORT'
+const REDTEAM_OK = '- **Verdict** — ship. CANARY RED-TEAM REPORT'
+const RERUN_NOTE = ' Note: an earlier run of this gate was cut off before it returned a valid report. It may have left test-file changes in the tree. Treat any test changes you did not expect as yours: keep, fix, or delete each one, and list every one you keep under Tests added/modified.'
 const BDFL_OK = { verdict: 'APPROVE', reason: 'canary reason', conditions: [], guidance: '', report: 'CANARY BDFL REPORT' }
 
 // Each script entry is a list of results returned in call order for that
@@ -213,11 +214,20 @@ for (const [name, bad] of TESTER_INVALID) {
   })
 }
 
-test('acceptance-gate: the tester rerun uses the identical prompt and opts', async () => {
+test('acceptance-gate: the tester rerun adds the cut-off note to the same prompt, with the same opts', async () => {
   const { calls } = await run({ tester: [null, TESTER_OK] })
   const [a, b] = calls.filter((c) => c.label === 'tester')
-  assert.equal(a.prompt, b.prompt)
+  assert.equal(b.prompt, a.prompt + RERUN_NOTE)
   assert.deepEqual(a.opts, b.opts)
+})
+
+test('acceptance-gate: red-team and bdfl reruns send the identical prompt, with no tester note', async () => {
+  const { calls } = await run({ 'red-team': [null, REDTEAM_OK], bdfl: [null, BDFL_OK] })
+  for (const label of ['red-team', 'bdfl']) {
+    const [a, b] = calls.filter((c) => c.label === label)
+    assert.equal(b.prompt, a.prompt, `${label} rerun prompt changed`)
+    assert.deepEqual(a.opts, b.opts)
+  }
 })
 
 test('acceptance-gate: bdfl gets the rerun tester report, never the cut-off first one', async () => {
@@ -237,9 +247,19 @@ test('acceptance-gate: tester invalid twice stops with no verdict and never reac
   assert.ok(!logs(calls).some((m) => m.startsWith('BDFL:')))
 })
 
-// --- Red-team non-empty check -------------------------------------------------
+// --- Red-team Verdict-first check ---------------------------------------------
+
+for (const good of ['- **Verdict** — ship.', '**Verdict:** ship.', 'Verdict: ship.']) {
+  test(`acceptance-gate: red-team report accepted without rerun: ${good}`, async () => {
+    const { result, error, labels } = await run({ 'red-team': [good] })
+    assert.equal(error, undefined, error && error.message)
+    assert.deepEqual(labels, ['tester', 'red-team', 'bdfl'])
+    assert.deepEqual(result.reruns, [])
+  })
+}
 
 for (const [name, bad] of [
+  ['preamble only', 'Let me read the diff first.'],
   ['null', null],
   ['empty string', ''],
   ['whitespace only', '\n  \n'],
