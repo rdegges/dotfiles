@@ -37,16 +37,36 @@ const A = typeof args === 'string' ? JSON.parse(args) : (args ?? {})
 
 if (!A.repo || !A.change || !A.spec) throw new Error('args.repo, args.change, and args.spec are required')
 
+// A dropped agent returns null, and a cut-off one returns text without its
+// output contract. Neither may reach the next gate as if it were a report.
+// The session cannot SendMessage an agent inside a workflow, so per CLAUDE.md
+// rerun it once and say so; if the rerun also fails, stop without a verdict.
+const reruns = []
+async function checked(name, ok, prompt, opts) {
+  const first = await agent(prompt, opts)
+  if (ok(first)) return first
+  reruns.push(name)
+  log(`${name}: no valid report (dropped or cut off); rerunning once`)
+  const second = await agent(prompt, opts)
+  if (ok(second)) return second
+  throw new Error(`${name} returned no valid report twice; the gate has no verdict`)
+}
+const isReport = (r) => typeof r === 'string' && r.trim() !== ''
+
 // Sequential by doctrine: the tester modifies test files, so its output is part
 // of the tree the red-team reviews, and the BDFL judges the final state.
 phase('Test')
-const testerReport = await agent(
+const testerReport = await checked(
+  'tester',
+  (r) => isReport(r) && /^TESTS: (PASS|FAIL)\b/.test(r.trimStart()),
   `Repo: ${A.repo}. The change under test: ${A.change}. Run your full process per your definition.${A.runNotes ? ` Notes: ${A.runNotes}` : ''}`,
   { agentType: 'tester', label: 'tester' },
 )
 
 phase('Review')
-const redTeamReport = await agent(
+const redTeamReport = await checked(
+  'red-team',
+  isReport,
   `Repo: ${A.repo}.
 
 The spec (the original request/plan):
@@ -57,7 +77,9 @@ The change to review: ${A.change}. Note: a tester agent has already run on this 
 )
 
 phase('Gate')
-const gate = await agent(
+const gate = await checked(
+  'bdfl',
+  (g) => g != null && VERDICT_SCHEMA.properties.verdict.enum.includes(g.verdict),
   `Repo: ${A.repo}. You are gating this change for merge: ${A.change}.
 
 The spec (the original request/plan):
@@ -83,4 +105,5 @@ return {
   bdflReport: gate.report,
   testerReport,
   redTeamReport,
+  reruns,
 }
