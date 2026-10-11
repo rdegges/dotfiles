@@ -39,4 +39,7 @@ brew "vercel-cli"
 brew "zlib"
 brew "snyk/tap/snyk"
 cask "1password-cli"
+# Official OpenCode desktop app (opencode.ai/download). Its browser pane is what
+# opencode's built-in `browser` tools drive; the terminal CLI has none.
+cask "opencode-desktop"
 cask "vorssaint"
