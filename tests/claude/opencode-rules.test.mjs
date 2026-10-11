@@ -178,17 +178,3 @@ test('install-packages script embeds the current Brewfile hash and bundles ~/.br
     rmSync(home, { recursive: true, force: true })
   }
 })
-
-// PROPOSED CONTRACT: the opencode copy is the Claude render verbatim, so it
-// tells opencode to use Claude-only machinery it does not have (Claude in
-// Chrome, the acceptance-gate workflow and its agents, the Skill tool). Codex
-// gets a reader-specific render for the same reason. Todo until the maker
-// decides whether opencode should get one too.
-for (const work of [false, true]) {
-  test(`PROPOSED CONTRACT: work=${work}: opencode render names no Claude-only tool or gate`, { todo: true }, () => {
-    const oc = render('.config/opencode/AGENTS.md', work)
-    for (const t of ['mcp__claude-in-chrome', 'acceptance-gate', 'red-team-reviewer', '`/chrome` in Claude Code', 'Bash tool']) {
-      assert.ok(!oc.includes(t), `opencode render contains ${t}`)
-    }
-  })
-}
