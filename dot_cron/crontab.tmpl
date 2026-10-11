@@ -40,6 +40,12 @@ HOMEBREW_NO_ASK=1
 # script writes ~/.cron/logs/cf.FAILED, which every new shell prints. Daily at 10:10.
 10 10 * * * { date; $HOME/.cron/cf-update.sh; } > $HOME/.cron/logs/cf.log 2>&1
 
+# Update REA (rea.tools), an npm global on the asdf Node, and refresh its agent
+# registrations and skill. On failure the script writes ~/.cron/logs/rea.FAILED,
+# which every new shell prints. Daily at 10:25, not :15, so it never runs
+# alongside the hourly `chezmoi update`, which runs the same script on a Node bump.
+25 10 * * * { date; $HOME/.cron/rea-update.sh; } > $HOME/.cron/logs/rea.log 2>&1
+
 # Refresh asdf plugin repos (installed tool versions stay pinned by
 # .tool-versions). Hourly at :30.
 30 * * * * { date; asdf plugin update --all; } > $HOME/.cron/logs/asdf.log 2>&1
