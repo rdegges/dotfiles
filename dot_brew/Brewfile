@@ -25,6 +25,8 @@ brew "hugo"
 brew "jq"
 brew "lazygit"
 brew "neovim"
+# homebrew-core, not anomalyco/tap: the tap's `opencode` is v1 and its `opencode-v2` conflicts with this one.
+brew "opencode"
 brew "rclone"
 brew "ripgrep"
 brew "starship"
