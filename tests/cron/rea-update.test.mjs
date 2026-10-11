@@ -39,16 +39,16 @@ const STUBS = {
   rea:
     '#!/bin/sh\n' +
     // Record whether stdin is a terminal-free empty stream for setup calls.
-    'if [ "$1" = setup ]; then echo "rea $* stdin=$(cat | wc -c | tr -d " ")" >> "$CALLS"; exit "${STUB_SETUP_RC:-0}"; fi\n' +
+    'if [ "$1" = setup ]; then echo "rea $* stdin=$(cat | wc -c | tr -d " ")" >> "$CALLS"; [ -n "${STUB_SETUP_OUT:-}" ] && printf "%s\\n" "$STUB_SETUP_OUT"; exit "${STUB_SETUP_RC:-0}"; fi\n' +
     'echo "rea $*" >> "$CALLS"\n' +
     'if [ "$1" = doctor ]; then exit "${STUB_DOCTOR_RC:-0}"; fi\n' +
     'if [ "${STUB_REA_RC:-0}" != 0 ]; then echo "${STUB_REA_ERR:-boom}" >&2; exit "$STUB_REA_RC"; fi\n' +
     'printf "%s\\n" "${STUB_REA_OUT:-6.4.0}"\n',
 }
 
-function sandbox({ stubs = ['npm', 'asdf', 'rea'] } = {}) {
+function sandbox({ stubs = ['npm', 'asdf', 'rea'], homeName = 'home' } = {}) {
   const base = mkdtempSync(join(tmpdir(), 'rea-update-'))
-  const home = join(base, 'home')
+  const home = join(base, homeName)
   const bin = join(base, 'bin')
   mkdirSync(home, { recursive: true })
   mkdirSync(bin)
@@ -172,6 +172,80 @@ test('rea-update.sh: POSIX sh shebang, parses under sh -n', () => {
   assert.equal(spawnSync('sh', ['-n', SCRIPT]).status, 0)
 })
 
+// dot_zshrc's failure-banner loop, run alone (zsh -f: no startup files).
+const zshrcLine = read('dot_zshrc')
+  .split('\n')
+  .find((l) => l.includes('.FAILED') && !l.trimStart().startsWith('#'))
+const hasZsh = spawnSync('sh', ['-c', 'command -v zsh'], { encoding: 'utf8' }).status === 0
+const zskip = hasZsh ? false : 'zsh not installed (see the run command at the top)'
+const banner = (home) => spawnSync('zsh', ['-f', '-c', zshrcLine], { encoding: 'utf8', env: { HOME: home, PATH: SYS_PATH } })
+
+test('no asdf on PATH: still succeeds, skips the reshim, setup and doctor still run', () =>
+  withSandbox({ stubs: ['npm', 'rea'] }, (sb) => {
+    const r = sb.run()
+    assert.equal(r.status, 0, r.stdout + r.stderr)
+    assert.deepEqual(sb.calls(), [
+      'npm install --global rea-agents@latest',
+      'rea --version',
+      `${SETUP} stdin=0`,
+      'rea doctor --client codex --json',
+    ])
+    assert.equal(existsSync(sb.marker), false)
+  }))
+
+test('rea missing after install (bin not linked): exit 1 with a marker, no setup', () =>
+  withSandbox({ stubs: ['npm', 'asdf'] }, (sb) => {
+    assertFailed(sb, sb.run(), /rea --version: /)
+    assert.deepEqual(sb.calls(), ['npm install --global rea-agents@latest', 'asdf reshim nodejs'])
+  }))
+
+test('rea setup fails: doctor never runs (no success claimed past a failed step)', () =>
+  withSandbox({}, (sb) => {
+    assertFailed(sb, sb.run({ STUB_SETUP_RC: '1' }), /rea setup/)
+    assert.equal(sb.calls().some((c) => c.startsWith('rea doctor')), false)
+  }))
+
+test('repeated failures replace the marker, they never append to it', () =>
+  withSandbox({}, (sb) => {
+    sb.run({ STUB_NPM_RC: '1' })
+    sb.run({ STUB_SETUP_RC: '1' })
+    sb.run({ STUB_DOCTOR_RC: '1' })
+    const m = readFileSync(sb.marker, 'utf8')
+    assert.equal(m.trimEnd().split('\n').length, 1, m)
+    assert.match(m, /rea doctor --client codex/, 'marker must describe the latest failure')
+  }))
+
+test('HOME with spaces and non-ASCII: marker lands in that HOME, success clears it', () =>
+  withSandbox({ homeName: 'Ränd all ☁️' }, (sb) => {
+    assertFailed(sb, sb.run({ STUB_DOCTOR_RC: '1' }), /rea doctor/)
+    assert.ok(sb.marker.includes('Ränd all ☁️'))
+    assert.equal(sb.run().status, 0)
+    assert.equal(existsSync(sb.marker), false)
+  }))
+
+// Real rea-agents 6.4.0 reports a setup failure (needs_confirmation, an
+// unparsable ~/.claude.json) as JSON on stdout and nothing on stderr, observed
+// in a Docker probe. The marker sends the reader to rea.log, so the cause has to
+// reach the script's output; today `> /dev/null` drops it and the log holds only
+// "FAILED: rea setup ...". Any fix that keeps the cause visible passes.
+test('DEFECT: a rea setup failure leaves its cause in the log the marker points to', () =>
+  withSandbox({}, (sb) => {
+    const cause = '{"status":"failed","error":"cannot parse /h/.claude.json: Unexpected end of JSON input"}'
+    const r = sb.run({ STUB_SETUP_RC: '1', STUB_SETUP_OUT: cause })
+    assert.equal(r.status, 1)
+    assert.ok((r.stdout + r.stderr).includes('cannot parse /h/.claude.json'), `log would hold only:\n${r.stdout}${r.stderr}`)
+  }))
+
+test('end to end: a stale Codex entry shows in the zsh banner, the next good run clears it', { skip: zskip }, () =>
+  withSandbox({}, (sb) => {
+    sb.run({ STUB_DOCTOR_RC: '1' })
+    const shown = banner(sb.home)
+    assert.equal(shown.status, 0, shown.stderr)
+    assert.match(shown.stdout, /cron: .* rea update failed: rea doctor --client codex: dot_codex\/config\.toml\.tmpl no longer matches/)
+    assert.equal(sb.run().status, 0)
+    assert.equal(banner(sb.home).stdout, '')
+  }))
+
 // --- Wiring --------------------------------------------------------------------
 
 test('crontab: one daily 10:25 job runs ~/.cron/rea-update.sh and logs to rea.log', () => {
@@ -190,10 +264,10 @@ test('run_onchange: after_ script, re-runs on Node pin or script change, execs t
 
 // --- Codex registration --------------------------------------------------------
 
-function renderCodex(toolVersions) {
+function renderCodex(toolVersions, homeName = 'home') {
   const base = mkdtempSync(join(tmpdir(), 'rea-codex-'))
   const src = join(base, 'src')
-  const home = join(base, 'home')
+  const home = join(base, homeName)
   mkdirSync(home)
   mkdirSync(src)
   cpSync(join(SOURCE, 'dot_codex'), join(src, 'dot_codex'), { recursive: true })
@@ -232,4 +306,46 @@ test('codex: fails the render when no Node is pinned (never a //bin/rea path)', 
 
 test('codex: the real dot_tool-versions pins the Node the entry needs', () => {
   assert.match(read('dot_tool-versions'), /^nodejs \S+$/m)
+})
+
+// asdf's .tool-versions allows tabs, extra spaces, trailing comments, CRLF line
+// ends, and fallback versions after the first; asdf uses the first version.
+for (const [name, tv, want] of [
+  ['tab separator', 'nodejs\t26.4.0\n', '26.4.0'],
+  ['trailing comment', 'nodejs 26.4.0 # LTS\n', '26.4.0'],
+  ['CRLF line ends', 'python 3.14.6t\r\nnodejs 26.4.0\r\ngolang 1.26.4\r\n', '26.4.0'],
+  ['fallback versions: first wins', 'nodejs 26.4.0 24.11.0 system\n', '26.4.0'],
+  ['no trailing newline', 'nodejs 26.4.0', '26.4.0'],
+]) {
+  test(`codex: ${name} still renders .../nodejs/${want}/bin/rea`, () => {
+    const r = renderCodex(tv)
+    assert.equal(r.status, 0, r.stderr)
+    assert.match(r.stdout, new RegExp(`^command = "/[^"\\r]+/\\.asdf/installs/nodejs/${want.replace(/\./g, '\\.')}/bin/rea"$`, 'm'))
+  })
+}
+
+for (const [name, tv] of [
+  ['a commented-out pin', '# nodejs 26.4.0\npython 3.14.6t\n'],
+  ['a different tool whose name starts with nodejs', 'nodejs-lts 26.4.0\n'],
+  ['an empty file', ''],
+]) {
+  test(`codex: ${name} counts as no Node pin and fails the render`, () => {
+    const r = renderCodex(tv)
+    assert.notEqual(r.status, 0, r.stdout)
+    assert.match(r.stderr, /pins no nodejs version/)
+  })
+}
+
+test('codex: a home dir with spaces and non-ASCII lands verbatim inside the TOML string', () => {
+  const r = renderCodex('nodejs 26.4.0\n', 'Ränd all ☁️')
+  assert.equal(r.status, 0, r.stderr)
+  assert.match(r.stdout, /^command = "\/.+\/Ränd all ☁️\/\.asdf\/installs\/nodejs\/26\.4\.0\/bin\/rea"$/m)
+})
+
+test('codex: exactly one [mcp_servers.rea] table, and it is the last table (keys cannot leak into another)', () => {
+  const r = renderCodex(read('dot_tool-versions'))
+  assert.equal(r.status, 0, r.stderr)
+  const tables = r.stdout.split('\n').filter((l) => /^\[/.test(l))
+  assert.equal(tables.filter((t) => t === '[mcp_servers.rea]').length, 1, tables.join('\n'))
+  assert.equal(tables.at(-1), '[mcp_servers.rea]', tables.join('\n'))
 })
