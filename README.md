@@ -19,6 +19,16 @@ Finally, you'll want to run:
 chezmoi init --apply git@github.com:rdegges/dotfiles.git
 ```
 
+After that, cron runs `chezmoi update --force` hourly at :15 through
+`~/.cron/chezmoi-update.sh` (source: `dot_cron/executable_chezmoi-update.sh`).
+Output goes to `~/.cron/logs/chezmoi.log`. A failure writes
+`~/.cron/logs/chezmoi.FAILED`, and every new shell prints it in red until a
+later run succeeds. To fix it, read the log and run `chezmoi update` by hand.
+
+On macOS, give `/usr/sbin/cron` Full Disk Access (System Settings > Privacy &
+Security > Full Disk Access). Without it, cron cannot install a changed
+crontab, so the apply fails each hour.
+
 
 ## Bootstrap
 
