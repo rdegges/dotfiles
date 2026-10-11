@@ -125,8 +125,8 @@ The only per-machine step is `cf auth login`. `cf` keeps its own credentials, ou
 - **opencode** (`opencode`) — installed via Homebrew from homebrew-core.
   Not from upstream's `anomalyco/tap`: its `opencode` formula is still OpenCode 1, and its separate `opencode-v2` formula conflicts with core's.
   `~/.config/opencode/AGENTS.md` is rendered from `dot_claude/CLAUDE.md.tmpl`
-  unchanged (`dot_config/opencode/AGENTS.md.tmpl`), so opencode reads the same
-  bytes as `~/.claude/CLAUDE.md`. OpenCode 2 reads only `~/.config/opencode/AGENTS.md` for global rules and has no `~/.claude/CLAUDE.md` fallback, so this managed file is the only way the rules reach opencode. The copy is verbatim on purpose, so opencode also sees Claude-only rules (Claude in Chrome, the acceptance-gate agents) that it cannot run.
+  with `reader=opencode` (`dot_config/opencode/AGENTS.md.tmpl`), so opencode reads the same
+  bytes as `~/.claude/CLAUDE.md` except the Browser section. OpenCode 2 reads only `~/.config/opencode/AGENTS.md` for global rules and has no `~/.claude/CLAUDE.md` fallback, so this managed file is the only way the rules reach opencode. Outside the Browser section the copy is verbatim on purpose, so opencode also sees Claude-only rules (the acceptance-gate agents) that it cannot run. The Browser section tells opencode it has no browser tool and to hand browser tasks back to me, and tells Codex to use only its own browser tool. Browser Control (`@opencode-ai/browser-control`) will be wired in once an npm release ships its opencode plugin (the `./server` export); as of v0.8.4 it is only a client library.
 - **WorkOS MCP** — on personal machines (`work = false`),
   `run_onchange_after_add-workos-mcp.sh.tmpl` registers the
   [WorkOS management MCP server](https://workos.com/docs/mcp) at user scope

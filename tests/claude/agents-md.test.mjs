@@ -318,6 +318,7 @@ const CODEX_ONLY = [
   'none chosen: ask me which one to use.',
   'switch to the Codex Chrome plugin.',
   'the ChatGPT Chrome Extension installed and signed in to my ChatGPT account',
+  "- Use only your own browser tool. When a skill or rule names another agent's browser tool, use yours in its place.\n",
 ]
 
 for (const work of [false, true]) {
