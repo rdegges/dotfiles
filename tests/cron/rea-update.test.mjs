@@ -41,7 +41,7 @@ const STUBS = {
     // Record whether stdin is a terminal-free empty stream for setup calls.
     'if [ "$1" = setup ]; then echo "rea $* stdin=$(cat | wc -c | tr -d " ")" >> "$CALLS"; [ -n "${STUB_SETUP_OUT:-}" ] && printf "%s\\n" "$STUB_SETUP_OUT"; exit "${STUB_SETUP_RC:-0}"; fi\n' +
     'echo "rea $*" >> "$CALLS"\n' +
-    'if [ "$1" = doctor ]; then exit "${STUB_DOCTOR_RC:-0}"; fi\n' +
+    'if [ "$1" = doctor ]; then [ -n "${STUB_DOCTOR_OUT:-}" ] && printf "%s\\n" "$STUB_DOCTOR_OUT"; exit "${STUB_DOCTOR_RC:-0}"; fi\n' +
     'if [ "${STUB_REA_RC:-0}" != 0 ]; then echo "${STUB_REA_ERR:-boom}" >&2; exit "$STUB_REA_RC"; fi\n' +
     'printf "%s\\n" "${STUB_REA_OUT:-6.4.0}"\n',
 }
@@ -158,7 +158,7 @@ test('rea setup fails (e.g. needs_confirmation exits 1): exit 1 with a marker', 
 
 test('rea doctor reports a stale Codex entry: exit 1 with a marker that names the template', () =>
   withSandbox({}, (sb) => {
-    assertFailed(sb, sb.run({ STUB_DOCTOR_RC: '1' }), /rea doctor --client codex: dot_codex\/config\.toml\.tmpl no longer matches/)
+    assertFailed(sb, sb.run({ STUB_DOCTOR_RC: '1' }), /rea doctor --client codex \(see its JSON in this log; a registration:codex failure means dot_codex\/config\.toml\.tmpl needs the entry this release writes\)/)
   }))
 
 test('a forced npm failure through REA_UPDATE_PACKAGE leaves the marker; doctor never runs', () =>
@@ -226,9 +226,8 @@ test('HOME with spaces and non-ASCII: marker lands in that HOME, success clears 
 // Real rea-agents 6.4.0 reports a setup failure (needs_confirmation, an
 // unparsable ~/.claude.json) as JSON on stdout and nothing on stderr, observed
 // in a Docker probe. The marker sends the reader to rea.log, so the cause has to
-// reach the script's output; today `> /dev/null` drops it and the log holds only
-// "FAILED: rea setup ...". Any fix that keeps the cause visible passes.
-test('DEFECT: a rea setup failure leaves its cause in the log the marker points to', () =>
+// reach the script's output, not only "FAILED: rea setup ...".
+test('a rea setup failure leaves its cause in the log the marker points to', () =>
   withSandbox({}, (sb) => {
     const cause = '{"status":"failed","error":"cannot parse /h/.claude.json: Unexpected end of JSON input"}'
     const r = sb.run({ STUB_SETUP_RC: '1', STUB_SETUP_OUT: cause })
@@ -236,12 +235,20 @@ test('DEFECT: a rea setup failure leaves its cause in the log the marker points 
     assert.ok((r.stdout + r.stderr).includes('cannot parse /h/.claude.json'), `log would hold only:\n${r.stdout}${r.stderr}`)
   }))
 
+test('a rea doctor failure leaves its JSON in the log the marker points to', () =>
+  withSandbox({}, (sb) => {
+    const json = '{"healthy":false,"scope_checks":[{"name":"registration:codex","ok":false,"classification":"config_drift"}]}'
+    const r = sb.run({ STUB_DOCTOR_RC: '1', STUB_DOCTOR_OUT: json })
+    assertFailed(sb, r, /rea doctor --client codex/)
+    assert.ok(r.stdout.includes(json), `log would hold only:\n${r.stdout}`)
+  }))
+
 test('end to end: a stale Codex entry shows in the zsh banner, the next good run clears it', { skip: zskip }, () =>
   withSandbox({}, (sb) => {
     sb.run({ STUB_DOCTOR_RC: '1' })
     const shown = banner(sb.home)
     assert.equal(shown.status, 0, shown.stderr)
-    assert.match(shown.stdout, /cron: .* rea update failed: rea doctor --client codex: dot_codex\/config\.toml\.tmpl no longer matches/)
+    assert.match(shown.stdout, /cron: .* rea update failed: rea doctor --client codex \(see its JSON in this log/)
     assert.equal(sb.run().status, 0)
     assert.equal(banner(sb.home).stdout, '')
   }))

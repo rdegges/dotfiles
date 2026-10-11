@@ -15,7 +15,9 @@
 # nothing when they already match. Codex is not passed: chezmoi owns
 # ~/.codex/config.toml, so its registration lives in dot_codex/config.toml.tmpl,
 # and `rea doctor` (exit 0 only when the entry matches what this release would
-# write) catches a release that changes the entry's shape.
+# write) catches a release that changes the entry's shape. Codex gets the
+# reverse-engineer-anything skill from ~/.agents/skills, which the --client
+# opencode step writes; dropping opencode from setup drops the skill for Codex too.
 #
 # A failure writes ~/.cron/logs/rea.FAILED, and every new shell prints it
 # (dot_zshrc) until a later run succeeds.
@@ -39,9 +41,9 @@ command -v npm >/dev/null 2>&1 || fail "npm not found on PATH"
 npm install --global "$pkg" || fail "npm install --global $pkg"
 command -v asdf >/dev/null 2>&1 && asdf reshim nodejs
 version=$(rea --version 2>&1) || fail "rea --version: $version"
-rea setup --client claude_code --client opencode --yes --json > /dev/null < /dev/null \
+rea setup --client claude_code --client opencode --yes --json < /dev/null \
     || fail "rea setup --client claude_code --client opencode"
-rea doctor --client codex --json > /dev/null \
-    || fail "rea doctor --client codex: dot_codex/config.toml.tmpl no longer matches this release"
+rea doctor --client codex --json \
+    || fail "rea doctor --client codex (see its JSON in this log; a registration:codex failure means dot_codex/config.toml.tmpl needs the entry this release writes)"
 rm -f "$marker"
 echo "rea-update: ok: $version"

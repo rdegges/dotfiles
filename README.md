@@ -143,7 +143,10 @@ The only per-machine step is `cf auth login`. `cf` keeps its own credentials, ou
   `rea doctor --client codex`. If a new REA release expects a different entry,
   the script writes `~/.cron/logs/rea.FAILED`. The optional native engines
   (Hopper, Ghidra, IDA) are not installed. Static JavaScript, .NET, and web
-  analysis work without them.
+  analysis work without them. Codex reads the skill from `~/.agents/skills`,
+  which the opencode setup step writes. Setup re-enables the opencode entry
+  each day if you disable it, and leaves `~/.claude.json.rea.backup` and
+  `opencode.json.rea.backup` beside the live files.
 - **WorkOS MCP** — on personal machines (`work = false`),
   `run_onchange_after_add-workos-mcp.sh.tmpl` registers the
   [WorkOS management MCP server](https://workos.com/docs/mcp) at user scope
