@@ -51,6 +51,76 @@ Randall Degges
 https://rdegges.com
 """
 
+# ===== hardlyfunny.com aliases (same iCloud account, custom domain) =====
+# iCloud delivers all addresses for an Apple ID to one unified INBOX — these
+# are aliases, not separate mailboxes. They share the primary account's IMAP /
+# SMTP credentials (login stays r@rdegges.com); only the From identity differs.
+# View with: himalaya envelope list -a hardlyfunny 'to randall@hardlyfunny.com'
+
+[accounts.hardlyfunny]
+email = "randall@hardlyfunny.com"
+display-name = "Randall Degges"
+
+folder.aliases.inbox = "INBOX"
+folder.aliases.sent = "Sent Messages"
+folder.aliases.drafts = "Drafts"
+folder.aliases.trash = "Deleted Messages"
+
+backend.type = "imap"
+backend.host = "imap.mail.me.com"
+backend.port = 993
+backend.encryption.type = "tls"
+backend.login = "r@rdegges.com"
+backend.auth.type = "password"
+backend.auth.cmd = "security find-generic-password -s himalaya-icloud -a r@rdegges.com -w"
+
+message.send.backend.type = "smtp"
+message.send.backend.host = "smtp.mail.me.com"
+message.send.backend.port = 587
+message.send.backend.encryption.type = "start-tls"
+message.send.backend.login = "r@rdegges.com"
+message.send.backend.auth.type = "password"
+message.send.backend.auth.cmd = "security find-generic-password -s himalaya-icloud -a r@rdegges.com -w"
+
+message.send.save-copy = true
+
+signature = """
+Randall Degges
+https://rdegges.com
+"""
+
+[accounts.social]
+email = "social@hardlyfunny.com"
+display-name = "Randall Degges"
+
+folder.aliases.inbox = "INBOX"
+folder.aliases.sent = "Sent Messages"
+folder.aliases.drafts = "Drafts"
+folder.aliases.trash = "Deleted Messages"
+
+backend.type = "imap"
+backend.host = "imap.mail.me.com"
+backend.port = 993
+backend.encryption.type = "tls"
+backend.login = "r@rdegges.com"
+backend.auth.type = "password"
+backend.auth.cmd = "security find-generic-password -s himalaya-icloud -a r@rdegges.com -w"
+
+message.send.backend.type = "smtp"
+message.send.backend.host = "smtp.mail.me.com"
+message.send.backend.port = 587
+message.send.backend.encryption.type = "start-tls"
+message.send.backend.login = "r@rdegges.com"
+message.send.backend.auth.type = "password"
+message.send.backend.auth.cmd = "security find-generic-password -s himalaya-icloud -a r@rdegges.com -w"
+
+message.send.save-copy = true
+
+signature = """
+Randall Degges
+https://rdegges.com
+"""
+
 {{ if .work -}}
 # ===== Snyk Gmail (work laptop only) =====
 
