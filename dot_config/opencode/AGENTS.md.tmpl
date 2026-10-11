@@ -1,2 +1,2 @@
-{{- /* opencode reads ~/.config/opencode/AGENTS.md. Render it from the Claude rules, swapping only the Browser section for opencode's own browser tool. */ -}}
+{{- /* opencode reads ~/.config/opencode/AGENTS.md. Render it from the Claude rules, swapping only the Browser section for the no-browser hand-back rule. */ -}}
 {{- includeTemplate "dot_claude/CLAUDE.md.tmpl" (merge (dict "reader" "opencode") .) -}}
