@@ -216,3 +216,83 @@ test('install-packages script embeds the current Brewfile hash and bundles ~/.br
     rmSync(home, { recursive: true, force: true })
   }
 })
+
+// Tester additions (agent-native-browsers). The checks above pin the opencode
+// render; these pin that each reader's Browser text stays in its own target
+// (Codex and the whole Claude render, not only its Browser section), that a
+// `reader` key in machine data cannot flip a target to another reader, that
+// one real apply renders all three readers side by side, and that opencode is
+// never also told the opposite rule (do not stop, do not hand back).
+const OPENCODE_BULLET = '- You have no browser tool.'
+const CODEX_BULLET = "- Use only your own browser tool. When a skill or rule names another agent's browser tool, use yours in its place.\n"
+const NO_HANDBACK = 'Do not stop and do not hand the task back to me.'
+
+function renderData(target, data) {
+  const home = mkdtempSync(join(tmpdir(), 'opencode-rules-'))
+  try {
+    const r = spawnSync(
+      'chezmoi',
+      ['--source', SOURCE, '--destination', home, '--override-data', JSON.stringify(data), 'cat', join(home, target)],
+      { encoding: 'utf8', env: { PATH: process.env.PATH, HOME: home } },
+    )
+    assert.ifError(r.error)
+    assert.equal(r.status, 0, `chezmoi cat ${target} (${JSON.stringify(data)}) exited ${r.status}: ${r.stderr}`)
+    assert.ok(r.stdout.length > 0, `chezmoi cat ${target} printed nothing`)
+    return r.stdout
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+}
+
+for (const work of [false, true]) {
+  test(`work=${work}: no opencode Browser text anywhere in the Claude or Codex render`, () => {
+    for (const target of ['.claude/CLAUDE.md', '.codex/AGENTS.md']) {
+      const text = render(target, work)
+      for (const t of [OPENCODE_BULLET, 'tell me the task needs a browser and stop', 'web search or web fetch']) {
+        assert.ok(!text.includes(t), `${target} contains ${JSON.stringify(t)}`)
+      }
+    }
+  })
+
+  test(`work=${work}: opencode is told to hand browser tasks back exactly once and never told not to`, () => {
+    const oc = render('.config/opencode/AGENTS.md', work)
+    assert.equal(oc.split('tell me the task needs a browser and stop').length, 2)
+    assert.ok(!oc.includes(NO_HANDBACK), 'opencode render also says do not hand the task back')
+    assert.ok(!oc.includes(CODEX_BULLET), 'opencode render carries the Codex own-tool bullet')
+    // The Claude and Codex renders keep their own no-hand-back rule.
+    assert.ok(render('.claude/CLAUDE.md', work).includes(NO_HANDBACK), 'Claude render lost the no-hand-back rule')
+    assert.ok(render('.codex/AGENTS.md', work).includes(NO_HANDBACK), 'Codex render lost the no-hand-back rule')
+  })
+
+  // merge (dict "reader" ...) . gives the target's own reader precedence over
+  // machine data. Swapping the merge arguments would let a stray `reader` key
+  // in chezmoi data turn opencode's file into Codex's (or the reverse).
+  for (const reader of ['codex', 'opencode', 'claude']) {
+    test(`work=${work}: a reader=${reader} key in machine data does not change the opencode or Codex target`, () => {
+      const oc = renderData('.config/opencode/AGENTS.md', { work, reader })
+      assert.ok(oc.startsWith('# Global CLAUDE.md'), JSON.stringify(oc.slice(0, 40)))
+      assert.equal(browser(oc), OPENCODE_BROWSER)
+      const cx = renderData('.codex/AGENTS.md', { work, reader })
+      assert.ok(cx.startsWith('# Global AGENTS.md'), JSON.stringify(cx.slice(0, 40)))
+      assert.ok(browser(cx).includes(CODEX_BULLET), 'Codex Browser section lacks its own-tool bullet')
+      assert.ok(!cx.includes(OPENCODE_BULLET), 'Codex render carries opencode text')
+    })
+  }
+
+  test(`work=${work}: one apply writes each reader's own Browser section to its own file`, () => {
+    applied(
+      work,
+      () => {},
+      (home, pass) => {
+        const cl = browser(readFileSync(join(home, '.claude/CLAUDE.md'), 'utf8'))
+        const cx = browser(readFileSync(join(home, '.codex/AGENTS.md'), 'utf8'))
+        const oc = browser(readFileSync(join(home, OPENCODE_DIR, 'AGENTS.md'), 'utf8'))
+        assert.ok(cl.includes('Claude in Chrome (`mcp__claude-in-chrome__*`'), `pass ${pass}: Claude Browser section lost Claude in Chrome`)
+        assert.ok(!cl.includes(OPENCODE_BULLET) && !cl.includes(CODEX_BULLET), `pass ${pass}: Claude Browser section has another reader's text`)
+        assert.ok(cx.includes('the Codex Chrome plugin (`chrome`') && cx.includes(CODEX_BULLET), `pass ${pass}: Codex Browser section is not Codex's`)
+        assert.ok(!cx.includes(OPENCODE_BULLET), `pass ${pass}: Codex Browser section has opencode text`)
+        assert.equal(oc, OPENCODE_BROWSER, `pass ${pass}: opencode Browser section is not the hand-back text`)
+      },
+    )
+  })
+}
