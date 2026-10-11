@@ -78,8 +78,11 @@ function withoutGates(text) {
 }
 
 // The worktree cleanup bullet is Claude-only: Codex has no harness worktrees.
+// The subagent resume bullet is Claude-only too: it names SendMessage.
 function withoutCleanup(text) {
-  return text.replace(/^- After a PR merges or is abandoned, clean up the worktrees[^\n]*\n/m, '')
+  return text
+    .replace(/^- After a PR merges or is abandoned, clean up the worktrees[^\n]*\n/m, '')
+    .replace(/^- A subagent that stops on a network or API error[^\n]*\n/m, '')
 }
 
 // Lines, less list markers, cut at sentence ends. A wrong cut only makes the
@@ -245,7 +248,8 @@ const CODEX_PR_RULE = '- Never run review gates or merge a PR. Finish on a non-d
 const CLAUDE_GATES = [
   '`verification-gates` skill.\n- Non-trivial changes merge only when the `acceptance-gate` workflow (tester, then `red-team-reviewer`, then `bdfl`, in one call) returns APPROVE, or APPROVE WITH CONDITIONS once every condition has landed.',
   'Never run those gates one at a time.',
-  '\n- Every plan goes through the `bdfl` agent too. On every path, honor its verdict: never merge over REVISE or REJECT, and relay its guidance verbatim. Multi-PR work goes through the `planner` agent first.\n\n## Vault and sessions\n',
+  '\n- Every plan goes through the `bdfl` agent too. On every path, honor its verdict: never merge over REVISE or REJECT, and relay its guidance verbatim. Multi-PR work goes through the `planner` agent first.\n- A subagent that stops on a network or API error',
+  'Resume that same agent with `SendMessage` and ask it to continue. Never start a new agent for the same task: a new agent loses the context the old one built.\n\n## Vault and sessions\n',
   "instead. Only exception: the tester agent's Docker Playwright runs as defined in tester.md (the viewport/color-scheme matrix, and the whole web pass when Chrome is unreachable); the stop-and-wait rule below does not apply to it. Reading a public page",
 ]
 const AGENT_COPIES = ['architect', 'bdfl', 'planner', 'red-team-reviewer', 'tester']
