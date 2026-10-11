@@ -121,6 +121,11 @@ The only per-machine step is `cf auth login`. `cf` keeps its own credentials, ou
   so Claude Code and Codex share one set of global rules.
   `.chezmoiremove` deletes the old `~/AGENTS.md` copy and the unmanaged
   `~/.codex/agents/*.toml` agent copies: Codex opens PRs but runs no review gates.
+- **Codex skills** — Codex reads `~/.agents/skills`, not `~/.claude/skills`. For each
+  skill the Codex rules name, `dot_agents/skills/symlink_<name>` links
+  `~/.agents/skills/<name>` to `../../.claude/skills/<name>`, so Codex reads the live
+  Claude skill, not a copy. chezmoi manages only those links; the rest of
+  `~/.agents/skills` belongs to the `skills` tool (`dot_agents/skills.txt`).
 - **herdr** — terminal multiplexer for AI agents, installed via Homebrew.
 - **opencode** (`opencode`) — installed via Homebrew from homebrew-core.
   Not from upstream's `anomalyco/tap`: its `opencode` formula is still OpenCode 1, and its separate `opencode-v2` formula conflicts with core's.
