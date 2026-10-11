@@ -42,12 +42,12 @@ if (!A.repo || !A.change || !A.spec) throw new Error('args.repo, args.change, an
 // The session cannot SendMessage an agent inside a workflow, so per CLAUDE.md
 // rerun it once and say so; if the rerun also fails, stop without a verdict.
 const reruns = []
-async function checked(name, ok, prompt, opts) {
+async function checked(name, ok, prompt, opts, rerunNote = '') {
   const first = await agent(prompt, opts)
   if (ok(first)) return first
   reruns.push(name)
   log(`${name}: no valid report (dropped or cut off); rerunning once`)
-  const second = await agent(prompt, opts)
+  const second = await agent(prompt + rerunNote, opts)
   if (ok(second)) return second
   throw new Error(`${name} returned no valid report twice; the gate has no verdict`)
 }
@@ -61,12 +61,14 @@ const testerReport = await checked(
   (r) => isReport(r) && /^TESTS: (PASS|FAIL)\b/.test(r.trimStart()),
   `Repo: ${A.repo}. The change under test: ${A.change}. Run your full process per your definition.${A.runNotes ? ` Notes: ${A.runNotes}` : ''}`,
   { agentType: 'tester', label: 'tester' },
+  // A cut-off tester may already have written test files.
+  ' Note: an earlier run of this gate was cut off before it returned a valid report. It may have left test-file changes in the tree. Treat any test changes you did not expect as yours: keep, fix, or delete each one, and list every one you keep under Tests added/modified.',
 )
 
 phase('Review')
 const redTeamReport = await checked(
   'red-team',
-  isReport,
+  (r) => isReport(r) && /^(?:[-*]\s*)?\**Verdict\b/.test(r.trimStart()),
   `Repo: ${A.repo}.
 
 The spec (the original request/plan):
