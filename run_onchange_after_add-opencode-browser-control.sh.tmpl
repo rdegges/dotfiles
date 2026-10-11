@@ -1,0 +1,27 @@
+{{- if eq .chezmoi.os "darwin" -}}
+#!/bin/bash
+# Install Browser Control (github.com/anomalyco/browser-control) as an opencode
+# plugin, so opencode drives my real Chrome with its own tool instead of Claude
+# in Chrome. opencode keeps plugins in its own global config, which chezmoi
+# must not own, so this drives `opencode plugin` instead.
+#
+# The Chrome extension is a manual, one-time step per machine: ask `@browser`
+# in opencode to check the setup, then load the unpacked extension it names.
+set -uo pipefail
+
+PLUGIN="@opencode-ai/browser-control"
+
+if ! command -v opencode >/dev/null 2>&1; then
+  echo "opencode-browser-control: opencode not found; install it, then re-run chezmoi apply" >&2
+  exit 1
+fi
+
+listed="$(opencode plugin list 2>&1)" || { echo "opencode-browser-control: opencode plugin list failed: $listed" >&2; exit 1; }
+if printf '%s\n' "$listed" | grep -qF "$PLUGIN"; then
+  echo "opencode-browser-control: already installed"
+  exit 0
+fi
+
+opencode plugin add "$PLUGIN" || exit 1
+echo "opencode-browser-control: installed; ask @browser in opencode to finish the extension setup"
+{{ end -}}

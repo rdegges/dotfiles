@@ -1,5 +1,5 @@
 // dot_config/opencode/AGENTS.md.tmpl renders ~/.config/opencode/AGENTS.md from
-// dot_claude/CLAUDE.md.tmpl with no reader override.
+// dot_claude/CLAUDE.md.tmpl with reader=opencode.
 //
 // Run from the repo root (chezmoi is needed; without it every test FAILS, it
 // does not skip):
@@ -8,7 +8,12 @@
 //
 // What a pass proves: for work=false and work=true, chezmoi renders both
 // targets from this source tree with a throwaway HOME, neither is empty, and
-// they are byte-identical, so opencode and Claude Code read the same rules.
+// they are byte-identical outside the ### Browser section, so opencode and
+// Claude Code read the same rules except which browser tool to drive; that
+// section names opencode's Browser Control and no Claude browser tool. It
+// also proves the install script renders the plugin add. It says nothing about
+// whether opencode can drive Chrome; that needs the plugin, its extension, and
+// a live session.
 // It also proves the Brewfile installs opencode from homebrew-core only. It says
 // nothing about how opencode reads the file; that needs a live session.
 
@@ -39,11 +44,46 @@ function render(target, work) {
   }
 }
 
+// The ### Browser section up to the next ### heading.
+const BROWSER = /^### Browser\n[\s\S]*?(?=^### )/m
+
+function browser(text) {
+  // A missing or doubled heading would make the outside-Browser comparison vacuous.
+  for (const h of ['### Browser\n', '### Code locations\n']) assert.equal(text.split(`\n${h}`).length, 2, `${h.trim()} does not appear exactly once`)
+  const m = text.match(BROWSER)
+  assert.ok(m, 'no ### Browser section')
+  return m[0]
+}
+
+const CLAUDE_BROWSER = ['mcp__claude-in-chrome', 'claude-in-chrome', 'Claude in Chrome', 'switch_browser', '/chrome', 'claude.ai', 'tester.md', 'codex-computer-use', 'Codex Chrome plugin', 'ChatGPT']
+const OPENCODE_BROWSER = [
+  'Every browser task goes through Browser Control (the `browser` skill from the `@opencode-ai/browser-control` plugin',
+  'Several browsers connected and none chosen: ask me which one to use.',
+  'Use only your own browser tool. When a skill or rule names another agent\'s browser tool, use yours in its place.',
+  'or the task needs a web UI, switch to Browser Control.',
+  '`opencode plugin add @opencode-ai/browser-control`',
+]
+
 for (const work of [false, true]) {
-  test(`work=${work}: opencode AGENTS.md is byte-identical to CLAUDE.md`, () => {
+  test(`work=${work}: opencode AGENTS.md is byte-identical to CLAUDE.md outside the Browser section`, () => {
     const claude = render('.claude/CLAUDE.md', work)
+    const opencode = render('.config/opencode/AGENTS.md', work)
     assert.ok(claude.startsWith('# Global CLAUDE.md'), JSON.stringify(claude.slice(0, 40)))
-    assert.equal(render('.config/opencode/AGENTS.md', work), claude)
+    assert.notEqual(browser(opencode), browser(claude))
+    assert.ok(opencode.replace(BROWSER, '').length > 1000, 'nothing left outside the Browser section')
+    assert.equal(opencode.replace(BROWSER, ''), claude.replace(BROWSER, ''))
+  })
+
+  test(`work=${work}: opencode Browser section names Browser Control and no other agent's browser tool`, () => {
+    const b = browser(render('.config/opencode/AGENTS.md', work))
+    for (const t of OPENCODE_BROWSER) assert.ok(b.includes(t), `opencode Browser section lacks ${t}`)
+    for (const t of CLAUDE_BROWSER) assert.ok(!b.includes(t), `opencode Browser section contains ${t}`)
+    assert.ok(b.includes('Standing exception: while you follow the `navia-fsa-claims` skill'))
+  })
+
+  test(`work=${work}: Claude render has no opencode Browser text`, () => {
+    const b = browser(render('.claude/CLAUDE.md', work))
+    for (const t of ['Browser Control', 'opencode', 'Use only your own browser tool']) assert.ok(!b.includes(t), `Claude Browser section contains ${t}`)
   })
 }
 
@@ -81,7 +121,7 @@ const OPENCODE_DIR = '.config/opencode'
 const USER_FILES = { 'opencode.json': '{"theme":"mine"}\n', 'agent/review.md': 'my agent\n', 'AGENTS.md.bak': 'old\n' }
 
 for (const work of [false, true]) {
-  test(`work=${work}: apply writes ~/.config/opencode/AGENTS.md equal to ~/.claude/CLAUDE.md and keeps the user's opencode files`, () => {
+  test(`work=${work}: apply writes ~/.config/opencode/AGENTS.md equal to ~/.claude/CLAUDE.md outside the Browser section and keeps the user's opencode files`, () => {
     applied(
       work,
       (home) => {
@@ -96,7 +136,8 @@ for (const work of [false, true]) {
         assert.equal(st.mode & 0o111, 0, `pass ${pass}: AGENTS.md is executable`)
         const body = readFileSync(path, 'utf8')
         assert.ok(body.startsWith('# Global CLAUDE.md'), `pass ${pass}: ${JSON.stringify(body.slice(0, 40))}`)
-        assert.equal(body, readFileSync(join(home, '.claude/CLAUDE.md'), 'utf8'), `pass ${pass}: applied files differ`)
+        assert.equal(body.replace(BROWSER, ''), readFileSync(join(home, '.claude/CLAUDE.md'), 'utf8').replace(BROWSER, ''), `pass ${pass}: applied files differ`)
+        assert.ok(browser(body).includes('Browser Control'), `pass ${pass}: applied file lacks Browser Control`)
         for (const [f, b] of Object.entries(USER_FILES)) {
           assert.equal(readFileSync(join(home, OPENCODE_DIR, f), 'utf8'), b, `pass ${pass}: ${f} changed`)
         }
@@ -176,5 +217,32 @@ test('install-packages script embeds the current Brewfile hash and bundles ~/.br
     assert.ok(r.stdout.includes('brew bundle --file=~/.brew/Brewfile'))
   } finally {
     rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test('opencode Browser Control script adds the plugin on darwin only, after checking the list', () => {
+  const src = readFileSync(join(SOURCE, 'run_onchange_after_add-opencode-browser-control.sh.tmpl'), 'utf8')
+  for (const os of ['darwin', 'linux']) {
+    const home = mkdtempSync(join(tmpdir(), 'opencode-rules-'))
+    try {
+      const r = spawnSync(
+        'chezmoi',
+        ['--source', SOURCE, '--destination', home, '--override-data', JSON.stringify({ work: false, chezmoi: { os } }), 'execute-template'],
+        { encoding: 'utf8', input: src, env: { PATH: process.env.PATH, HOME: home } },
+      )
+      assert.equal(r.status, 0, `chezmoi execute-template (${os}) exited ${r.status}: ${r.stderr}`)
+      if (os !== 'darwin') {
+        assert.equal(r.stdout.trim(), '', `script renders on ${os}`)
+        continue
+      }
+      assert.ok(r.stdout.startsWith('#!/bin/bash\n'), JSON.stringify(r.stdout.slice(0, 40)))
+      assert.ok(r.stdout.includes('set -uo pipefail'))
+      const list = r.stdout.indexOf('plugin list')
+      const add = r.stdout.indexOf('plugin add "$PLUGIN" || exit 1')
+      assert.ok(list > 0 && add > list, 'script must check the plugin list before adding')
+      assert.ok(r.stdout.includes('PLUGIN="@opencode-ai/browser-control"\n'), 'plugin name is not exact or carries a version pin')
+    } finally {
+      rmSync(home, { recursive: true, force: true })
+    }
   }
 })
