@@ -9,11 +9,9 @@
 // What a pass proves: for work=false and work=true, chezmoi renders both
 // targets from this source tree with a throwaway HOME, neither is empty, and
 // they are byte-identical outside the ### Browser section, so opencode and
-// Claude Code read the same rules except which browser tool to drive; that
-// section names opencode's Browser Control and no Claude browser tool. It
-// also proves the install script renders the plugin add. It says nothing about
-// whether opencode can drive Chrome; that needs the plugin, its extension, and
-// a live session.
+// Claude Code read the same rules except for browsers. opencode has no browser
+// tool, so its Browser section is exactly the two hand-back bullets and names
+// no browser tool at all.
 // It also proves the Brewfile installs opencode from homebrew-core only. It says
 // nothing about how opencode reads the file; that needs a live session.
 
@@ -55,14 +53,14 @@ function browser(text) {
   return m[0]
 }
 
-const CLAUDE_BROWSER = ['mcp__claude-in-chrome', 'claude-in-chrome', 'Claude in Chrome', 'switch_browser', '/chrome', 'claude.ai', 'tester.md', 'codex-computer-use', 'Codex Chrome plugin', 'ChatGPT']
-const OPENCODE_BROWSER = [
-  'Every browser task goes through Browser Control (the `browser` skill from the `@opencode-ai/browser-control` plugin',
-  'Several browsers connected and none chosen: ask me which one to use.',
-  'Use only your own browser tool. When a skill or rule names another agent\'s browser tool, use yours in its place.',
-  'or the task needs a web UI, switch to Browser Control.',
-  '`opencode plugin add @opencode-ai/browser-control`',
-]
+// Every browser tool any agent has, plus Claude-only Browser text.
+const FORBIDDEN = ['mcp__claude-in-chrome', 'claude-in-chrome', 'Claude in Chrome', 'switch_browser', '/chrome', 'claude.ai', 'tester.md', 'codex-computer-use', 'Codex Chrome plugin', 'ChatGPT', 'Browser Control', 'browser-control', '@browser']
+const OPENCODE_BROWSER = `### Browser
+
+- You have no browser tool. For a browser task, or when a skill or rule tells you to use a browser tool, tell me the task needs a browser and stop. Never use headless Chrome, Playwright, Puppeteer, \`curl\` scraping, or another agent's browser tool.
+- Reading a public page with web search or web fetch is not a browser task.
+
+`
 
 for (const work of [false, true]) {
   test(`work=${work}: opencode AGENTS.md is byte-identical to CLAUDE.md outside the Browser section`, () => {
@@ -74,16 +72,15 @@ for (const work of [false, true]) {
     assert.equal(opencode.replace(BROWSER, ''), claude.replace(BROWSER, ''))
   })
 
-  test(`work=${work}: opencode Browser section names Browser Control and no other agent's browser tool`, () => {
+  test(`work=${work}: opencode Browser section is exactly the two hand-back bullets`, () => {
     const b = browser(render('.config/opencode/AGENTS.md', work))
-    for (const t of OPENCODE_BROWSER) assert.ok(b.includes(t), `opencode Browser section lacks ${t}`)
-    for (const t of CLAUDE_BROWSER) assert.ok(!b.includes(t), `opencode Browser section contains ${t}`)
-    assert.ok(b.includes('Standing exception: while you follow the `navia-fsa-claims` skill'))
+    assert.equal(b, OPENCODE_BROWSER)
+    for (const t of FORBIDDEN) assert.ok(!b.includes(t), `opencode Browser section contains ${t}`)
   })
 
   test(`work=${work}: Claude render has no opencode Browser text`, () => {
     const b = browser(render('.claude/CLAUDE.md', work))
-    for (const t of ['Browser Control', 'opencode', 'Use only your own browser tool']) assert.ok(!b.includes(t), `Claude Browser section contains ${t}`)
+    for (const t of ['opencode', 'You have no browser tool', 'Use only your own browser tool']) assert.ok(!b.includes(t), `Claude Browser section contains ${t}`)
   })
 }
 
@@ -137,7 +134,7 @@ for (const work of [false, true]) {
         const body = readFileSync(path, 'utf8')
         assert.ok(body.startsWith('# Global CLAUDE.md'), `pass ${pass}: ${JSON.stringify(body.slice(0, 40))}`)
         assert.equal(body.replace(BROWSER, ''), readFileSync(join(home, '.claude/CLAUDE.md'), 'utf8').replace(BROWSER, ''), `pass ${pass}: applied files differ`)
-        assert.ok(browser(body).includes('Browser Control'), `pass ${pass}: applied file lacks Browser Control`)
+        assert.equal(browser(body), OPENCODE_BROWSER, `pass ${pass}: applied Browser section is not the hand-back text`)
         for (const [f, b] of Object.entries(USER_FILES)) {
           assert.equal(readFileSync(join(home, OPENCODE_DIR, f), 'utf8'), b, `pass ${pass}: ${f} changed`)
         }
@@ -217,32 +214,5 @@ test('install-packages script embeds the current Brewfile hash and bundles ~/.br
     assert.ok(r.stdout.includes('brew bundle --file=~/.brew/Brewfile'))
   } finally {
     rmSync(home, { recursive: true, force: true })
-  }
-})
-
-test('opencode Browser Control script adds the plugin on darwin only, after checking the list', () => {
-  const src = readFileSync(join(SOURCE, 'run_onchange_after_add-opencode-browser-control.sh.tmpl'), 'utf8')
-  for (const os of ['darwin', 'linux']) {
-    const home = mkdtempSync(join(tmpdir(), 'opencode-rules-'))
-    try {
-      const r = spawnSync(
-        'chezmoi',
-        ['--source', SOURCE, '--destination', home, '--override-data', JSON.stringify({ work: false, chezmoi: { os } }), 'execute-template'],
-        { encoding: 'utf8', input: src, env: { PATH: process.env.PATH, HOME: home } },
-      )
-      assert.equal(r.status, 0, `chezmoi execute-template (${os}) exited ${r.status}: ${r.stderr}`)
-      if (os !== 'darwin') {
-        assert.equal(r.stdout.trim(), '', `script renders on ${os}`)
-        continue
-      }
-      assert.ok(r.stdout.startsWith('#!/bin/bash\n'), JSON.stringify(r.stdout.slice(0, 40)))
-      assert.ok(r.stdout.includes('set -uo pipefail'))
-      const list = r.stdout.indexOf('plugin list')
-      const add = r.stdout.indexOf('plugin add "$PLUGIN" || exit 1')
-      assert.ok(list > 0 && add > list, 'script must check the plugin list before adding')
-      assert.ok(r.stdout.includes('PLUGIN="@opencode-ai/browser-control"\n'), 'plugin name is not exact or carries a version pin')
-    } finally {
-      rmSync(home, { recursive: true, force: true })
-    }
   }
 })

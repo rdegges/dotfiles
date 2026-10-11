@@ -4,7 +4,8 @@
      Any clause that names a Claude-only tool must branch on $codex, so Codex
      never reads instructions for tools it does not have. It also renders
      ~/.config/opencode/AGENTS.md (reader=opencode), which keeps the Claude text
-     except the Browser section, where each agent drives its own browser tool.
+     except the Browser section: opencode has no browser tool, so it hands
+     browser tasks back.
      After an edit, run tests/claude/. */ -}}
 # Global {{ if $codex }}AGENTS{{ else }}CLAUDE{{ end }}.md – Personal Defaults
 
@@ -44,14 +45,19 @@ My words, used loosely in prompts. Use them back to me; correct me if I seem to 
 
 ### Browser
 
-- Every browser task goes through {{ if $codex }}the Codex Chrome plugin (`chrome`, which drives my real Chrome through the ChatGPT Chrome Extension){{ else if $opencode }}Browser Control (the `browser` skill from the `@opencode-ai/browser-control` plugin, which drives my real Chrome through its extension){{ else }}Claude in Chrome (`mcp__claude-in-chrome__*`, load the `claude-in-chrome` skill first){{ end }} so it runs in my real, logged-in sessions. Never use headless Chrome, {{ if $opencode }}a separate Playwright or Puppeteer browser, or `curl` scraping{{ else }}Playwright, Puppeteer, `curl` scraping, or {{ if $codex }}Computer Use{{ else }}`codex-computer-use`{{ end }}{{ end }} instead. {{ if not (or $codex $opencode) }}Only exception: the tester agent's Docker Playwright runs as defined in tester.md (the viewport/color-scheme matrix, and the whole web pass when Chrome is unreachable); the stop-and-wait rule below does not apply to it. {{ end }}Reading a public page with {{ if $codex }}web search{{ else if $opencode }}web search or web fetch{{ else }}WebFetch or WebSearch{{ end }} is not a browser task.
-- Several browsers connected and none chosen: {{ if or $codex $opencode }}ask me which one to use{{ else }}call `switch_browser` so I pick in Chrome{{ end }}. Never choose one yourself.
-{{- if or $codex $opencode }}
+{{ if $opencode -}}
+- You have no browser tool. For a browser task, or when a skill or rule tells you to use a browser tool, tell me the task needs a browser and stop. Never use headless Chrome, Playwright, Puppeteer, `curl` scraping, or another agent's browser tool.
+- Reading a public page with web search or web fetch is not a browser task.
+{{- else -}}
+- Every browser task goes through {{ if $codex }}the Codex Chrome plugin (`chrome`, which drives my real Chrome through the ChatGPT Chrome Extension){{ else }}Claude in Chrome (`mcp__claude-in-chrome__*`, load the `claude-in-chrome` skill first){{ end }} so it runs in my real, logged-in sessions. Never use headless Chrome, Playwright, Puppeteer, `curl` scraping, or {{ if $codex }}Computer Use{{ else }}`codex-computer-use`{{ end }} instead. {{ if not $codex }}Only exception: the tester agent's Docker Playwright runs as defined in tester.md (the viewport/color-scheme matrix, and the whole web pass when Chrome is unreachable); the stop-and-wait rule below does not apply to it. {{ end }}Reading a public page with {{ if $codex }}web search{{ else }}WebFetch or WebSearch{{ end }} is not a browser task.
+- Several browsers connected and none chosen: {{ if $codex }}ask me which one to use{{ else }}call `switch_browser` so I pick in Chrome{{ end }}. Never choose one yourself.
+{{- if $codex }}
 - Use only your own browser tool. When a skill or rule names another agent's browser tool, use yours in its place.
 {{- end }}
-- When a connector is missing, unauthenticated, or lacks the operation, or the task needs a web UI, switch to {{ if $codex }}the Codex Chrome plugin{{ else if $opencode }}Browser Control{{ else }}Claude in Chrome{{ end }}. Do not stop and do not hand the task back to me. Exception: if a connector refuses an operation on purpose (it says to do it in the product itself, or warns of data loss), or the step is irreversible (submit, delete, pay, send), ask me before doing it in Chrome. Standing exception: while you follow the `navia-fsa-claims` skill, my request to submit a Navia FSA claim authorizes that claim's final **Send claim to Navia** once its details match the source documents; accepting Navia's terms still needs my confirmation.
+- When a connector is missing, unauthenticated, or lacks the operation, or the task needs a web UI, switch to {{ if $codex }}the Codex Chrome plugin{{ else }}Claude in Chrome{{ end }}. Do not stop and do not hand the task back to me. Exception: if a connector refuses an operation on purpose (it says to do it in the product itself, or warns of data loss), or the step is irreversible (submit, delete, pay, send), ask me before doing it in Chrome. Standing exception: while you follow the `navia-fsa-claims` skill, my request to submit a Navia FSA claim authorizes that claim's final **Send claim to Navia** once its details match the source documents; accepting Navia's terms still needs my confirmation.
 - A login wall or MFA prompt means ask me to sign in in that tab, then continue.
-- If the Chrome tools fail (not loaded, extension not connected, no browser found), stop. Give me the fix steps: Chrome open, {{ if $opencode }}the plugin installed (`opencode plugin add @opencode-ai/browser-control`), its extension loaded and connected (ask `@browser` to check the setup and show the extension directory){{ else if $codex }}the ChatGPT Chrome Extension installed and signed in to my ChatGPT account, the Codex Chrome plugin reinstalled from the ChatGPT plugin UI if its native host is broken{{ else }}extension installed and signed in to the same claude.ai account, `/chrome` in Claude Code to connect or reconnect{{ end }}, site permission granted. Wait for me, then retry the same step. Never fall back to a headless browser.
+- If the Chrome tools fail (not loaded, extension not connected, no browser found), stop. Give me the fix steps: Chrome open, {{ if $codex }}the ChatGPT Chrome Extension installed and signed in to my ChatGPT account, the Codex Chrome plugin reinstalled from the ChatGPT plugin UI if its native host is broken{{ else }}extension installed and signed in to the same claude.ai account, `/chrome` in Claude Code to connect or reconnect{{ end }}, site permission granted. Wait for me, then retry the same step. Never fall back to a headless browser.
+{{- end }}
 
 ### Code locations
 
