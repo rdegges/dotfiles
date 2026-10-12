@@ -1,5 +1,5 @@
 // Behavior of the REA updater (dot_cron/executable_rea-update.sh), the wiring
-// that runs it (crontab line, run_onchange_after_install-rea.sh.tmpl), and the
+// that runs it (launchd agent, run_onchange_after_install-rea.sh.tmpl), and the
 // Codex registration chezmoi owns (dot_codex/config.toml.tmpl).
 //
 // Run from the repo root (chezmoi is needed for the Codex render tests; without
@@ -21,7 +21,7 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync, writeFileSync, mkdirSync, mkdtempSync, existsSync, chmodSync, rmSync, cpSync } from 'node:fs'
+import { readFileSync, writeFileSync, mkdirSync, mkdtempSync, existsSync, chmodSync, rmSync, cpSync, readdirSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -255,10 +255,14 @@ test('end to end: a stale Codex entry shows in the zsh banner, the next good run
 
 // --- Wiring --------------------------------------------------------------------
 
-test('crontab: one daily 10:25 job runs ~/.cron/rea-update.sh and logs to rea.log', () => {
-  const jobs = read('dot_cron/crontab.tmpl').split('\n').filter((l) => l.includes('rea-update.sh') && !l.startsWith('#'))
-  assert.equal(jobs.length, 1, jobs.join('\n'))
-  assert.match(jobs[0], /^25 10 \* \* \* \{ date; \$HOME\/\.cron\/rea-update\.sh; \} > \$HOME\/\.cron\/logs\/rea\.log 2>&1$/)
+// tests/cron/launch-agents.test.mjs proves the agent renders to this command.
+test('launchd: one daily 10:25 agent runs ~/.cron/rea-update.sh and logs to rea.log', () => {
+  const dir = 'private_Library/LaunchAgents/'
+  const users = readdirSync(join(SOURCE, dir)).filter((f) => read(dir + f).includes('rea-update.sh'))
+  assert.deepEqual(users, ['com.rdegges.rea.plist.tmpl'])
+  const agent = read(dir + users[0])
+  assert.match(agent, /^\t"command" `\{ date; \$HOME\/\.cron\/rea-update\.sh; \} > \$HOME\/\.cron\/logs\/rea\.log 2>&1`$/m)
+  assert.match(agent, /^\t"schedule" \(list \(dict "Hour" 10 "Minute" 25\)\)$/m)
 })
 
 test('run_onchange: after_ script, re-runs on Node pin or script change, execs the cron script', () => {

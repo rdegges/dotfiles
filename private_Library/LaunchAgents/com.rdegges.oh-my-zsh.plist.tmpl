@@ -1,0 +1,6 @@
+{{- /* Update Oh My Zsh. Saturday at 10:00. */ -}}
+{{ template "launchagent.plist" (dict
+	"label" "com.rdegges.oh-my-zsh"
+	"schedule" (list (dict "Weekday" 6 "Hour" 10 "Minute" 0))
+	"command" `{ date; zsh -c 'cd $HOME/.oh-my-zsh && git pull -q'; } > $HOME/.cron/logs/oh-my-zsh.log 2>&1`
+	"home" .chezmoi.homeDir) -}}

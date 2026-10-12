@@ -1,0 +1,71 @@
+{{- /*
+  One per-user launchd agent for a scheduled job. Each
+  private_Library/LaunchAgents/com.rdegges.<job>.plist.tmpl calls this with a dict:
+
+    label     com.rdegges.<job>, the same as the file name.
+    command   the /bin/sh command line, byte for byte what the old crontab ran:
+              `{ date; <job>; } > $HOME/.cron/logs/<job>.log 2>&1`.
+    schedule  a list of StartCalendarInterval dicts (Minute, Hour, Weekday;
+              a missing key means "every", like a cron `*`).
+    home      .chezmoi.homeDir.
+
+  launchd, not cron: cron skips a job whose time passes while the Mac sleeps,
+  and launchd runs it once on the next wake. Loading an agent also does not
+  touch TCC-protected /var/at/tabs, which made the unattended crontab install
+  hang.
+
+  EnvironmentVariables are literal -- launchd does NOT expand $VARS in them --
+  so absolute paths are required. The command runs via /bin/sh -c, so $HOME
+  does expand there (launchd sets HOME). Commands are bare (resolved via PATH)
+  rather than hardcoded to /opt/homebrew, so this works on both Apple Silicon
+  (/opt/homebrew) and Intel (/usr/local).
+
+  Homebrew, non-interactively: quiet the env hints, skip the redundant implicit
+  auto-update (the brew job runs `brew update` explicitly), and never block on
+  6.x "ask mode" (no-TTY already skips the prompt; this is belt-and-suspenders).
+
+  No StandardOutPath/StandardErrorPath: the command's own redirect writes the
+  log and truncates it each run, as under cron. Every string goes through
+  `html` so a command's quotes, `&&`, and `>` stay valid XML.
+*/ -}}
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Managed by chezmoi (source: private_Library/LaunchAgents/{{ .label | html }}.plist.tmpl). Do not edit in place. -->
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>{{ .label | html }}</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/bin/sh</string>
+		<string>-c</string>
+		<string>{{ .command | html }}</string>
+	</array>
+	<key>StartCalendarInterval</key>
+	<array>
+{{- range .schedule }}
+		<dict>
+{{- range $key, $value := . }}
+			<key>{{ $key | html }}</key>
+			<integer>{{ $value }}</integer>
+{{- end }}
+		</dict>
+{{- end }}
+	</array>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>PATH</key>
+		<string>{{ .home | html }}/.asdf/shims:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+		<key>HOMEBREW_NO_ENV_HINTS</key>
+		<string>1</string>
+		<key>HOMEBREW_NO_AUTO_UPDATE</key>
+		<string>1</string>
+		<key>HOMEBREW_NO_ASK</key>
+		<string>1</string>
+	</dict>
+	<key>RunAtLoad</key>
+	<false/>
+	<key>ProcessType</key>
+	<string>Background</string>
+</dict>
+</plist>

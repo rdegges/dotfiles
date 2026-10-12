@@ -1,0 +1,7 @@
+{{- /* Update the Cloudflare CLI (cf), an npm global on the asdf Node. On failure the
+     script writes ~/.cron/logs/cf.FAILED, which every new shell prints. Daily at 10:10. */ -}}
+{{ template "launchagent.plist" (dict
+	"label" "com.rdegges.cf"
+	"schedule" (list (dict "Hour" 10 "Minute" 10))
+	"command" `{ date; $HOME/.cron/cf-update.sh; } > $HOME/.cron/logs/cf.log 2>&1`
+	"home" .chezmoi.homeDir) -}}

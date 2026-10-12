@@ -1,0 +1,46 @@
+{{- if eq .chezmoi.os "darwin" -}}
+#!/bin/bash
+# Remove the old crontab now that launchd runs the scheduled jobs
+# (run_onchange_after_load-launch-agents.sh.tmpl, which sorts and runs before
+# this). Delete this script once every machine shows an empty `crontab -l`.
+#
+# crontab(1) reads/writes TCC-protected /var/at/tabs and hangs on a macOS
+# permission prompt when run unattended (from the hourly cron job a 30s-bounded
+# `crontab` call timed out every time). So every call is bounded, and when the
+# removal fails this leaves ~/.cron/logs/crontab.FAILED, which every new shell
+# prints, instead of failing the apply: launchd already runs the jobs, and a
+# failed apply would skip every later script.
+set -uo pipefail
+
+marker="$HOME/.cron/logs/crontab.FAILED"
+
+TO=$(command -v gtimeout || command -v timeout || true)
+run() { if [ -n "$TO" ]; then "$TO" -k 5 30 "$@"; else "$@"; fi; }
+
+retired() { rm -f "$marker"; exit 0; }
+
+err=$(mktemp)
+trap 'rm -f "$err"' EXIT
+
+if out=$(run crontab -l 2>"$err" < /dev/null); then
+    if ! grep -qv -e '^[[:space:]]*#' -e '^[[:space:]]*$' <<<"$out"; then
+        echo "crontab: empty; nothing to retire."
+        retired
+    fi
+elif grep -q 'no crontab for' "$err"; then
+    echo "crontab: none installed; nothing to retire."
+    retired
+fi
+
+# Jobs still listed, or `crontab -l` failed or timed out: try once to remove it.
+echo "crontab: removing the old crontab (launchd runs the jobs now)..."
+if run crontab -r < /dev/null; then
+    echo "crontab: removed."
+    retired
+fi
+
+mkdir -p "$HOME/.cron/logs"
+echo "run 'crontab -r && rm -f ~/.cron/logs/crontab.FAILED' once to finish the launchd migration" > "$marker"
+echo "crontab: could not remove the old crontab (timeout or macOS privacy prompt?); see $marker" >&2
+exit 0
+{{ end -}}

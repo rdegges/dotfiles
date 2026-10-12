@@ -1,0 +1,10 @@
+{{- /* Prune Docker build cache older than 3 days and all images unused by any
+     container. Recent cache stays hot (fast rebuilds on active projects) while
+     the long tail can't creep back to the 100G+ it once reached; pruned images
+     just re-pull on demand. Skips when Docker Desktop isn't running rather than
+     logging a connection error. Daily at 09:00. */ -}}
+{{ template "launchagent.plist" (dict
+	"label" "com.rdegges.docker-prune"
+	"schedule" (list (dict "Hour" 9 "Minute" 0))
+	"command" `{ date; if docker info >/dev/null 2>&1; then docker builder prune -af --filter until=72h; docker image prune -af; else echo "docker not running; skipped"; fi; } > $HOME/.cron/logs/docker-prune.log 2>&1`
+	"home" .chezmoi.homeDir) -}}

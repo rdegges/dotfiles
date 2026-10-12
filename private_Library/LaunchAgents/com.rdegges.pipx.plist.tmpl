@@ -1,0 +1,6 @@
+{{- /* Upgrade all pipx-managed apps. Hourly at :45. */ -}}
+{{ template "launchagent.plist" (dict
+	"label" "com.rdegges.pipx"
+	"schedule" (list (dict "Minute" 45))
+	"command" `{ date; pipx upgrade-all; } > $HOME/.cron/logs/pipx.log 2>&1`
+	"home" .chezmoi.homeDir) -}}
