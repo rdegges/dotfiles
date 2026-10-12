@@ -239,7 +239,9 @@ test('loader: changing only the shared template, or only one agent, changes the 
 // are listed under "disabled services" (as the real `launchctl print` does,
 // loaded or not); STUB_PRINT_DOMAIN_FAIL makes `launchctl print gui/<uid>` fail.
 // `print gui/<uid>/<label>` of a loaded label says `state = not running`, or
-// `state = running` for STUB_RUNNING labels (a job that is running right now).
+// `state = running` for STUB_RUNNING labels (a job that is running right now);
+// for STUB_PRINT_FAIL labels it fails with an error other than "not found"
+// (launchd busy or a bad request), so the job's state is unknown.
 const LAUNCHCTL =
   '#!/bin/sh\n' +
   'echo "$*" >> "$CALLS"\n' +
@@ -257,6 +259,7 @@ const LAUNCHCTL =
   '  fi\n' +
   '  l=${2#"$dom"/}; [ "$l" != "$2" ] || exit 64\n' +
   '  [ -e "$STATE/loaded/$l" ] || { echo "Could not find service" >&2; exit 113; }\n' +
+  '  has "$l" "${STUB_PRINT_FAIL:-}" && { echo "Bad request." >&2; exit 1; }\n' +
   '  if has "$l" "${STUB_RUNNING:-}"; then printf "\\tstate = running\\n"; else printf "\\tstate = not running\\n"; fi\n' +
   '  if [ -e "$STATE/linger/$l" ]; then\n' +
   '    n=$(cat "$STATE/linger/$l")\n' +
@@ -430,13 +433,80 @@ test('loader: a managed job that is running now is not booted out; the other ten
   withLoader({ loaded: LABELS }, (sb) => {
     const r = sb.run({ STUB_RUNNING: 'com.rdegges.brew' })
     assert.equal(r.status, 1, r.stdout + r.stderr)
-    const brew = callsFor(sb, 'com.rdegges.brew')
-    assert.ok(!brew.includes('bootout') && !brew.includes('bootstrap'), brew.join(' '))
+    assert.deepEqual(callsFor(sb, 'com.rdegges.brew'), ['print'], 'only asked for its state')
     const others = LABELS.filter((l) => l !== 'com.rdegges.brew')
     assert.equal(others.length, 10)
     for (const l of others) assert.deepEqual(callsFor(sb, l), ['print', 'bootout', 'print', 'bootstrap'], l)
     assert.deepEqual(sb.loaded(), LABELS, 'the running job was unloaded')
     assert.match(r.stderr, /^launch-agents: com\.rdegges\.brew is running; not reloaded/m)
+  }))
+
+test('loader: a job skipped while running is reloaded by the next apply once it has finished', () =>
+  withLoader({ loaded: LABELS }, (sb) => {
+    let r = sb.run({ STUB_RUNNING: 'com.rdegges.codex' })
+    assert.equal(r.status, 1, r.stdout + r.stderr)
+    assert.doesNotMatch(r.stdout, /loaded com\.rdegges\.codex$/m)
+    const before = sb.calls().length
+    r = sb.run()
+    assert.equal(r.status, 0, r.stdout + r.stderr)
+    assert.equal(r.stderr, '')
+    assert.match(r.stdout, /^launch-agents: loaded com\.rdegges\.codex$/m)
+    const second = sb.calls().slice(before).filter((c) => c.endsWith('/com.rdegges.codex') || c.endsWith('/com.rdegges.codex.plist'))
+    assert.deepEqual(second.map((c) => c.split(' ')[0]), ['print', 'bootout', 'print', 'bootstrap'])
+    assert.deepEqual(sb.loaded(), LABELS)
+  }))
+
+test('loader: several running jobs are each skipped and reported; orphans are still cleaned up', () =>
+  withLoader({ loaded: [...LABELS, 'com.rdegges.old-job'] }, (sb) => {
+    const running = ['com.rdegges.brew', 'com.rdegges.docker-prune', 'com.rdegges.vault-snapshot']
+    const r = sb.run({ STUB_RUNNING: running.join(' ') })
+    assert.equal(r.status, 1, r.stdout + r.stderr)
+    for (const l of running) {
+      assert.deepEqual(callsFor(sb, l), ['print'], l)
+      assert.match(r.stderr, new RegExp(`^launch-agents: ${l.replace(/\./g, '\\.')} is running; not reloaded`, 'm'))
+    }
+    for (const l of LABELS.filter((x) => !running.includes(x))) assert.deepEqual(callsFor(sb, l), ['print', 'bootout', 'print', 'bootstrap'], l)
+    assert.deepEqual(callsFor(sb, 'com.rdegges.old-job'), ['bootout', 'print'])
+    assert.deepEqual(sb.loaded(), LABELS)
+  }))
+
+test('loader: inside com.rdegges.chezmoi, which is running, the self rule wins: no launchctl call names it', () =>
+  withLoader({ loaded: LABELS }, (sb) => {
+    const r = sb.run({ XPC_SERVICE_NAME: 'com.rdegges.chezmoi', STUB_RUNNING: 'com.rdegges.chezmoi com.rdegges.rea' })
+    assert.equal(r.status, 1, r.stdout + r.stderr)
+    assert.deepEqual(callsFor(sb, 'com.rdegges.chezmoi'), [])
+    assert.deepEqual(callsFor(sb, 'com.rdegges.rea'), ['print'])
+    assert.doesNotMatch(r.stderr, /com\.rdegges\.chezmoi is running/)
+    assert.match(r.stderr, /com\.rdegges\.chezmoi not reloaded from inside itself/)
+    assert.match(r.stderr, /com\.rdegges\.rea is running; not reloaded/)
+    assert.deepEqual(sb.loaded(), LABELS)
+  }))
+
+test('loader: a "state = not running" job is not mistaken for a running one', () =>
+  withLoader({ loaded: ['com.rdegges.pipx'] }, (sb) => {
+    const r = sb.run()
+    assert.equal(r.status, 0, r.stdout + r.stderr)
+    assert.deepEqual(callsFor(sb, 'com.rdegges.pipx'), ['print', 'bootout', 'print', 'bootstrap'])
+    assert.doesNotMatch(r.stderr, /is running/)
+  }))
+
+// When `launchctl print <label>` fails with something other than "not found",
+// the loader cannot tell whether the job is running, yet it boots it out. The
+// BDFL rule is "never boot out a managed job while it is running"; an unknown
+// state should be skipped (and fail the run) like a running one.
+test.todo('PROPOSED CONTRACT: loader: a loaded job whose state cannot be read is not booted out, and the run fails', () =>
+  withLoader({ loaded: LABELS }, (sb) => {
+    const r = sb.run({ STUB_PRINT_FAIL: 'com.rdegges.brew' })
+    assert.ok(!callsFor(sb, 'com.rdegges.brew').includes('bootout'), callsFor(sb, 'com.rdegges.brew').join(' '))
+    assert.equal(r.status, 1, r.stdout + r.stderr)
+  }))
+
+// Orphans (retired com.rdegges.* jobs) get no running check: one that is mid-run
+// when its plist is retired is killed by the bootout.
+test.todo('PROPOSED CONTRACT: loader: a running orphan is not booted out until it finishes', () =>
+  withLoader({ loaded: ['com.rdegges.old-job'] }, (sb) => {
+    sb.run({ STUB_RUNNING: 'com.rdegges.old-job' })
+    assert.ok(!callsFor(sb, 'com.rdegges.old-job').includes('bootout'), callsFor(sb, 'com.rdegges.old-job').join(' '))
   }))
 
 test('loader: an XPC_SERVICE_NAME that is not a managed label (a terminal) changes nothing', () =>
