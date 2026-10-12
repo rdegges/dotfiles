@@ -21,10 +21,13 @@
 // bootstraps every agent, waits until a booted-out label is really gone, fails
 // when that takes over 10s or a bootstrap fails, boots out orphaned
 // com.rdegges.* labels and only those, and never touches the label in
-// XPC_SERVICE_NAME (it loads the others and exits 1). With a stub crontab, the
-// retire script clears crontab.FAILED when `crontab -l` is empty or absent,
-// otherwise tries `crontab -r` once (also after a hung `crontab -l` is killed
-// at 30s), writes the marker when that fails, and always exits 0. It says
+// XPC_SERVICE_NAME (it loads the others and exits 1). A managed job that
+// launchd reports as running, or whose state launchctl print cannot read, is
+// neither booted out nor bootstrapped, and the run exits 1 (checked against
+// stub output; the real text was confirmed by hand on launchd). With a stub
+// crontab, the retire script clears crontab.FAILED when `crontab -l` is empty
+// or absent, otherwise tries `crontab -r` once (also after a hung `crontab -l`
+// is killed at 30s), writes the marker when that fails, and always exits 0. It says
 // nothing about the real launchd, macOS bash 3.2, or TCC; those are checked by
 // hand on the Mac after merge.
 
@@ -490,15 +493,12 @@ test('loader: a "state = not running" job is not mistaken for a running one', ()
     assert.doesNotMatch(r.stderr, /is running/)
   }))
 
-// When `launchctl print <label>` fails with something other than "not found",
-// the loader cannot tell whether the job is running, yet it boots it out. The
-// BDFL rule is "never boot out a managed job while it is running"; an unknown
-// state should be skipped (and fail the run) like a running one.
-test.todo('PROPOSED CONTRACT: loader: a loaded job whose state cannot be read is not booted out, and the run fails', () =>
+test('loader: a loaded job whose state cannot be read is not booted out, and the run fails', () =>
   withLoader({ loaded: LABELS }, (sb) => {
     const r = sb.run({ STUB_PRINT_FAIL: 'com.rdegges.brew' })
     assert.ok(!callsFor(sb, 'com.rdegges.brew').includes('bootout'), callsFor(sb, 'com.rdegges.brew').join(' '))
     assert.equal(r.status, 1, r.stdout + r.stderr)
+    assert.match(r.stderr, /com\.rdegges\.brew failed \(exit 1\); not reloaded/)
   }))
 
 // Orphans (retired com.rdegges.* jobs) get no running check: one that is mid-run

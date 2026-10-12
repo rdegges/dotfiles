@@ -11,6 +11,8 @@
 # ~/.cron scripts the jobs run are already written. chezmoi does not delete a
 # target when its source goes away, so to retire a job, also list its plist in
 # .chezmoiremove; any loaded com.rdegges.* label not managed here is booted out.
+# A managed job that is running, or whose state cannot be read, is left alone
+# and the run fails, so the next apply reloads it.
 #
 # Every launchctl call is bounded with a timeout, like the old crontab
 # installer: this runs from the hourly `chezmoi update` job, where nobody can
@@ -57,7 +59,20 @@ for label in "${labels[@]}"; do
         self=$label
         continue
     fi
-    if info=$(run launchctl print "$domain/$label" 2>/dev/null) && grep -q 'state = running' <<<"$info"; then echo "launch-agents: $label is running; not reloaded (the next apply retries)" >&2; rc=1; continue; fi
+    # Never boot out a job that may be running. launchctl print exits 113 when
+    # the label is not loaded; any other failure (incl. the 30s timeout) means
+    # the state is unknown, so skip it like a running job. A job that starts
+    # between this check and the bootout is still killed; that window is accepted.
+    info=$(run launchctl print "$domain/$label" 2>&1); prc=$?
+    if [ "$prc" -eq 0 ] && grep -q 'state = running' <<<"$info"; then
+        echo "launch-agents: $label is running; not reloaded (the next apply retries)" >&2
+        rc=1
+        continue
+    elif [ "$prc" -ne 0 ] && [ "$prc" -ne 113 ]; then
+        echo "launch-agents: ERROR: launchctl print $domain/$label failed (exit $prc); not reloaded" >&2
+        rc=1
+        continue
+    fi
     bootout "$label" || { rc=1; continue; }
     if run launchctl bootstrap "$domain" "$HOME/Library/LaunchAgents/$label.plist"; then
         echo "launch-agents: loaded $label"
