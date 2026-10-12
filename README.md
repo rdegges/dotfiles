@@ -25,6 +25,12 @@ Output goes to `~/.cron/logs/chezmoi.log`. A failure writes
 `~/.cron/logs/chezmoi.FAILED`, and every new shell prints it in red until a
 later run succeeds. To fix it, read the log and run `chezmoi update` by hand.
 
+SSH to `github.com` goes over port 443 (`ssh.github.com`), not port 22. Some
+networks drop port 22 at random, and the hourly update then failed with
+`Operation timed out`. The source is `private_dot_ssh/private_config`, which
+becomes `~/.ssh/config`. Its `HostKeyAlias` uses the `github.com` key that is
+already in `known_hosts`, so unattended runs do not stop at a host key prompt.
+
 
 ## Scheduled jobs (launchd)
 
