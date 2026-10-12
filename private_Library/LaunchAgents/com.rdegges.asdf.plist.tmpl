@@ -1,0 +1,7 @@
+{{- /* Refresh asdf plugin repos (installed tool versions stay pinned by
+     .tool-versions). Hourly at :30. */ -}}
+{{ template "launchagent.plist" (dict
+	"label" "com.rdegges.asdf"
+	"schedule" (list (dict "Minute" 30))
+	"command" `{ date; asdf plugin update --all; } > $HOME/.cron/logs/asdf.log 2>&1`
+	"home" .chezmoi.homeDir) -}}

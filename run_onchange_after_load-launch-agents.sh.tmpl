@@ -1,0 +1,86 @@
+{{- if eq .chezmoi.os "darwin" -}}
+{{- $agents := glob (joinPath .chezmoi.sourceDir "private_Library/LaunchAgents/*.plist.tmpl") -}}
+#!/bin/bash
+# launchagent.plist hash: {{ include ".chezmoitemplates/launchagent.plist" | sha256sum }}
+{{- range $agents }}
+# {{ base . }} hash: {{ include . | sha256sum }}
+{{- end }}
+#
+# (Re)load the scheduled jobs' launchd agents whenever an agent or the shared
+# template changes. This is an after_ script, so ~/Library/LaunchAgents and the
+# ~/.cron scripts the jobs run are already written. chezmoi does not delete a
+# target when its source goes away, so to retire a job, also list its plist in
+# .chezmoiremove; any loaded com.rdegges.* label not managed here is booted out.
+#
+# Every launchctl call is bounded with a timeout, like the old crontab
+# installer: this runs from the hourly `chezmoi update` job, where nobody can
+# answer a prompt. A failed load exits non-zero, so chezmoi retries on the next
+# apply and the chezmoi.FAILED banner shows it.
+set -uo pipefail
+
+labels=(
+{{- range $agents }}
+    {{ base . | trimSuffix ".plist.tmpl" | squote }}
+{{- end }}
+)
+
+# The jobs redirect into this directory; a missing one fails every job.
+mkdir -p "$HOME/.cron/logs"
+
+TO=$(command -v gtimeout || command -v timeout || true)
+run() { if [ -n "$TO" ]; then "$TO" -k 5 30 "$@"; else "$@"; fi; }
+
+domain="gui/$(id -u)"
+self=
+rc=0
+
+# bootout returns before launchd has fully removed the service, and a bootstrap
+# in that window fails. Wait (at most 10s) until `launchctl print` no longer
+# finds the label.
+bootout() {
+    local deadline=$((SECONDS + 10))
+    run launchctl bootout "$domain/$1" >/dev/null 2>&1 || true
+    while run launchctl print "$domain/$1" >/dev/null 2>&1; do
+        if [ "$SECONDS" -ge "$deadline" ]; then
+            echo "launch-agents: ERROR: $1 still loaded 10s after bootout" >&2
+            return 1
+        fi
+        sleep 0.2
+    done
+}
+
+for label in "${labels[@]}"; do
+    # Booting out the job that runs this apply (the hourly chezmoi job) would
+    # kill this script half way through. Load everything else, then fail so the
+    # banner asks for an interactive apply.
+    if [ "$label" = "${XPC_SERVICE_NAME:-}" ]; then
+        self=$label
+        continue
+    fi
+    bootout "$label" || { rc=1; continue; }
+    if run launchctl bootstrap "$domain" "$HOME/Library/LaunchAgents/$label.plist"; then
+        echo "launch-agents: loaded $label"
+    else
+        echo "launch-agents: ERROR: launchctl bootstrap $domain $label failed" >&2
+        rc=1
+    fi
+done
+
+if listing=$(run launchctl print "$domain" 2>&1); then
+    for label in $(grep -oE 'com\.rdegges\.[A-Za-z0-9._-]+' <<<"$listing" | sort -u); do
+        case " ${labels[*]} " in *" $label "*) continue ;; esac
+        [ "$label" = "${XPC_SERVICE_NAME:-}" ] && continue
+        echo "launch-agents: booting out $label (no managed plist)"
+        bootout "$label" || rc=1
+    done
+else
+    echo "launch-agents: ERROR: launchctl print $domain failed; orphaned agents not checked: $listing" >&2
+    rc=1
+fi
+
+if [ -n "$self" ]; then
+    echo "launch-agents: $self not reloaded from inside itself; run 'chezmoi apply' interactively" >&2
+    rc=1
+fi
+exit "$rc"
+{{ end -}}

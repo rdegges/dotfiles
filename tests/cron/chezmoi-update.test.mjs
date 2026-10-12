@@ -1,8 +1,9 @@
 // Behavior of the hourly dotfiles updater (dot_cron/executable_chezmoi-update.sh),
-// its failure banner in dot_zshrc, and the crontab line that runs it.
+// its failure banner in dot_zshrc, and the launchd agent that runs it.
 //
-// Run from the repo root (zsh is needed for the banner tests and chezmoi for
-// the real-apply tests; without them those tests skip):
+// Run from the repo root (zsh is needed for the banner tests, and chezmoi and
+// python3 for the agent and real-apply tests; without zsh or chezmoi those
+// tests skip):
 //   docker run --rm -v "$PWD":/w -w /w node:latest sh -c \
 //     'apt-get update -qq && apt-get install -y -qq zsh >/dev/null &&
 //      sh -c "$(curl -fsLS get.chezmoi.io)" -- -b /usr/local/bin &&
@@ -14,16 +15,16 @@
 // entry, replaced, never appended) on any non-zero status -- chezmoi missing
 // and chezmoi killed by a signal included -- and removes it on success. It
 // holds under dash and under bash --posix (macOS /bin/sh is bash in POSIX
-// mode). The crontab line, run as written, produces that log. With the real
-// chezmoi: the deployed script is mode 0755; the crontab-install step runs
-// after ~/.cron/chezmoi-update.sh is written, so a new crontab never points at
-// a missing script; and a `chezmoi update` that rewrites the script while the
-// script is running does not corrupt the running copy. It says nothing about
-// a real `git pull`, macOS cron, or Full Disk Access.
+// mode). The agent's rendered command, run as written, produces that log. With
+// the real chezmoi: the deployed script is mode 0755; the agent-load step runs
+// after ~/.cron/chezmoi-update.sh and the agent plist are written, so a newly
+// loaded agent never points at a missing script; and a `chezmoi update` that
+// rewrites the script while the script is running does not corrupt the running
+// copy. It says nothing about a real `git pull` or the real launchd.
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync, writeFileSync, mkdirSync, mkdtempSync, existsSync, chmodSync, rmSync, statSync, copyFileSync } from 'node:fs'
+import { readFileSync, writeFileSync, mkdirSync, mkdtempSync, existsSync, chmodSync, rmSync, statSync, copyFileSync, cpSync, readdirSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -235,42 +236,68 @@ test('end to end: a failed run shows a red banner line, the next good run clears
 
 // --- Wiring -------------------------------------------------------------------
 
-const crontab = read('dot_cron/crontab.tmpl')
-const jobLines = crontab.split('\n').filter((l) => l.trim() && !l.trimStart().startsWith('#') && !/^[A-Z_]+=/.test(l))
+const AGENTS = 'private_Library/LaunchAgents'
+const AGENT = `${AGENTS}/com.rdegges.chezmoi.plist.tmpl`
+const commandsOf = (src) => [...src.matchAll(/^\s*"command" `(.*)`$/gm)].map((m) => m[1])
+const agentCommands = readdirSync(new URL(`${AGENTS}/`, ROOT)).flatMap((f) => commandsOf(read(`${AGENTS}/${f}`)))
 
-test('crontab: one hourly :15 job runs ~/.cron/chezmoi-update.sh and logs to chezmoi.log', () => {
-  const jobs = jobLines.filter((l) => l.includes('chezmoi-update.sh'))
-  assert.equal(jobs.length, 1, jobs.join('\n'))
-  assert.match(jobs[0], /^15 \* \* \* \* \{ date; \$HOME\/\.cron\/chezmoi-update\.sh; \} > \$HOME\/\.cron\/logs\/chezmoi\.log 2>&1$/)
+// The agent as launchd reads it: rendered by chezmoi, parsed by Python's plistlib.
+function renderAgent() {
+  const home = mkdtempSync(join(tmpdir(), 'chezmoi-agent-'))
+  try {
+    const xml = spawnSync('chezmoi', ['--source', ROOT.pathname, '--destination', home, 'execute-template'], {
+      encoding: 'utf8',
+      input: read(AGENT),
+      env: { PATH: process.env.PATH, HOME: home },
+    })
+    assert.equal(xml.status, 0, xml.stderr)
+    const json = spawnSync('python3', ['-c', 'import plistlib,sys,json; json.dump(plistlib.loads(sys.stdin.buffer.read()), sys.stdout)'], {
+      encoding: 'utf8',
+      input: xml.stdout,
+    })
+    assert.equal(json.status, 0, json.stderr)
+    return JSON.parse(json.stdout)
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+}
+
+test('launchd: one hourly :15 agent runs ~/.cron/chezmoi-update.sh and logs to chezmoi.log', { skip: cskip }, () => {
+  assert.equal(agentCommands.filter((c) => c.includes('chezmoi-update.sh')).length, 1, agentCommands.join('\n'))
+  const p = renderAgent()
+  assert.equal(p.Label, 'com.rdegges.chezmoi')
+  assert.deepEqual(p.StartCalendarInterval, [{ Minute: 15 }])
+  assert.deepEqual(p.ProgramArguments.slice(0, 2), ['/bin/sh', '-c'])
+  assert.match(p.ProgramArguments[2], /^\{ date; \$HOME\/\.cron\/chezmoi-update\.sh; \} > \$HOME\/\.cron\/logs\/chezmoi\.log 2>&1$/)
 })
 
-test('crontab: no job still runs a bare `chezmoi update` that bypasses the marker', () => {
-  const bare = jobLines.filter((l) => /\bchezmoi (update|apply)\b/.test(l))
+test('launchd: no agent still runs a bare `chezmoi update` that bypasses the marker', () => {
+  assert.equal(agentCommands.length, readdirSync(new URL(`${AGENTS}/`, ROOT)).length, 'one command per agent')
+  const bare = agentCommands.filter((c) => /\bchezmoi (update|apply)\b/.test(c))
   assert.deepEqual(bare, [])
 })
 
-test('crontab: the chezmoi job comment names the marker the script really writes', () => {
-  const block = crontab.split('\n\n').find((b) => b.includes('chezmoi-update.sh'))
-  assert.match(block, /~\/\.cron\/logs\/chezmoi\.FAILED/)
-  assert.doesNotMatch(block, /notification/i, block)
+test('launchd: the chezmoi agent comment names the marker the script really writes', () => {
+  const comment = read(AGENT).match(/^\{\{- \/\*([\s\S]*?)\*\/ -\}\}/)[1]
+  assert.match(comment, /~\/\.cron\/logs\/chezmoi\.FAILED/)
+  assert.doesNotMatch(comment, /notification/i, comment)
 })
 
-// The job line minus its 5 schedule fields, as cron hands it to SHELL=/bin/sh.
-const cronCommand = jobLines.find((l) => l.includes('chezmoi-update.sh')).split(/\s+/).slice(5).join(' ')
-
 for (const shell of SHELLS) {
-  test(`[${shell.name}] the crontab command, run as written, logs a date, chezmoi output, and the result`, { skip: shell.skip }, () =>
+  test(`[${shell.name}] the agent's command, run as written, logs a date, chezmoi output, and the result`, { skip: cskip || shell.skip }, () =>
     withSandbox({}, (sb) => {
+      // launchd runs ProgramArguments directly: /bin/sh -c <command>.
+      const command = renderAgent().ProgramArguments[2]
       mkdirSync(join(sb.home, '.cron'), { recursive: true })
       mkdirSync(sb.logs, { recursive: true })
       const deployed = join(sb.home, '.cron', 'chezmoi-update.sh')
       copyFileSync(SCRIPT, deployed)
       chmodSync(deployed, 0o755)
       const log = join(sb.logs, 'chezmoi.log')
-      const runCron = (env) =>
-        spawnSync(shell.argv[0], [...shell.argv.slice(1), '-c', cronCommand], { encoding: 'utf8', env: sb.env(env) })
+      const runJob = (env) =>
+        spawnSync(shell.argv[0], [...shell.argv.slice(1), '-c', command], { encoding: 'utf8', env: sb.env(env) })
 
-      let r = runCron({ STUB_CHEZMOI_RC: '2' })
+      let r = runJob({ STUB_CHEZMOI_RC: '2' })
       assert.equal(r.stdout + r.stderr, '', 'everything should go to the log')
       let l = readFileSync(log, 'utf8')
       assert.match(l, /^\S.*\d{2}:\d{2}:\d{2}.*\n/, 'first line is `date` output')
@@ -279,7 +306,7 @@ for (const shell of SHELLS) {
       assert.match(l, /^chezmoi-update: FAILED: exit 2$/m)
       assert.ok(existsSync(sb.marker))
 
-      r = runCron({})
+      r = runJob({})
       l = readFileSync(log, 'utf8')
       assert.match(l, /^chezmoi-update: ok$/m)
       assert.doesNotMatch(l, /FAILED/, 'log is truncated each run, not appended')
@@ -295,7 +322,9 @@ function chezmoiSandbox() {
   const src = join(sb.base, 'src')
   mkdirSync(join(src, 'dot_cron'), { recursive: true })
   copyFileSync(SCRIPT, join(src, 'dot_cron', 'executable_chezmoi-update.sh'))
-  copyFileSync(new URL('dot_cron/crontab.tmpl', ROOT), join(src, 'dot_cron', 'crontab.tmpl'))
+  cpSync(new URL('.chezmoitemplates/', ROOT), join(src, '.chezmoitemplates'), { recursive: true })
+  mkdirSync(join(src, AGENTS), { recursive: true })
+  copyFileSync(new URL(AGENT, ROOT), join(src, AGENT))
   const cfg = join(sb.base, 'chezmoi.toml')
   writeFileSync(cfg, '')
   const cz = ['--source', src, '--destination', sb.home, '--config', cfg, '--no-tty']
@@ -307,37 +336,36 @@ function chezmoiSandbox() {
   return sb
 }
 
-test('chezmoi apply deploys ~/.cron/chezmoi-update.sh as an executable the crontab can run directly', { skip: cskip }, () => {
+test('chezmoi apply deploys ~/.cron/chezmoi-update.sh as an executable the agent can run directly', { skip: cskip }, () => {
   const sb = chezmoiSandbox()
   try {
     const r = sb.apply()
     assert.equal(r.status, 0, r.stderr)
     const deployed = join(sb.home, '.cron', 'chezmoi-update.sh')
-    assert.equal(statSync(deployed).mode & 0o111, 0o111, 'not executable by cron')
+    assert.equal(statSync(deployed).mode & 0o111, 0o111, 'not executable by the agent')
     assert.equal(readFileSync(deployed, 'utf8'), readFileSync(SCRIPT, 'utf8'))
   } finally {
     sb.cleanup()
   }
 })
 
-test('ordering: the crontab-install step runs after ~/.cron/chezmoi-update.sh is written', { skip: cskip }, () => {
-  // Same target name as run_onchange_install-crontab.sh.tmpl (that one is
-  // darwin-only, so it renders empty here): chezmoi runs a script with no
-  // before_/after_ in target-name order among files, and ".cron/..." sorts
-  // before "install-crontab.sh". If that ever flips, a new crontab would point
+test('ordering: the agent-load step runs after ~/.cron/chezmoi-update.sh and the agent plist are written', { skip: cskip }, () => {
+  // Same target name as run_onchange_after_load-launch-agents.sh.tmpl (that one
+  // is darwin-only, so it renders empty here): chezmoi runs after_ scripts once
+  // every file is written. If that ever flips, a newly loaded agent would point
   // at a script that does not exist yet, and the job would fail with no marker.
   const sb = chezmoiSandbox()
   try {
     const probe = join(sb.base, 'probe')
     writeFileSync(
-      join(sb.src, 'run_onchange_install-crontab.sh'),
+      join(sb.src, 'run_onchange_after_load-launch-agents.sh'),
       '#!/bin/sh\n' +
         `{ test -x "$HOME/.cron/chezmoi-update.sh" && echo script=yes || echo script=no;\n` +
-        `  test -f "$HOME/.cron/crontab" && echo crontab=yes || echo crontab=no; } > "${probe}"\n`,
+        `  test -f "$HOME/Library/LaunchAgents/com.rdegges.chezmoi.plist" && echo plist=yes || echo plist=no; } > "${probe}"\n`,
     )
     const r = sb.apply()
     assert.equal(r.status, 0, r.stderr)
-    assert.equal(readFileSync(probe, 'utf8'), 'script=yes\ncrontab=yes\n')
+    assert.equal(readFileSync(probe, 'utf8'), 'script=yes\nplist=yes\n')
   } finally {
     sb.cleanup()
   }

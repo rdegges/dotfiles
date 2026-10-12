@@ -1,5 +1,5 @@
 // Behavior of the Cloudflare CLI updater (dot_cron/executable_cf-update.sh),
-// its failure banner in dot_zshrc, and the wiring that runs it (crontab line,
+// its failure banner in dot_zshrc, and the wiring that runs it (launchd agent,
 // run_onchange_after_install-cloudflare-cli.sh.tmpl).
 //
 // Run from the repo root (zsh is needed for the banner tests; without it they
@@ -13,11 +13,12 @@
 // appended) on each failure step and removes it on success; and the zshrc loop
 // prints every marker verbatim and nothing when there are none. It says nothing
 // about the real npm registry, macOS /bin/sh (bash in POSIX mode; this runs
-// under Debian dash), or cron itself; those were checked by hand in the gate run.
+// under Debian dash), or launchd itself; those were checked by hand in the gate run.
+// tests/cron/launch-agents.test.mjs proves the agent renders to this command.
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync, writeFileSync, mkdirSync, mkdtempSync, existsSync, chmodSync, rmSync } from 'node:fs'
+import { readFileSync, writeFileSync, mkdirSync, mkdtempSync, existsSync, chmodSync, rmSync, readdirSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -230,27 +231,30 @@ test('end to end: a failed run shows in the banner, the next good run clears it'
 
 // --- Wiring ------------------------------------------------------------------
 
-const crontab = read('dot_cron/crontab.tmpl')
+const agent = read('private_Library/LaunchAgents/com.rdegges.cf.plist.tmpl')
 const onchange = read('run_onchange_after_install-cloudflare-cli.sh.tmpl')
 
-test('crontab: one daily 10:10 job runs ~/.cron/cf-update.sh and logs to cf.log', () => {
-  const jobs = crontab.split('\n').filter((l) => l.includes('cf-update.sh') && !l.startsWith('#'))
-  assert.equal(jobs.length, 1, jobs.join('\n'))
-  assert.match(jobs[0], /^10 10 \* \* \* \{ date; \$HOME\/\.cron\/cf-update\.sh; \} > \$HOME\/\.cron\/logs\/cf\.log 2>&1$/)
+test('launchd: one daily 10:10 agent runs ~/.cron/cf-update.sh and logs to cf.log', () => {
+  const dir = new URL('private_Library/LaunchAgents/', ROOT)
+  const users = readdirSync(dir).filter((f) => readFileSync(new URL(f, dir), 'utf8').includes('cf-update.sh'))
+  assert.deepEqual(users, ['com.rdegges.cf.plist.tmpl'])
+  assert.match(agent, /^\t"command" `\{ date; \$HOME\/\.cron\/cf-update\.sh; \} > \$HOME\/\.cron\/logs\/cf\.log 2>&1`$/m)
+  assert.match(agent, /^\t"schedule" \(list \(dict "Hour" 10 "Minute" 10\)\)$/m)
 })
 
-test('crontab: PATH puts the asdf shims first so npm and cf resolve to the pinned Node', () => {
-  const path = crontab.match(/^PATH=(.*)$/m)
-  assert.ok(path, 'no PATH= line')
-  assert.equal(path[1].split(':')[0], '{{ .chezmoi.homeDir }}/.asdf/shims')
+test('launchd: PATH puts the asdf shims first so npm and cf resolve to the pinned Node', () => {
+  const path = read('.chezmoitemplates/launchagent.plist').match(/<key>PATH<\/key>\n\t*<string>(.*)<\/string>/)
+  assert.ok(path, 'no PATH entry')
+  assert.equal(path[1].split(':')[0], '{{ .home | html }}/.asdf/shims')
 })
 
-test('crontab: the cf job comment describes the failure signal the script really sends', () => {
+test('launchd: the cf agent comment describes the failure signal the script really sends', () => {
   // The script header says it deliberately does NOT send a macOS notification
   // (it writes ~/.cron/logs/cf.FAILED instead). A comment saying otherwise
   // sends the reader looking for a notification that never comes.
-  const block = crontab.split('\n\n').find((b) => b.includes('cf-update.sh'))
-  assert.doesNotMatch(block, /notification/i, block)
+  const comment = agent.match(/^\{\{- \/\*([\s\S]*?)\*\/ -\}\}/)[1]
+  assert.match(comment, /~\/\.cron\/logs\/cf\.FAILED/)
+  assert.doesNotMatch(comment, /notification/i, comment)
 })
 
 test('run_onchange: after_ script, re-runs on Node pin or script change, execs the cron script', () => {

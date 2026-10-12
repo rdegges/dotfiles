@@ -19,3 +19,8 @@ Library/Application Support/com.vorssaint.utils
      gets the link to it only on a work machine. */}}
 .agents/skills/work-tracking
 {{ end }}
+
+{{/* launchd agents are macOS-only, like the crontab installer they replace. */}}
+{{ if ne .chezmoi.os "darwin" }}
+Library/LaunchAgents
+{{ end }}

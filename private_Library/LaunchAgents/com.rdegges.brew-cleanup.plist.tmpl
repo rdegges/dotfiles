@@ -1,0 +1,7 @@
+{{- /* Prune brew cache older than 30 days (also autoremoves now-unused deps by
+     default in 6.x). Saturday at 11:00. */ -}}
+{{ template "launchagent.plist" (dict
+	"label" "com.rdegges.brew-cleanup"
+	"schedule" (list (dict "Weekday" 6 "Hour" 11 "Minute" 0))
+	"command" `{ date; brew cleanup --prune=30 --quiet; } > $HOME/.cron/logs/brew-cleanup.log 2>&1`
+	"home" .chezmoi.homeDir) -}}

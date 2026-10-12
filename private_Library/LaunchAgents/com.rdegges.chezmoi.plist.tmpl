@@ -1,0 +1,7 @@
+{{- /* Sync dotfiles from the repo (git pull + apply). On failure the script writes
+     ~/.cron/logs/chezmoi.FAILED, which every new shell prints. Hourly at :15. */ -}}
+{{ template "launchagent.plist" (dict
+	"label" "com.rdegges.chezmoi"
+	"schedule" (list (dict "Minute" 15))
+	"command" `{ date; $HOME/.cron/chezmoi-update.sh; } > $HOME/.cron/logs/chezmoi.log 2>&1`
+	"home" .chezmoi.homeDir) -}}

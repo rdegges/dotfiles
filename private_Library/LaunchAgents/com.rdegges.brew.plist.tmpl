@@ -1,0 +1,9 @@
+{{- /* Update Homebrew + upgrade all formulae and casks. Plain `brew upgrade` (no
+     args) already covers both. No --greedy: it redundantly re-downloads apps that
+     update themselves. --no-quit so an unattended run never closes an app you're
+     using. Daily at 10:00. */ -}}
+{{ template "launchagent.plist" (dict
+	"label" "com.rdegges.brew"
+	"schedule" (list (dict "Hour" 10 "Minute" 0))
+	"command" `{ date; brew update --quiet && brew upgrade --quiet --no-quit; } > $HOME/.cron/logs/brew.log 2>&1`
+	"home" .chezmoi.homeDir) -}}

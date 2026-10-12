@@ -12,3 +12,7 @@ AGENTS.md
      A directory named *.toml goes with its contents. If ~/.codex/agents is a
      symlink, chezmoi follows it and deletes the .toml files in its target. */}}
 .codex/agents/*.toml
+
+{{/* launchd runs the scheduled jobs now (Library/LaunchAgents); the crontab
+     file they replaced has no reader left. */}}
+.cron/crontab
