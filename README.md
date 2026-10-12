@@ -30,6 +30,10 @@ networks drop port 22 at random, and the hourly update then failed with
 `Operation timed out`. The source is `private_dot_ssh/private_config`, which
 becomes `~/.ssh/config`. Its `HostKeyAlias` uses the `github.com` key that is
 already in `known_hosts`, so unattended runs do not stop at a host key prompt.
+The hourly job owns ~/.ssh/config and overwrites it; put machine-local hosts
+in ~/.ssh/config.local, which it includes. bootstrap.sh still makes its first
+clone over port 22, before this config exists, so run it on a network that
+allows port 22.
 
 
 ## Scheduled jobs (launchd)
