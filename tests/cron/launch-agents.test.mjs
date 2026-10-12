@@ -30,7 +30,7 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync, writeFileSync, mkdirSync, mkdtempSync, existsSync, chmodSync, rmSync, readdirSync, cpSync, appendFileSync } from 'node:fs'
+import { readFileSync, writeFileSync, mkdirSync, mkdtempSync, existsSync, chmodSync, rmSync, readdirSync, cpSync, appendFileSync, statSync, symlinkSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -42,6 +42,9 @@ const LOADER = 'run_onchange_after_load-launch-agents.sh.tmpl'
 const RETIRE = 'run_onchange_after_retire-crontab.sh.tmpl'
 const SYS_PATH = '/usr/bin:/bin'
 const DARWIN = JSON.stringify({ chezmoi: { os: 'darwin' } })
+// macOS runs these scripts with /bin/bash 3.2. TEST_BASH=/path/to/bash-3.2 runs
+// the loader and retire tests under that bash instead of the bash on PATH.
+const BASH = process.env.TEST_BASH || 'bash'
 
 const hasZsh = spawnSync('sh', ['-c', 'command -v zsh'], { encoding: 'utf8' }).status === 0
 const zskip = hasZsh ? false : 'zsh not installed (see the run command at the top)'
@@ -193,7 +196,7 @@ test('loader: renders only on darwin; the darwin render parses under bash -n', (
   assert.equal(execTemplate(read(LOADER), { data: JSON.stringify({ chezmoi: { os: 'linux' } }) }), '')
   const s = renderLoader()
   assert.match(s, /^#!\/bin\/bash\n/)
-  const r = spawnSync('bash', ['-n'], { encoding: 'utf8', input: s })
+  const r = spawnSync(BASH, ['-n'], { encoding: 'utf8', input: s })
   assert.equal(r.status, 0, r.stderr)
 })
 
@@ -232,7 +235,9 @@ test('loader: changing only the shared template, or only one agent, changes the 
 // loaded fails like the real one, so a loader that does not wait out a slow
 // bootout fails. STUB_SLOW labels stay visible to `print` for 3 calls after
 // bootout; STUB_STICKY labels never go away; STUB_BOOTSTRAP_FAIL labels refuse
-// to load; STUB_PRINT_DOMAIN_FAIL makes `launchctl print gui/<uid>` fail.
+// to load; STUB_BOOTSTRAP_HANG labels hang on bootstrap; STUB_DISABLED labels
+// are listed under "disabled services" (as the real `launchctl print` does,
+// loaded or not); STUB_PRINT_DOMAIN_FAIL makes `launchctl print gui/<uid>` fail.
 const LAUNCHCTL =
   '#!/bin/sh\n' +
   'echo "$*" >> "$CALLS"\n' +
@@ -244,7 +249,9 @@ const LAUNCHCTL =
   '    [ -n "${STUB_PRINT_DOMAIN_FAIL:-}" ] && { echo "Bad request." >&2; exit 1; }\n' +
   '    echo "$dom = {"; echo "\tservices = {"\n' +
   '    for f in "$STATE"/loaded/*; do [ -e "$f" ] && printf "\\t\\t%s\\t-\\t%s\\n" 0 "${f##*/}"; done\n' +
-  '    echo "\t}"; echo "}"; exit 0\n' +
+  '    echo "\t}"\n' +
+  '    if [ -n "${STUB_DISABLED:-}" ]; then echo "\tdisabled services = {"; for d in $STUB_DISABLED; do printf "\\t\\t\\"%s\\" => disabled\\n" "$d"; done; echo "\t}"; fi\n' +
+  '    echo "}"; exit 0\n' +
   '  fi\n' +
   '  l=${2#"$dom"/}; [ "$l" != "$2" ] || exit 64\n' +
   '  [ -e "$STATE/loaded/$l" ] || { echo "Could not find service" >&2; exit 113; }\n' +
@@ -265,6 +272,7 @@ const LAUNCHCTL =
   '  l=$(basename "$3" .plist)\n' +
   '  [ -f "$3" ] || { echo "Bootstrap failed: 5: Input/output error" >&2; exit 5; }\n' +
   '  has "$l" "${STUB_BOOTSTRAP_FAIL:-}" && { echo "Bootstrap failed: 5: Input/output error" >&2; exit 5; }\n' +
+  '  has "$l" "${STUB_BOOTSTRAP_HANG:-}" && exec sleep 600\n' +
   '  [ -e "$STATE/loaded/$l" ] && { echo "Bootstrap failed: 5: Input/output error (still loaded)" >&2; exit 5; }\n' +
   '  touch "$STATE/loaded/$l"; exit 0 ;;\n' +
   'esac\n' +
@@ -296,7 +304,7 @@ function loaderSandbox({ loaded = [], plists = LABELS } = {}) {
     dom: `gui/${uid}`,
     run(env = {}) {
       const t0 = Date.now()
-      const r = spawnSync('bash', [script], {
+      const r = spawnSync(BASH, [script], {
         encoding: 'utf8',
         env: { HOME: home, PATH: `${bin}:${SYS_PATH}`, CALLS: calls, STATE: state, ...env },
       })
@@ -435,15 +443,59 @@ test('loader: A->B->A: interactive apply, then the hourly job, then interactive 
     assert.deepEqual(sb.loaded(), LABELS)
   }))
 
+// A PATH dir with only the tools the scripts and stubs need, and no
+// timeout/gtimeout: a Mac without Homebrew coreutils.
+function noTimeoutPath(base) {
+  const tools = join(base, 'tools')
+  mkdirSync(tools)
+  for (const t of ['bash', 'sh', 'mkdir', 'id', 'grep', 'sort', 'sleep', 'cat', 'rm', 'touch', 'basename', 'mktemp']) {
+    const r = spawnSync('sh', ['-c', `command -v ${t}`], { encoding: 'utf8' })
+    assert.equal(r.status, 0, `${t} not found`)
+    symlinkSync(r.stdout.trim(), join(tools, t))
+  }
+  return tools
+}
+
+test('loader: without timeout/gtimeout on PATH it still loads every agent unbounded and exits 0', () =>
+  withLoader({ loaded: LABELS }, (sb) => {
+    const tools = noTimeoutPath(join(sb.home, '..'))
+    const PATH = `${join(sb.home, '..', 'bin')}:${tools}`
+    assert.notEqual(spawnSync('sh', ['-c', 'command -v timeout || command -v gtimeout'], { env: { PATH } }).status, 0, 'timeout leaked onto PATH')
+    const r = sb.run({ PATH, STUB_SLOW: 'com.rdegges.pipx' })
+    assert.equal(r.status, 0, r.stdout + r.stderr)
+    assert.deepEqual(sb.loaded(), LABELS)
+    assert.deepEqual(callsFor(sb, 'com.rdegges.pipx'), ['bootout', 'print', 'print', 'print', 'print', 'bootstrap'])
+  }))
+
+test('loader: a hung bootstrap is killed at 30s; the other agents still load and the run fails', () =>
+  withLoader({}, (sb) => {
+    const r = sb.run({ STUB_BOOTSTRAP_HANG: 'com.rdegges.docker-prune' })
+    assert.equal(r.status, 1, r.stdout + r.stderr)
+    assert.ok(r.elapsed >= 29 && r.elapsed < 45, `took ${r.elapsed}s`)
+    assert.match(r.stderr, /ERROR: launchctl bootstrap gui\/\d+ com\.rdegges\.docker-prune failed/)
+    assert.deepEqual(sb.loaded(), LABELS.filter((l) => l !== 'com.rdegges.docker-prune'))
+  }))
+
+test('loader: a com.rdegges.* label listed only under "disabled services" does not fail the run', () =>
+  withLoader({ loaded: LABELS }, (sb) => {
+    const r = sb.run({ STUB_DISABLED: 'com.rdegges.gone com.rdegges.brew' })
+    assert.equal(r.status, 0, r.stdout + r.stderr)
+    assert.deepEqual(sb.loaded(), LABELS)
+    // A disabled managed label is still a managed label: never treated as an orphan.
+    assert.doesNotMatch(r.stdout, /booting out com\.rdegges\.brew /)
+  }))
+
 // --- Retire crontab ---------------------------------------------------------------
 
 test('retire: darwin-only after_ script that runs after the loader', () => {
   assert.equal(execTemplate(read(RETIRE), { data: JSON.stringify({ chezmoi: { os: 'linux' } }) }), '')
   assert.match(read(RETIRE), /^\{\{- if eq \.chezmoi\.os "darwin" -\}\}\n#!\/bin\/bash\n/)
   assert.match(read(RETIRE), /Delete this script once every machine shows an empty `crontab -l`\./)
-  // chezmoi runs after_ scripts in target-name order.
-  assert.ok('load-launch-agents.sh' < 'retire-crontab.sh')
+  // chezmoi runs after_ scripts in target-name order (the real order is proven
+  // by the `chezmoi apply` test below).
+  const target = (f) => f.replace(/^run_onchange_after_/, '').replace(/\.tmpl$/, '')
   assert.ok(LOADER.startsWith('run_onchange_after_') && RETIRE.startsWith('run_onchange_after_'))
+  assert.ok(target(LOADER) < target(RETIRE), `${target(LOADER)} sorts after ${target(RETIRE)}`)
 })
 
 const RETIRE_SCRIPT = execTemplate(read(RETIRE), { data: DARWIN })
@@ -492,7 +544,7 @@ function retireSandbox() {
     },
     run(env = {}) {
       const t0 = Date.now()
-      const r = spawnSync('bash', [script], {
+      const r = spawnSync(BASH, [script], {
         encoding: 'utf8',
         env: { HOME: home, PATH: `${bin}:${SYS_PATH}`, CALLS: calls, ...env },
       })
@@ -581,3 +633,121 @@ test('retire: the marker shows in the zshrc banner, and the command it names cle
     assert.equal(r.status, 0, r.stderr)
     assert.equal(banner(), '')
   }))
+
+test('retire: without timeout/gtimeout on PATH a failed removal still writes the marker and exits 0', () =>
+  withRetire((sb) => {
+    const tools = noTimeoutPath(join(sb.home, '..'))
+    const r = sb.run({ PATH: `${join(sb.home, '..', 'bin')}:${tools}`, STUB_L: 'jobs', STUB_R: 'fail' })
+    assertMarked(sb, r)
+    assert.deepEqual(sb.calls(), ['crontab -l', 'crontab -r'])
+  }))
+
+// --- Real chezmoi apply (agents, loader, retire; stub launchctl and crontab) -------
+
+// A scratch source with only the launchd pieces, applied with .chezmoi.os forced
+// to darwin so the loader and retire scripts really run, from chezmoi, against
+// the stubs. Never touches the real HOME or the real launchd.
+function applySandbox() {
+  const base = mkdtempSync(join(tmpdir(), 'launch-agents-apply-'))
+  const src = join(base, 'src')
+  const home = join(base, 'home dir')
+  const bin = join(base, 'bin')
+  const state = join(base, 'state')
+  for (const d of [src, home, bin, join(state, 'loaded'), join(state, 'linger')]) mkdirSync(d, { recursive: true })
+  for (const p of ['.chezmoitemplates', AGENTS_DIR, LOADER, RETIRE]) cpSync(join(SOURCE, p), join(src, p), { recursive: true })
+  writeFileSync(join(bin, 'launchctl'), LAUNCHCTL)
+  writeFileSync(join(bin, 'crontab'), CRONTAB)
+  chmodSync(join(bin, 'launchctl'), 0o755)
+  chmodSync(join(bin, 'crontab'), 0o755)
+  const cfg = join(base, 'chezmoi.toml')
+  writeFileSync(cfg, '')
+  const calls = join(base, 'calls')
+  writeFileSync(calls, '')
+  const cz = ['--source', src, '--destination', home, '--config', cfg, '--no-tty', '--override-data', DARWIN]
+  return {
+    src,
+    home,
+    agents: join(home, 'Library', 'LaunchAgents'),
+    loaded: () => readdirSync(join(state, 'loaded')).sort(),
+    calls: () => readFileSync(calls, 'utf8').split('\n').filter(Boolean),
+    resetCalls: () => writeFileSync(calls, ''),
+    apply: (env = {}) =>
+      spawnSync('chezmoi', [...cz, 'apply', '--force'], {
+        encoding: 'utf8',
+        env: { HOME: home, PATH: `${bin}:${process.env.PATH}`, CALLS: calls, STATE: state, STUB_L: 'jobs', STUB_R: 'ok', ...env },
+      }),
+    cleanup: () => rmSync(base, { recursive: true, force: true }),
+  }
+}
+
+test('apply: every agent lands at the path the loader bootstraps, not group/world-writable, under a private ~/Library', () => {
+  const sb = applySandbox()
+  try {
+    const r = sb.apply()
+    assert.equal(r.status, 0, r.stdout + r.stderr)
+    // The loader hard-codes $HOME/Library/LaunchAgents/<label>.plist for every
+    // label in its list; chezmoi must write exactly those files.
+    const labels = LOADER_SCRIPT.match(/^labels=\(\n([\s\S]*?)\n\)$/m)[1].split('\n').map((l) => l.trim().replace(/^'|'$/g, ''))
+    assert.deepEqual(readdirSync(sb.agents).sort(), labels.map((l) => `${l}.plist`).sort())
+    for (const l of labels) {
+      const f = join(sb.agents, `${l}.plist`)
+      const st = statSync(f)
+      assert.ok(st.isFile(), f)
+      // launchd refuses an agent plist that group or others can write.
+      assert.equal(st.mode & 0o022, 0, `${l}.plist mode ${(st.mode & 0o777).toString(8)}`)
+      assert.equal(parsePlist(readFileSync(f, 'utf8')).Label, l)
+    }
+    assert.equal(statSync(join(sb.home, 'Library')).mode & 0o077, 0, '~/Library is not private')
+    assert.deepEqual(sb.loaded(), LABELS)
+  } finally {
+    sb.cleanup()
+  }
+})
+
+test('apply: loader then retire, in that order; a self-run failure is retried by the next apply; then neither reruns until an agent changes', () => {
+  const sb = applySandbox()
+  try {
+    const idx = (calls, re) => calls.map((c, i) => (re.test(c) ? i : -1)).filter((i) => i >= 0)
+    // Within one apply, no crontab call comes before a launchctl call.
+    const assertRetireAfterLoader = (calls) => {
+      const lastLaunchctl = Math.max(-1, ...idx(calls, /^(bootstrap|bootout|print) /))
+      for (const i of idx(calls, /^crontab /)) assert.ok(i > lastLaunchctl, `crontab ran before the loader finished:\n${calls.join('\n')}`)
+    }
+
+    // 1. The hourly job (inside com.rdegges.chezmoi): the other ten load, apply fails.
+    let r = sb.apply({ XPC_SERVICE_NAME: 'com.rdegges.chezmoi' })
+    assert.notEqual(r.status, 0, 'a self-run must fail the apply so the banner shows: ' + r.stdout + r.stderr)
+    assert.equal(idx(sb.calls(), /^bootstrap /).length, 10, sb.calls().join('\n'))
+    assert.deepEqual(sb.loaded(), LABELS.filter((l) => l !== 'com.rdegges.chezmoi'))
+
+    assertRetireAfterLoader(sb.calls())
+    const retiredInStep1 = idx(sb.calls(), /^crontab -l$/).length
+
+    // 2. Interactive apply: the failed loader is not recorded as done, so it runs again.
+    sb.resetCalls()
+    r = sb.apply()
+    assert.equal(r.status, 0, r.stdout + r.stderr)
+    let calls = sb.calls()
+    assert.equal(idx(calls, /^bootstrap /).length, 11, calls.join('\n'))
+    assert.deepEqual(sb.loaded(), LABELS)
+    // Retire ran in step 1 or here, exactly once overall, and only after the loader.
+    assertRetireAfterLoader(calls)
+    assert.equal(retiredInStep1 + idx(calls, /^crontab -l$/).length, 1, 'retire must run exactly once')
+
+    // 3. Nothing changed: neither script runs.
+    sb.resetCalls()
+    r = sb.apply()
+    assert.equal(r.status, 0, r.stdout + r.stderr)
+    assert.deepEqual(sb.calls(), [])
+
+    // 4. One agent changes: the loader reloads everything; retire stays done.
+    appendFileSync(join(sb.src, AGENTS_DIR, 'com.rdegges.pipx.plist.tmpl'), '\n')
+    r = sb.apply()
+    assert.equal(r.status, 0, r.stdout + r.stderr)
+    calls = sb.calls()
+    assert.equal(idx(calls, /^bootstrap /).length, 11, calls.join('\n'))
+    assert.deepEqual(idx(calls, /^crontab /), [])
+  } finally {
+    sb.cleanup()
+  }
+})
