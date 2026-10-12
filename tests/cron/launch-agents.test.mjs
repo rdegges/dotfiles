@@ -238,6 +238,8 @@ test('loader: changing only the shared template, or only one agent, changes the 
 // to load; STUB_BOOTSTRAP_HANG labels hang on bootstrap; STUB_DISABLED labels
 // are listed under "disabled services" (as the real `launchctl print` does,
 // loaded or not); STUB_PRINT_DOMAIN_FAIL makes `launchctl print gui/<uid>` fail.
+// `print gui/<uid>/<label>` of a loaded label says `state = not running`, or
+// `state = running` for STUB_RUNNING labels (a job that is running right now).
 const LAUNCHCTL =
   '#!/bin/sh\n' +
   'echo "$*" >> "$CALLS"\n' +
@@ -255,6 +257,7 @@ const LAUNCHCTL =
   '  fi\n' +
   '  l=${2#"$dom"/}; [ "$l" != "$2" ] || exit 64\n' +
   '  [ -e "$STATE/loaded/$l" ] || { echo "Could not find service" >&2; exit 113; }\n' +
+  '  if has "$l" "${STUB_RUNNING:-}"; then printf "\\tstate = running\\n"; else printf "\\tstate = not running\\n"; fi\n' +
   '  if [ -e "$STATE/linger/$l" ]; then\n' +
   '    n=$(cat "$STATE/linger/$l")\n' +
   '    if [ "$n" -gt 0 ]; then echo $((n - 1)) > "$STATE/linger/$l"; exit 0; fi\n' +
@@ -345,7 +348,7 @@ test('loader: already loaded: each label is booted out, confirmed gone, then boo
     const r = sb.run()
     assert.equal(r.status, 0, r.stdout + r.stderr)
     assert.deepEqual(sb.loaded(), LABELS)
-    for (const l of LABELS) assert.deepEqual(callsFor(sb, l), ['bootout', 'print', 'bootstrap'], l)
+    for (const l of LABELS) assert.deepEqual(callsFor(sb, l), ['print', 'bootout', 'print', 'bootstrap'], l)
   }))
 
 test('loader: a slow bootout is waited out before the bootstrap', () =>
@@ -354,7 +357,7 @@ test('loader: a slow bootout is waited out before the bootstrap', () =>
     assert.equal(r.status, 0, r.stdout + r.stderr)
     assert.deepEqual(sb.loaded(), LABELS)
     for (const l of ['com.rdegges.brew', 'com.rdegges.chezmoi'])
-      assert.deepEqual(callsFor(sb, l), ['bootout', 'print', 'print', 'print', 'print', 'bootstrap'], l)
+      assert.deepEqual(callsFor(sb, l), ['print', 'bootout', 'print', 'print', 'print', 'print', 'bootstrap'], l)
   }))
 
 test('loader: a label still loaded 10s after bootout is not bootstrapped and fails the run', () =>
@@ -415,7 +418,7 @@ test('loader: inside com.rdegges.chezmoi it never touches that label, loads the 
     assert.deepEqual(callsFor(sb, 'com.rdegges.chezmoi'), [])
     const others = LABELS.filter((l) => l !== 'com.rdegges.chezmoi')
     assert.equal(others.length, 10)
-    for (const l of others) assert.deepEqual(callsFor(sb, l), ['bootout', 'print', 'bootstrap'], l)
+    for (const l of others) assert.deepEqual(callsFor(sb, l), ['print', 'bootout', 'print', 'bootstrap'], l)
     assert.deepEqual(sb.loaded(), LABELS, 'the running job was unloaded')
     assert.equal(
       r.stderr,
@@ -423,11 +426,24 @@ test('loader: inside com.rdegges.chezmoi it never touches that label, loads the 
     )
   }))
 
+test('loader: a managed job that is running now is not booted out; the other ten load and the run fails', () =>
+  withLoader({ loaded: LABELS }, (sb) => {
+    const r = sb.run({ STUB_RUNNING: 'com.rdegges.brew' })
+    assert.equal(r.status, 1, r.stdout + r.stderr)
+    const brew = callsFor(sb, 'com.rdegges.brew')
+    assert.ok(!brew.includes('bootout') && !brew.includes('bootstrap'), brew.join(' '))
+    const others = LABELS.filter((l) => l !== 'com.rdegges.brew')
+    assert.equal(others.length, 10)
+    for (const l of others) assert.deepEqual(callsFor(sb, l), ['print', 'bootout', 'print', 'bootstrap'], l)
+    assert.deepEqual(sb.loaded(), LABELS, 'the running job was unloaded')
+    assert.match(r.stderr, /^launch-agents: com\.rdegges\.brew is running; not reloaded/m)
+  }))
+
 test('loader: an XPC_SERVICE_NAME that is not a managed label (a terminal) changes nothing', () =>
   withLoader({ loaded: LABELS }, (sb) => {
     const r = sb.run({ XPC_SERVICE_NAME: 'application.com.apple.Terminal.1234' })
     assert.equal(r.status, 0, r.stdout + r.stderr)
-    for (const l of LABELS) assert.deepEqual(callsFor(sb, l), ['bootout', 'print', 'bootstrap'], l)
+    for (const l of LABELS) assert.deepEqual(callsFor(sb, l), ['print', 'bootout', 'print', 'bootstrap'], l)
   }))
 
 test('loader: A->B->A: interactive apply, then the hourly job, then interactive again', () =>
@@ -464,7 +480,7 @@ test('loader: without timeout/gtimeout on PATH it still loads every agent unboun
     const r = sb.run({ PATH, STUB_SLOW: 'com.rdegges.pipx' })
     assert.equal(r.status, 0, r.stdout + r.stderr)
     assert.deepEqual(sb.loaded(), LABELS)
-    assert.deepEqual(callsFor(sb, 'com.rdegges.pipx'), ['bootout', 'print', 'print', 'print', 'print', 'bootstrap'])
+    assert.deepEqual(callsFor(sb, 'com.rdegges.pipx'), ['print', 'bootout', 'print', 'print', 'print', 'print', 'bootstrap'])
   }))
 
 test('loader: a hung bootstrap is killed at 30s; the other agents still load and the run fails', () =>

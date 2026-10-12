@@ -57,6 +57,7 @@ for label in "${labels[@]}"; do
         self=$label
         continue
     fi
+    if info=$(run launchctl print "$domain/$label" 2>/dev/null) && grep -q 'state = running' <<<"$info"; then echo "launch-agents: $label is running; not reloaded (the next apply retries)" >&2; rc=1; continue; fi
     bootout "$label" || { rc=1; continue; }
     if run launchctl bootstrap "$domain" "$HOME/Library/LaunchAgents/$label.plist"; then
         echo "launch-agents: loaded $label"
