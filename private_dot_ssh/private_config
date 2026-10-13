@@ -1,0 +1,14 @@
+# Some networks drop SSH on port 22 to github.com now and then, which made the
+# unattended hourly `chezmoi update` fail with "Operation timed out" while port
+# 443 always connected. GitHub serves SSH on 443 at ssh.github.com, with the
+# same host keys, so HostKeyAlias reuses the existing github.com known_hosts
+# entry instead of prompting (and failing in BatchMode) for [ssh.github.com]:443.
+# https://docs.github.com/en/authentication/troubleshooting-ssh/using-ssh-over-the-https-port
+
+# Machine-local hosts go in ~/.ssh/config.local (not managed); listed first so they win.
+Include ~/.ssh/config.local
+
+Host github.com
+  Hostname ssh.github.com
+  Port 443
+  HostKeyAlias github.com
