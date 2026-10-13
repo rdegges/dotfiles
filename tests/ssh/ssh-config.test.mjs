@@ -11,8 +11,10 @@
 //
 // What a pass proves: the real source tree (its .chezmoiignore and
 // .chezmoiremove included) deploys ~/.ssh/config byte for byte, mode 0600, in a
-// 0700 ~/.ssh, on work and non-work machines, without touching the other files
-// in ~/.ssh, and a second apply changes nothing. OpenSSH resolves github.com to
+// 0700 ~/.ssh, on work machines only, without touching the other files in
+// ~/.ssh, and a second apply changes nothing. On a non-work machine chezmoi
+// manages nothing under ~/.ssh: a full apply creates no ~/.ssh and leaves an
+// existing one (keys, a hand-written config, its mode) as it was. OpenSSH resolves github.com to
 // ssh.github.com:443 with host key alias github.com and leaves every other host
 // alone. Against a local sshd (root only), a BatchMode, strict-host-key ssh
 // through this config connects with a known_hosts that holds only a github.com
@@ -22,7 +24,7 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync, writeFileSync, mkdirSync, mkdtempSync, rmSync, statSync, existsSync } from 'node:fs'
+import { readFileSync, writeFileSync, mkdirSync, mkdtempSync, rmSync, statSync, existsSync, chmodSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import { tmpdir, userInfo } from 'node:os'
 import { join } from 'node:path'
@@ -161,35 +163,36 @@ function withDeploy(work, fn) {
     const home = join(base, 'home')
     mkdirSync(home)
     const cfg = join(base, 'chezmoi.toml')
-    writeFileSync(cfg, `[data]\n  work = ${work}\n`)
+    const setWork = (w) => writeFileSync(cfg, `[data]\n  work = ${w}\n`)
+    setWork(work)
+    // `chezmoi ignored` runs no scripts and has no --exclude flag.
     const cz = (...args) =>
       spawnSync(
         'chezmoi',
-        ['--source', ROOT.pathname, '--destination', home, '--config', cfg, '--no-tty', '--exclude', 'scripts', ...args],
+        ['--source', ROOT.pathname, '--destination', home, '--config', cfg, '--no-tty',
+          ...(args[0] === 'ignored' ? [] : ['--exclude', 'scripts']), ...args],
         { encoding: 'utf8', env: { ...process.env, HOME: home } },
       )
-    return fn({ home, cz })
+    return fn({ home, cz, setWork })
   } finally {
     rmSync(base, { recursive: true, force: true })
   }
 }
 
-for (const work of [false, true]) {
-  test(`[work=${work}] chezmoi deploys ~/.ssh/config byte for byte, 0600 in a 0700 ~/.ssh`, { skip: cskip }, () =>
-    withDeploy(work, ({ home, cz }) => {
-      const r = cz('apply', '--force', join(home, '.ssh'))
-      assert.equal(r.status, 0, r.stderr)
-      const dst = join(home, '.ssh', 'config')
-      assert.equal(readFileSync(dst, 'utf8'), read(SRC))
-      assert.equal(statSync(dst).mode & 0o777, 0o600)
-      assert.equal(statSync(join(home, '.ssh')).mode & 0o777, 0o700)
-    }))
-}
+test('[work=true] chezmoi deploys ~/.ssh/config byte for byte, 0600 in a 0700 ~/.ssh', { skip: cskip }, () =>
+  withDeploy(true, ({ home, cz }) => {
+    const r = cz('apply', '--force', join(home, '.ssh'))
+    assert.equal(r.status, 0, r.stderr)
+    const dst = join(home, '.ssh', 'config')
+    assert.equal(readFileSync(dst, 'utf8'), read(SRC))
+    assert.equal(statSync(dst).mode & 0o777, 0o600)
+    assert.equal(statSync(join(home, '.ssh')).mode & 0o777, 0o700)
+  }))
 
-test('chezmoi apply leaves the other files in ~/.ssh alone, and a second apply changes nothing', { skip: cskip }, () =>
-  withDeploy(false, ({ home, cz }) => {
+test('[work=true] chezmoi apply leaves the other files in ~/.ssh alone, and a second apply changes nothing', { skip: cskip }, () =>
+  withDeploy(true, ({ home, cz }) => {
     // ~/.ssh holds keys and known_hosts chezmoi does not manage; the dir is not
-    // exact_, so they must survive.
+    // exact_, so they must survive. Only a work machine manages ~/.ssh at all.
     const ssh = join(home, '.ssh')
     mkdirSync(ssh, { mode: 0o700 })
     const keep = { id_rsa: 'PRIVATE KEY\n', 'id_rsa.pub': 'ssh-rsa AAAA\n', known_hosts: 'github.com ssh-ed25519 AAAA\n' }
@@ -198,12 +201,87 @@ test('chezmoi apply leaves the other files in ~/.ssh alone, and a second apply c
     let r = cz('apply', '--force', ssh)
     assert.equal(r.status, 0, r.stderr)
     for (const [f, c] of Object.entries(keep)) assert.equal(readFileSync(join(ssh, f), 'utf8'), c, `${f} changed`)
+    assert.equal(readFileSync(join(ssh, 'config'), 'utf8'), read(SRC))
 
     r = cz('diff', ssh)
     assert.equal(r.status, 0, r.stderr)
     assert.equal(r.stdout, '', 'second apply would change something')
     r = cz('verify', ssh)
     assert.equal(r.status, 0, r.stdout + r.stderr)
+  }))
+
+// Lines of `chezmoi managed` / `chezmoi ignored` that are ~/.ssh or under it.
+const sshLines = (out) => out.split('\n').filter((l) => l === '.ssh' || l.startsWith('.ssh/'))
+
+test('[work=true] chezmoi manages exactly ~/.ssh and ~/.ssh/config', { skip: cskip }, () =>
+  withDeploy(true, ({ cz }) => {
+    const r = cz('managed')
+    assert.equal(r.status, 0, r.stderr)
+    assert.deepEqual(sshLines(r.stdout).sort(), ['.ssh', '.ssh/config'])
+  }))
+
+test('[work=false] chezmoi manages nothing under ~/.ssh and lists ~/.ssh as ignored', { skip: cskip }, () =>
+  withDeploy(false, ({ cz }) => {
+    let r = cz('managed')
+    assert.equal(r.status, 0, r.stderr)
+    assert.deepEqual(sshLines(r.stdout), [], 'non-work machine manages ~/.ssh targets')
+    r = cz('ignored')
+    assert.equal(r.status, 0, r.stderr)
+    assert.ok(sshLines(r.stdout).includes('.ssh'), `~/.ssh not in chezmoi ignored:\n${r.stdout}`)
+  }))
+
+test('[work=false] a full chezmoi apply into an empty home creates no ~/.ssh', { skip: cskip }, () =>
+  withDeploy(false, ({ home, cz }) => {
+    const r = cz('apply', '--force')
+    assert.equal(r.status, 0, r.stderr)
+    assert.equal(existsSync(join(home, '.ssh')), false, '~/.ssh was created on a non-work machine')
+  }))
+
+test('[work=false] a full chezmoi apply leaves an existing ~/.ssh as it was: keys, a hand-written config, and the dir mode', { skip: cskip }, () =>
+  withDeploy(false, ({ home, cz }) => {
+    // A personal machine with its own ~/.ssh/config and a 0755 ~/.ssh: the
+    // work-only change must neither overwrite the config nor chmod the dir.
+    const ssh = join(home, '.ssh')
+    mkdirSync(ssh)
+    chmodSync(ssh, 0o755)
+    const keep = {
+      config: 'Host personal\n  Hostname 192.0.2.1\n',
+      id_ed25519: 'PRIVATE KEY\n',
+      known_hosts: 'github.com ssh-ed25519 AAAA\n',
+    }
+    for (const [f, c] of Object.entries(keep)) writeFileSync(join(ssh, f), c, { mode: 0o644 })
+
+    let r = cz('apply', '--force')
+    assert.equal(r.status, 0, r.stderr)
+    for (const [f, c] of Object.entries(keep)) {
+      assert.equal(readFileSync(join(ssh, f), 'utf8'), c, `${f} changed`)
+      assert.equal(statSync(join(ssh, f)).mode & 0o777, 0o644, `${f} mode changed`)
+    }
+    assert.equal(statSync(ssh).mode & 0o777, 0o755, '~/.ssh mode changed')
+
+    // And chezmoi has nothing pending for ~/.ssh afterwards.
+    r = cz('diff')
+    assert.equal(r.status, 0, r.stderr)
+    assert.doesNotMatch(r.stdout, /^diff --git a\/\.ssh\b/m, 'chezmoi diff still wants to change ~/.ssh')
+  }))
+
+// Pins observed behavior, not a design choice: .chezmoiignore stops chezmoi
+// managing a target but never deletes it, so a machine that once ran with
+// work = true keeps the 443 config after the flag goes false. If that should
+// change, it needs a .chezmoiremove entry (and this test flips).
+test('[work true -> false] the previously deployed ~/.ssh/config stays in place (ignore does not remove)', { skip: cskip }, () =>
+  withDeploy(true, ({ home, cz, setWork }) => {
+    let r = cz('apply', '--force', join(home, '.ssh'))
+    assert.equal(r.status, 0, r.stderr)
+    const dst = join(home, '.ssh', 'config')
+    assert.equal(readFileSync(dst, 'utf8'), read(SRC))
+
+    setWork(false)
+    r = cz('managed')
+    assert.deepEqual(sshLines(r.stdout), [], 'flag flip did not take effect')
+    r = cz('apply', '--force')
+    assert.equal(r.status, 0, r.stderr)
+    assert.equal(readFileSync(dst, 'utf8'), read(SRC))
   }))
 
 // --- The README describes this file -------------------------------------------
