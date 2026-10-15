@@ -5,9 +5,9 @@ tests
 {{/* Never sync secrets or machine-local state, even if `chezmoi add`ed by accident. */}}
 .codex/auth.json
 .claude/settings.local.json
-.aws/credentials
-.aws/sso
-.aws/cli
+{{/* chezmoi never owns anything under ~/.aws: the aws function reads its
+     profile from ~/.config/aws, and owning ~/.aws would replace a symlinked one. */}}
+.aws
 {{/* Vorssaint's clipboard history, clipboard images, and recordings live here.
      Settings sync via ~/.config/vorssaint/settings.plist instead. */}}
 Library/Application Support/com.vorssaint.utils
@@ -24,7 +24,7 @@ Library/Application Support/com.vorssaint.utils
 {{/* Work-only Homebrew packages (awscli). */}}
 .brew/Brewfile.work
 {{/* The snyk-sandbox AWS SSO profile file (aws CLI is work-only). */}}
-.aws
+.config/aws
 {{/* GitHub-SSH-over-443 is for the work network, where port 22 times out. */}}
 .ssh
 {{ end }}

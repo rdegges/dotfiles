@@ -1,5 +1,5 @@
-// private_dot_aws/private_snyk-sandbox.config (the chezmoi-owned
-// ~/.aws/snyk-sandbox.config) and the work-only `aws` zsh function in
+// dot_config/aws/private_snyk-sandbox.config (the chezmoi-owned
+// ~/.config/aws/snyk-sandbox.config) and the work-only `aws` zsh function in
 // dot_oh-my-zsh/custom/aliases.zsh.tmpl.
 //
 // Run from the repo root (zsh is needed for the function tests, chezmoi for
@@ -9,23 +9,25 @@
 //      sh -c "$(curl -fsLS get.chezmoi.io)" -- -b /usr/local/bin &&
 //      node --test tests/aws/'
 //
-// What a pass proves: through the real source tree, chezmoi writes
-// ~/.aws/snyk-sandbox.config byte for byte (0600 in a 0700 ~/.aws) only on work
-// machines, manages nothing else under ~/.aws, never touches ~/.aws/config or
-// ~/.aws/credentials whatever they hold, and changes nothing on a second apply.
+// What a pass proves: through the real source tree, a full chezmoi apply writes
+// ~/.config/aws/snyk-sandbox.config byte for byte (0600) only on work machines,
+// puts back an edited copy, and owns nothing under ~/.aws: an existing ~/.aws
+// keeps its mode, a symlinked ~/.aws stays a symlink, and ~/.aws/config and
+// ~/.aws/credentials are never changed whatever they hold. A second apply
+// changes nothing.
 // The rendered `aws` function, against a stub binary that records each call's
 // argv and its AWS_CONFIG_FILE / AWS_SHARED_CREDENTIALS_FILE: every snyk-sandbox
-// call (session check, login, command) reads only ~/.aws/snyk-sandbox.config
-// with the credentials file cut off, and no other call sees either override;
-// it injects the default profile only when no --profile and no exported
-// AWS_PROFILE, AWS_DEFAULT_PROFILE, or AWS_ACCESS_KEY_ID is set; sso,
-// configure, help, login, logout, --version, and --help skip the session check,
-// and with no profile chosen they keep the CLI's own default; a trailing help
-// skips the check but keeps the profile; it logs in on stderr only when the
-// check fails, with --use-device-code over SSH, and runs nothing after a failed
-// login. It says nothing about the real AWS CLI or Identity Center; live
-// sign-in and the poisoned ~/.aws/config and credentials cases are checked by
-// hand on the work laptop before merge.
+// call (session check, login, command) reads only
+// ~/.config/aws/snyk-sandbox.config with the credentials file cut off, and no
+// other call sees either override; it injects the default profile only when no
+// --profile and no exported AWS_PROFILE, AWS_DEFAULT_PROFILE, or
+// AWS_ACCESS_KEY_ID is set; sso, configure, help, login, logout, --version, and
+// --help skip the session check, and with no profile chosen they keep the CLI's
+// own default; a trailing help skips the check but keeps the profile; it logs
+// in on stderr only when the check fails, with --use-device-code over SSH, and
+// runs nothing after a failed login. It says nothing about the real AWS CLI or
+// Identity Center; live sign-in and the poisoned ~/.aws/config and credentials
+// cases are checked by hand on the work laptop before merge.
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -35,7 +37,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 const ROOT = new URL('../../', import.meta.url)
-const SRC = 'private_dot_aws/private_snyk-sandbox.config'
+const SRC = 'dot_config/aws/private_snyk-sandbox.config'
 const ALIASES = new URL('dot_oh-my-zsh/custom/aliases.zsh.tmpl', ROOT).pathname
 const read = (p) => readFileSync(new URL(p, ROOT), 'utf8')
 
@@ -57,8 +59,8 @@ test('the managed file defines exactly sso-session snyk and profile snyk-sandbox
 
 // --- chezmoi deploys it ----------------------------------------------------------------
 
-// The real source tree, a scratch destination, and only the ~/.aws targets, so
-// no script runs and the real HOME is never touched.
+// The real source tree and a scratch destination, with scripts excluded, so the
+// real HOME is never touched.
 function withDeploy(work, fn) {
   const base = mkdtempSync(join(tmpdir(), 'aws-deploy-'))
   try {
@@ -73,79 +75,73 @@ function withDeploy(work, fn) {
           ...(['managed', 'ignored'].includes(args[0]) ? [] : ['--exclude', 'scripts']), ...args],
         { encoding: 'utf8', env: { ...process.env, HOME: home } },
       )
-    return fn({ home, cz })
+    return fn({ home, cz, managed: join(home, '.config', 'aws', 'snyk-sandbox.config') })
   } finally {
     rmSync(base, { recursive: true, force: true })
   }
 }
 
-test('[work=true] chezmoi writes ~/.aws/snyk-sandbox.config byte for byte, 0600 in a 0700 ~/.aws', { skip: cskip }, () =>
-  withDeploy(true, ({ home, cz }) => {
-    const r = cz('apply', '--force', join(home, '.aws'))
+test('[work=true] a full apply writes ~/.config/aws/snyk-sandbox.config byte for byte, 0600, and creates no ~/.aws', { skip: cskip }, () =>
+  withDeploy(true, ({ home, cz, managed }) => {
+    const r = cz('apply', '--force')
     assert.equal(r.status, 0, r.stderr)
-    const dst = join(home, '.aws', 'snyk-sandbox.config')
-    assert.equal(readFileSync(dst, 'utf8'), read(SRC))
-    assert.equal(statSync(dst).mode & 0o777, 0o600)
-    assert.equal(statSync(join(home, '.aws')).mode & 0o777, 0o700)
-    assert.equal(existsSync(join(home, '.aws', 'config')), false, 'chezmoi created ~/.aws/config')
+    assert.equal(readFileSync(managed, 'utf8'), read(SRC))
+    assert.equal(statSync(managed).mode & 0o777, 0o600)
+    assert.equal(existsSync(join(home, '.aws')), false, 'chezmoi created ~/.aws')
   }))
 
-test('[work=true] chezmoi manages only ~/.aws/snyk-sandbox.config under ~/.aws', { skip: cskip }, () =>
+test('[work=true] chezmoi owns nothing under ~/.aws, and only snyk-sandbox.config under ~/.config/aws', { skip: cskip }, () =>
   withDeploy(true, ({ cz }) => {
     const r = cz('managed', '--path-style', 'relative', '--include', 'files,dirs')
     assert.equal(r.status, 0, r.stderr)
-    const aws = r.stdout.split('\n').filter((l) => l === '.aws' || l.startsWith('.aws/'))
-    assert.deepEqual(aws.sort(), ['.aws', '.aws/snyk-sandbox.config'])
+    const lines = r.stdout.split('\n')
+    assert.deepEqual(lines.filter((l) => l === '.aws' || l.startsWith('.aws/')), [])
+    assert.deepEqual(lines.filter((l) => l.startsWith('.config/aws/')), ['.config/aws/snyk-sandbox.config'])
   }))
 
 // The contents that broke the old shared-file design: a duplicate managed
 // section, a [DEFAULT] that hands role_arn to every profile, an indented header,
 // CRLF, and a credentials-file section for snyk-sandbox. None of them may stop
-// the apply, and none may be changed.
-test('[work=true] ~/.aws/config and ~/.aws/credentials are never touched, whatever they hold, and a second apply changes nothing', { skip: cskip }, () =>
-  withDeploy(true, ({ home, cz }) => {
+// the apply, and none may be changed; nor may the directory's mode.
+test('[work=true] ~/.aws keeps its mode and its files, whatever they hold, and a second apply changes nothing', { skip: cskip }, () =>
+  withDeploy(true, ({ home, cz, managed }) => {
     const dir = join(home, '.aws')
-    mkdirSync(dir, { mode: 0o755 })
+    mkdirSync(dir)
+    chmodSync(dir, 0o755)
     const config =
       '[DEFAULT]\r\nrole_arn = arn:aws:iam::111111111111:role/x\r\n' +
       '[sso-session snyk]\nsso_region = us-east-1\n  [profile snyk-sandbox]\nsso_account_id = 111111111111\n'
     const creds = '[snyk-sandbox]\nrole_arn = arn:aws:iam::111111111111:role/x\n'
     writeFileSync(join(dir, 'config'), config, { mode: 0o644 })
     writeFileSync(join(dir, 'credentials'), creds, { mode: 0o600 })
-    let r = cz('apply', '--force', dir)
+    let r = cz('apply', '--force')
     assert.equal(r.status, 0, r.stderr)
+    assert.equal(statSync(dir).mode & 0o777, 0o755)
     assert.equal(readFileSync(join(dir, 'config'), 'utf8'), config)
     assert.equal(statSync(join(dir, 'config')).mode & 0o777, 0o644)
-    // chezmoi owns the ~/.aws directory entry (private_dot_aws), so an existing
-    // 0755 ~/.aws is tightened to 0700. Pinned: this is the one change it makes
-    // to a directory the user already had.
-    assert.equal(statSync(dir).mode & 0o777, 0o700)
     assert.equal(readFileSync(join(dir, 'credentials'), 'utf8'), creds)
-    assert.equal(readFileSync(join(dir, 'snyk-sandbox.config'), 'utf8'), read(SRC))
-    r = cz('diff', dir)
+    assert.equal(readFileSync(managed, 'utf8'), read(SRC))
+    r = cz('diff')
     assert.equal(r.status, 0, r.stderr)
     assert.equal(r.stdout, '')
   }))
 
 // The managed file's header says edits there are overwritten on the next
 // apply; the hourly job runs `chezmoi update --force`, so that is silent.
-test('[work=true] an edited ~/.aws/snyk-sandbox.config is put back by the next apply', { skip: cskip }, () =>
-  withDeploy(true, ({ home, cz }) => {
-    const dir = join(home, '.aws')
-    let r = cz('apply', '--force', dir)
+test('[work=true] an edited ~/.config/aws/snyk-sandbox.config is put back by the next apply', { skip: cskip }, () =>
+  withDeploy(true, ({ cz, managed }) => {
+    let r = cz('apply', '--force')
     assert.equal(r.status, 0, r.stderr)
-    writeFileSync(join(dir, 'snyk-sandbox.config'), read(SRC).replace('region = us-west-2', 'region = eu-central-1'))
-    r = cz('apply', '--force', dir)
+    writeFileSync(managed, read(SRC).replace('region = us-west-2', 'region = eu-central-1'))
+    r = cz('apply', '--force')
     assert.equal(r.status, 0, r.stderr)
-    assert.equal(readFileSync(join(dir, 'snyk-sandbox.config'), 'utf8'), read(SRC))
+    assert.equal(readFileSync(managed, 'utf8'), read(SRC))
   }))
 
 // Some machines keep ~/.aws as a symlink to a synced or encrypted directory.
-// The README promises chezmoi never touches ~/.aws/config, so after an apply the
-// user's config must still be at ~/.aws/config. Observed on chezmoi 2.73.1:
-// `apply --force` replaces the symlink with a new 0700 directory holding only
-// snyk-sandbox.config, so ~/.aws/config, ~/.aws/credentials, and the SSO cache
-// all vanish from ~/.aws (the target directory itself is left as it was).
+// When chezmoi owned the ~/.aws directory (chezmoi 2.73.1), `apply --force`
+// replaced the symlink with a new 0700 directory, so ~/.aws/config, the
+// credentials, and the SSO cache all vanished from ~/.aws.
 test('[work=true] a symlinked ~/.aws stays a symlink and ~/.aws/config stays readable', { skip: cskip }, () =>
   withDeploy(true, ({ home, cz }) => {
     const real = join(home, '..', 'real-aws')
@@ -153,21 +149,23 @@ test('[work=true] a symlinked ~/.aws stays a symlink and ~/.aws/config stays rea
     const config = '[profile other]\nregion = us-east-1\n'
     writeFileSync(join(real, 'config'), config)
     symlinkSync(real, join(home, '.aws'))
-    cz('apply', '--force', join(home, '.aws'))
+    const r = cz('apply', '--force')
+    assert.equal(r.status, 0, r.stderr)
     assert.equal(readFileSync(join(real, 'config'), 'utf8'), config, 'the symlink target changed')
     assert.ok(lstatSync(join(home, '.aws')).isSymbolicLink(), '~/.aws is no longer a symlink')
     assert.equal(readFileSync(join(home, '.aws', 'config'), 'utf8'), config)
   }))
 
-test('[work=false] a full apply creates no ~/.aws', { skip: cskip }, () =>
-  withDeploy(false, ({ home, cz }) => {
+test('[work=false] a full apply creates no ~/.aws and no ~/.config/aws/snyk-sandbox.config', { skip: cskip }, () =>
+  withDeploy(false, ({ home, cz, managed }) => {
     const r = cz('apply', '--force')
     assert.equal(r.status, 0, r.stderr)
     assert.equal(existsSync(join(home, '.aws')), false)
+    assert.equal(existsSync(managed), false)
   }))
 
 test('[work=false] an existing ~/.aws is left alone', { skip: cskip }, () =>
-  withDeploy(false, ({ home, cz }) => {
+  withDeploy(false, ({ home, cz, managed }) => {
     const dir = join(home, '.aws')
     mkdirSync(dir, { mode: 0o755 })
     writeFileSync(join(dir, 'config'), '[sso-session snyk]\n', { mode: 0o644 })
@@ -175,7 +173,7 @@ test('[work=false] an existing ~/.aws is left alone', { skip: cskip }, () =>
     assert.equal(r.status, 0, r.stderr)
     assert.equal(readFileSync(join(dir, 'config'), 'utf8'), '[sso-session snyk]\n')
     assert.equal(statSync(join(dir, 'config')).mode & 0o777, 0o644)
-    assert.equal(existsSync(join(dir, 'snyk-sandbox.config')), false)
+    assert.equal(existsSync(managed), false)
   }))
 
 // --- The aws function ---------------------------------------------------------------
@@ -251,7 +249,7 @@ exit "\${STUB_RC:-0}"
 }
 
 const CHECK = 'configure export-credentials --profile snyk-sandbox'
-const SANDBOX = '~/.aws/snyk-sandbox.config|/dev/null'
+const SANDBOX = '~/.config/aws/snyk-sandbox.config|/dev/null'
 const PLAIN = '-|-'
 
 // --- Default profile and the session --------------------------------------------------
