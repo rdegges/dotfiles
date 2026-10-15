@@ -99,6 +99,8 @@ To make any new item work-only, gate it on `.work` — this works in any templat
 
 Several things consume this pattern today: the Himalaya email config (below), the `agentw` shell alias (a work-only agent server), and gated blocks in the install/cron scripts. For example, the personal iCloud account renders everywhere, while the work Gmail account only renders when `work = true`.
 
+Work-only Homebrew packages (today: `awscli`) go in `dot_brew/Brewfile.work`, not the shared `dot_brew/Brewfile`. chezmoi writes `~/.brew/Brewfile.work` only when `work = true`, and `run_onchange_install-packages.sh.tmpl` bundles it after the shared Brewfile. The hourly `chezmoi update` installs a new entry on every work machine, and the daily brew job upgrades it. The `bd` alias dumps every installed package into the shared Brewfile, so after you run it on a work machine, move work-only lines back to `Brewfile.work`.
+
 
 ## Email (Himalaya)
 

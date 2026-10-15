@@ -1,0 +1,4 @@
+# Work-only (Snyk) packages. chezmoi skips this file on machines with
+# work = false (.chezmoiignore), and run_onchange_install-packages bundles it
+# only on work machines, after the shared Brewfile.
+brew "awscli"
