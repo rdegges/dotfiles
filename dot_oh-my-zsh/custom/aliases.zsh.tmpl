@@ -67,7 +67,7 @@ alias bi="brew install"
 # uses the device-code flow, since there is no local browser.
 aws() {
   # Exported keys are an explicit choice; --profile would silently override them.
-  if [[ ${(t)AWS_ACCESS_KEY_ID} == *export* ]]; then
+  if [[ ${(t)AWS_ACCESS_KEY_ID-} == *export* ]]; then
     command aws "$@"; return
   fi
   local profile="" picked=0 cmd="" helpish=0 a i
@@ -84,19 +84,22 @@ aws() {
     case $a in
       --version|--help) helpish=1 ;;
       --profile|--region|--output|--endpoint-url|--ca-bundle|--query|--color|\
-      --cli-read-timeout|--cli-connect-timeout|--cli-binary-format) (( i++ )) ;;
+      --cli-read-timeout|--cli-connect-timeout|--cli-binary-format|--cli-error-format) (( i++ )) ;;
       -*) ;;
       *) cmd=$a; break ;;
     esac
   done
-  if (( helpish )) || [[ $cmd == (|sso|configure|help) ]]; then
+  # A trailing `help` (aws s3 help, aws s3 ls help) only shows a man page.
+  if (( helpish )) || [[ $cmd == (|sso|configure|help|login|logout) || ${argv[-1]-} == help ]]; then
     command aws "$@"; return
   fi
   local -a inject=()
   if (( ! picked )); then
-    if [[ -n ${AWS_PROFILE-} ]]; then
+    # Only exported variables reach the CLI, so only they count here; an
+    # unexported one would make the session check use a different profile.
+    if [[ -n ${AWS_PROFILE-} && ${(t)AWS_PROFILE-} == *export* ]]; then
       profile=$AWS_PROFILE
-    elif [[ -n ${AWS_DEFAULT_PROFILE-} ]]; then
+    elif [[ -n ${AWS_DEFAULT_PROFILE-} && ${(t)AWS_DEFAULT_PROFILE-} == *export* ]]; then
       profile=$AWS_DEFAULT_PROFILE
     else
       profile=snyk-sandbox

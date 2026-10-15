@@ -12,13 +12,16 @@
 // What a pass proves: the modify script, fed any existing ~/.aws/config,
 // prints every foreign line unchanged plus exactly one current managed block,
 // is idempotent, replaces a stale block in place, and fails closed (non-zero,
-// no output) on a managed section name outside the markers or on unbalanced or
-// repeated markers. Through the real source tree, chezmoi manages ~/.aws/config
+// no output) on any header outside the markers that the broad rule matches
+// (README: Work vs. personal machines), on a key line after the end marker, on
+// any CR byte, and on unbalanced or repeated markers. Through the real source tree, chezmoi manages ~/.aws/config
 // (0600 in a 0700 ~/.aws) only on work machines, never ~/.aws/credentials or
 // the caches, keeps foreign profiles, changes nothing on a second apply, and
 // refuses to write on a collision. The rendered `aws` function, against a stub
-// binary, injects the default profile only when no --profile, AWS_PROFILE,
-// AWS_DEFAULT_PROFILE, or exported key is set; honors --profile and --profile=; checks the session only
+// binary, injects the default profile only when no --profile and no exported
+// AWS_PROFILE, AWS_DEFAULT_PROFILE, or AWS_ACCESS_KEY_ID is set; passes the
+// sso, configure, help, login, and logout commands, --version, --help, and a
+// trailing help straight through; honors --profile and --profile=; checks the session only
 // for snyk-sandbox; logs in on stderr only when the check fails, with
 // --use-device-code over SSH; and runs nothing after a failed login. It says
 // nothing about live Identity Center sign-in; that is checked by hand on the
@@ -556,6 +559,10 @@ for (const [name, input] of [
   ['a no-break-space-indented header before the block', '[profile other]\n [profile snyk-sandbox]\nsso_account_id = 111111111111\n' + BLOCK],
   ['CR-only line endings before the block', '[profile other]\rregion = x\r[profile snyk-sandbox]\rsso_account_id = 111111111111\n' + BLOCK],
   ['a managed key on the line after the end marker', BLOCK + 'sso_account_id = 111111111111\n'],
+  // From the round-2 red-team report: botocore accepts any section name that
+  // starts with "profile", so these prefix forms also name snyk-sandbox.
+  ['a [profiles ...] prefix form after the block', BLOCK + '[profiles snyk-sandbox]\nsso_account_id = 111111111111\n'],
+  ['a [profile-x ...] prefix form after the block', BLOCK + '[profile-x snyk-sandbox]\nsso_account_id = 111111111111\n'],
 ]) {
   test(`a collision the CLI sees never reaches the output: ${name}`, { skip: pyskip }, () => {
     const r = modify(input)
@@ -573,17 +580,40 @@ for (const [name, input] of [
 // Pins: forms the round-2 parser gets right, and safe over-matches (fail closed
 // where the CLI would not see a collision). Both are fine; a parser change that
 // flips one should be a decision, not an accident.
-test('a whole-file CRLF config fails closed, markers included (pinned)', () => {
+test('a whole-file CRLF config fails closed, markers included, and says why (pinned)', () => {
   const r = modify(BLOCK.replace(/\n/g, '\r\n'))
+  assert.notEqual(r.status, 0)
+  assert.equal(r.stdout, '')
+  assert.match(r.stderr, /CR line endings are not supported; convert ~\/\.aws\/config to LF/)
+})
+
+test('any key line after the end marker fails closed, even one the block does not set (pinned)', () => {
+  const r = modify(BLOCK + 'cli_pager =\n')
+  assert.notEqual(r.status, 0)
+  assert.equal(r.stdout, '')
+  assert.match(r.stderr, /cli_pager = follows the chezmoi end marker/)
+})
+
+test('blank lines and comments after the end marker, then a header, pass through', () => {
+  const tail = '\n# mine\n  ; also mine\n[profile other]\nx = 1\n'
+  const r = modify(BLOCK + tail)
+  assert.equal(r.status, 0, r.stderr)
+  assert.equal(r.stdout, BLOCK + tail)
+})
+
+test('the broad rule over-matches a profile ending in snyk-sandbox, on purpose (pinned)', () => {
+  const r = modify('[profile mysnyk-sandbox]\nx = 1\n')
   assert.notEqual(r.status, 0)
   assert.equal(r.stdout, '')
 })
 
-test('a key line after the end marker that the block does not set passes through (pinned)', () => {
-  const r = modify(BLOCK + 'cli_pager =\n')
-  assert.equal(r.status, 0, r.stderr)
-  assert.equal(r.stdout, BLOCK + 'cli_pager =\n')
-})
+for (const header of ['[profile snyk-sandbox-2]', '[profile scanme-sandbox]']) {
+  test(`the broad rule still passes ${header}`, () => {
+    const r = modify(`${header}\nx = 1\n`)
+    assert.equal(r.status, 0, r.stderr)
+    assert.equal(r.stdout, `${header}\nx = 1\n\n` + BLOCK)
+  })
+}
 
 // --- Tester additions, round 2: the aws function -----------------------------------------
 
@@ -627,6 +657,20 @@ test('a profile named like a command is a profile, not a command', { skip: cskip
 // Observed: `aws s3 help` checks the session and, when it has expired, opens a
 // browser login before it shows a help page. Whether nested help is exempt is
 // the maker's call.
-test('PROPOSED CONTRACT: `aws <service> help` needs no session', { skip: cskip || zskip, todo: 'nested help is not exempt today; maker to decide' }, () => {
-  assert.deepEqual(withFn('aws s3 help', { STUB_EXPORT: 'fail' }).calls, ['s3 help'])
+for (const cmd of ['aws s3 help', 'aws s3 ls help']) {
+  test(`\`${cmd}\` needs no session: no check, no injection`, { skip: cskip || zskip }, () => {
+    assert.deepEqual(withFn(cmd, { STUB_EXPORT: 'fail' }).calls, [cmd.slice(4)])
+  })
+}
+
+test('under zsh -o nounset with no AWS variables set, the command runs', { skip: cskip || zskip }, () => {
+  const r = withFn('setopt nounset; aws s3 ls')
+  assert.equal(r.status, 0, r.stderr)
+  assert.deepEqual(r.calls, [CHECK, '--profile snyk-sandbox s3 ls'])
+})
+
+test('an unexported AWS_PROFILE does not count: the default is injected', { skip: cskip || zskip }, () => {
+  assert.deepEqual(withFn('AWS_PROFILE=other; aws s3 ls').calls, [CHECK, '--profile snyk-sandbox s3 ls'])
+  assert.deepEqual(withFn('AWS_PROFILE=snyk-sandbox; aws s3 ls').calls, [CHECK, '--profile snyk-sandbox s3 ls'])
+  assert.deepEqual(withFn('AWS_DEFAULT_PROFILE=other; aws s3 ls').calls, [CHECK, '--profile snyk-sandbox s3 ls'])
 })
