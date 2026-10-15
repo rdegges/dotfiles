@@ -17,12 +17,12 @@
 // (0600 in a 0700 ~/.aws) only on work machines, never ~/.aws/credentials or
 // the caches, keeps foreign profiles, changes nothing on a second apply, and
 // refuses to write on a collision. The rendered `aws` function, against a stub
-// binary, injects the default profile only when no profile, AWS_PROFILE, or
-// exported key is set; honors --profile and --profile=; checks the session only
+// binary, injects the default profile only when no --profile, AWS_PROFILE,
+// AWS_DEFAULT_PROFILE, or exported key is set; honors --profile and --profile=; checks the session only
 // for snyk-sandbox; logs in on stderr only when the check fails, with
 // --use-device-code over SSH; and runs nothing after a failed login. It says
-// nothing about the real AWS CLI or Identity Center; those were checked by hand
-// on the work laptop in the gate run. The collision-invariant tests read the
+// nothing about live Identity Center sign-in; that is checked by hand on the
+// work laptop (valid session, then `aws sso logout` and one login) before merge. The collision-invariant tests read the
 // script's output the way botocore's configloader does (RawConfigParser, then
 // shlex.split on section names), via python3; gawk, original-awk (BWK, the
 // macOS awk family) and busybox awk are optional and their tests skip without
@@ -479,10 +479,9 @@ test('empty, glob, and unicode arguments reach the binary intact', { skip: cskip
   assert.equal(r.stdout, `ran: [--profile] [snyk-sandbox] [s3] [cp] [] [s3://b/*] [café ☃.txt]\n`)
 })
 
-test('--profile with no value falls back to the default and keeps the user argument (pinned)', { skip: cskip || zskip }, () => {
-  // Observed behavior: the CLI then rejects the dangling --profile itself.
-  const r = withFn('aws s3 ls --profile')
-  assert.deepEqual(r.calls, [CHECK, '--profile snyk-sandbox s3 ls --profile'])
+test('an empty or dangling --profile injects nothing and runs no check; the CLI reports it', { skip: cskip || zskip }, () => {
+  assert.deepEqual(withFn('aws s3 ls --profile').calls, ['s3 ls --profile'])
+  assert.deepEqual(withFn('aws s3 ls --profile=').calls, ['s3 ls --profile='])
 })
 
 // A global option before the subcommand hides `sso` from the first-word
@@ -502,6 +501,28 @@ test('`aws --region us-west-2 sso login` with an expired session runs one login,
 // The real CLI also selects a profile from AWS_DEFAULT_PROFILE (checked with
 // aws-cli 2.38.1: AWS_DEFAULT_PROFILE=other `aws configure get region` printed
 // other's region). The README lists only AWS_PROFILE, so this is a proposal.
-test('PROPOSED CONTRACT: AWS_DEFAULT_PROFILE is honored like AWS_PROFILE', { skip: cskip || zskip, todo: 'README lists only AWS_PROFILE; maker to decide' }, () => {
+test('AWS_DEFAULT_PROFILE is honored like AWS_PROFILE, and AWS_PROFILE wins over it', { skip: cskip || zskip }, () => {
   assert.deepEqual(withFn('aws s3 ls', { AWS_DEFAULT_PROFILE: 'other' }).calls, ['s3 ls'])
+  assert.deepEqual(withFn('aws s3 ls', { AWS_DEFAULT_PROFILE: 'snyk-sandbox' }).calls, [CHECK, 's3 ls'])
+  assert.deepEqual(withFn('aws s3 ls', { AWS_PROFILE: 'other', AWS_DEFAULT_PROFILE: 'snyk-sandbox' }).calls, ['s3 ls'])
+})
+
+test('exported keys win even with AWS_PROFILE=snyk-sandbox: no check, no login', { skip: cskip || zskip }, () => {
+  const r = withFn('aws s3 ls', { AWS_PROFILE: 'snyk-sandbox', AWS_ACCESS_KEY_ID: 'AKIAEXAMPLE', STUB_EXPORT: 'fail' })
+  assert.deepEqual(r.calls, ['s3 ls'])
+})
+
+test('a key that is set but not exported does not stop the injection', { skip: cskip || zskip }, () => {
+  const r = withFn('AWS_ACCESS_KEY_ID=AKIAEXAMPLE; aws s3 ls')
+  assert.deepEqual(r.calls, [CHECK, '--profile snyk-sandbox s3 ls'])
+})
+
+for (const cmd of ['aws --region us-west-2 configure list', 'aws --output=json help', 'aws --debug --version', 'aws --region x --help']) {
+  test(`\`${cmd}\` runs no check and no injection`, { skip: cskip || zskip }, () => {
+    assert.deepEqual(withFn(cmd, { STUB_EXPORT: 'fail' }).calls, [cmd.slice(4)])
+  })
+}
+
+test('an option value that looks like a command does not hide the real command', { skip: cskip || zskip }, () => {
+  assert.deepEqual(withFn('aws --query sso s3 ls').calls, [CHECK, '--profile snyk-sandbox --query sso s3 ls'])
 })

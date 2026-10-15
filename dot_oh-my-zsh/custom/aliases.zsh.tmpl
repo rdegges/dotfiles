@@ -58,28 +58,47 @@ alias bi="brew install"
 
 {{ if .work -}}
 # AWS helpers (work only). A function, not an alias: with no --profile,
-# AWS_PROFILE, or exported keys it defaults to the chezmoi-managed snyk-sandbox
-# SSO profile (see private_dot_aws/modify_private_config), and it signs in
-# first when that profile's session has expired. The CLI signs requests itself;
-# this only picks the profile and keeps the session alive. Any other profile
-# goes straight to the real binary. Login output goes to stderr so pipes stay
-# clean. Over SSH it uses the device-code flow, since there is no local browser.
+# AWS_PROFILE, AWS_DEFAULT_PROFILE, or exported keys it defaults to the
+# chezmoi-managed snyk-sandbox SSO profile (see
+# private_dot_aws/modify_private_config), and it signs in first when that
+# profile's session has expired. The CLI signs requests itself; this only picks
+# the profile and keeps the session alive. Any other profile goes straight to
+# the real binary. Login output goes to stderr so pipes stay clean. Over SSH it
+# uses the device-code flow, since there is no local browser.
 aws() {
-  local profile="" i
+  # Exported keys are an explicit choice; --profile would silently override them.
+  if [[ ${(t)AWS_ACCESS_KEY_ID} == *export* ]]; then
+    command aws "$@"; return
+  fi
+  local profile="" picked=0 cmd="" helpish=0 a i
   for (( i = 1; i <= $#; i++ )); do
     case $argv[i] in
-      --profile) profile=${argv[i+1]-} ;;
-      --profile=*) profile=${argv[i]#--profile=} ;;
+      --profile) picked=1; profile=${argv[i+1]-} ;;
+      --profile=*) picked=1; profile=${argv[i]#--profile=} ;;
     esac
   done
-  case ${1-} in
-    ""|sso|configure|help|--version|--help) command aws "$@"; return ;;
-  esac
+  # The command is the first word that is not an option or an option's value,
+  # so `aws --region x sso login` is still an sso command.
+  for (( i = 1; i <= $#; i++ )); do
+    a=$argv[i]
+    case $a in
+      --version|--help) helpish=1 ;;
+      --profile|--region|--output|--endpoint-url|--ca-bundle|--query|--color|\
+      --cli-read-timeout|--cli-connect-timeout|--cli-binary-format) (( i++ )) ;;
+      -*) ;;
+      *) cmd=$a; break ;;
+    esac
+  done
+  if (( helpish )) || [[ $cmd == (|sso|configure|help) ]]; then
+    command aws "$@"; return
+  fi
   local -a inject=()
-  if [[ -z $profile ]]; then
+  if (( ! picked )); then
     if [[ -n ${AWS_PROFILE-} ]]; then
       profile=$AWS_PROFILE
-    elif [[ -z ${AWS_ACCESS_KEY_ID-} ]]; then
+    elif [[ -n ${AWS_DEFAULT_PROFILE-} ]]; then
+      profile=$AWS_DEFAULT_PROFILE
+    else
       profile=snyk-sandbox
       inject=(--profile snyk-sandbox)
     fi

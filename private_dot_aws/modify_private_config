@@ -36,7 +36,7 @@ output = json
 # <<< chezmoi: snyk-sandbox <<<
 EOF
 
-awk '
+awk -v q="'" '
   NR == FNR { blk[++nb] = $0; next }
   {
     line = $0
@@ -49,10 +49,24 @@ awk '
       inside = 0; next
     }
     if (inside) next
+    # Read the section name the way botocore does: the text between the first
+    # "[" and the last "]" (anything after it is ignored), CR stripped, and
+    # quotes removed (it shlex-splits names, so [profile "snyk-sandbox"] is the
+    # same profile).
     h = line
-    gsub(/[ \t]+/, " ", h); sub(/^ /, "", h); sub(/ $/, "", h)
-    if (h ~ /^\[ ?(sso-session snyk|profile snyk-sandbox) ?\]$/) {
-      bad = "section " line " sits outside the chezmoi markers; remove it or move it inside them"; exit 1
+    sub(/\r$/, "", h)
+    if (h ~ /^[ \t]*\[/) {
+      h = substr(h, index(h, "[") + 1)
+      e = 0
+      for (k = length(h); k > 0; k--) if (substr(h, k, 1) == "]") { e = k; break }
+      if (e > 0) {
+        h = substr(h, 1, e - 1)
+        gsub(/"/, "", h); gsub(q, "", h)
+        gsub(/[ \t]+/, " ", h); sub(/^ /, "", h); sub(/ $/, "", h)
+        if (h == "sso-session snyk" || h == "profile snyk-sandbox") {
+          bad = "section " line " sits outside the chezmoi markers; remove it or move it inside them"; exit 1
+        }
+      }
     }
     out[++n] = line
   }
