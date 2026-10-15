@@ -73,7 +73,7 @@ test('Brewfile.work installs awscli from homebrew-core and nothing else', () => 
 
 // A shared-Brewfile entry would install awscli on personal machines too, which
 // is exactly what Brewfile.work exists to prevent. The `bd` alias can put it
-// there (see the PROPOSED CONTRACT below).
+// there (see the bd alias test below).
 test('shared Brewfile has no awscli entry and no entry that Brewfile.work also lists', () => {
   const shared = entries('dot_brew/Brewfile')
   assert.ok(shared.length > 20, `only ${shared.length} shared entries parsed`)
@@ -122,13 +122,15 @@ test('work=false: darwin install script never names Brewfile.work', () => {
   assert.ok(!out.includes('{{') && !out.includes('}}'), 'unrendered template text left in the script')
 })
 
-// The rendered work and personal scripts differ only by the work hash line and
-// the work bundle block, so nothing else in the script is accidentally gated.
-test('work=true script is the work=false script plus the hash line and the work bundle block', () => {
+// The rendered work and personal scripts differ only by the work hash line, the
+// trust loop's Brewfile.work input and the work bundle block, so nothing else in
+// the script is accidentally gated.
+test('work=true script is the work=false script plus the hash line, trust input and work bundle block', () => {
   const personal = renderScript({ work: false, chezmoi: { os: 'darwin' } })
   const workOut = renderScript({ work: true, chezmoi: { os: 'darwin' } })
   const stripped = workOut
     .replace(/^# ~\/\.brew\/Brewfile\.work hash: [0-9a-f]{64}\n/m, '')
+    .replace(' ~/.brew/Brewfile ~/.brew/Brewfile.work | while', ' ~/.brew/Brewfile | while')
     .replace(/^ {4}# Work-only packages[\s\S]*?_bundle_failed=1\n {4}fi\n/m, '')
   assert.notEqual(stripped, workOut)
   assert.equal(stripped, personal)
@@ -205,10 +207,9 @@ test('work=true: both bundles failing still exits 1, not 2 or 0', () => {
   assert.equal(bundles(r.calls).length, 2)
 })
 
-// The trust loop reads only ~/.brew/Brewfile. A future third-party tap added to
-// Brewfile.work is never trusted, so newer Homebrew aborts that bundle. Today's
-// awscli is homebrew-core, so this is latent, not live.
-test('PROPOSED CONTRACT: work=true: taps listed in Brewfile.work are trusted before it is bundled', { todo: true }, () => {
+// An untrusted third-party tap in Brewfile.work would make newer Homebrew abort
+// that bundle, so on work machines the trust loop reads Brewfile.work too.
+test('work=true: taps listed in Brewfile.work are trusted before it is bundled', () => {
   const r = runScript(true, {
     trust: true,
     seed: (home) => writeFileSync(join(home, '.brew/Brewfile.work'), 'tap "example/worktap"\nbrew "example/worktap/tool"\n'),
@@ -218,9 +219,9 @@ test('PROPOSED CONTRACT: work=true: taps listed in Brewfile.work are trusted bef
 
 // The `bd` alias dumps every installed package into the shared Brewfile and
 // `chezmoi add`s it; with autoCommit/autoPush that ships awscli to every
-// personal machine on their next hourly update. The README asks for a manual
-// fix-up; this pins that the alias itself keeps work-only entries out.
-test('PROPOSED CONTRACT: work=true: the bd alias keeps Brewfile.work entries out of the shared Brewfile', { todo: true }, () => {
+// personal machine on their next hourly update. This pins that the alias
+// itself keeps work-only entries out.
+test('work=true: the bd alias keeps Brewfile.work entries out of the shared Brewfile', () => {
   const aliases = withHome((home) => chezmoi(home, { work: true }, ['cat', join(home, '.oh-my-zsh/custom/aliases.zsh')]))
   const bd = aliases.split('\n').find((l) => l.startsWith('alias bd='))
   assert.ok(bd, 'no bd alias')
