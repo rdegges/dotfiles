@@ -29,7 +29,7 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync, writeFileSync, mkdirSync, mkdtempSync, rmSync, statSync, existsSync, chmodSync } from 'node:fs'
+import { readFileSync, writeFileSync, mkdirSync, mkdtempSync, rmSync, statSync, lstatSync, existsSync, chmodSync, symlinkSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -116,11 +116,47 @@ test('[work=true] ~/.aws/config and ~/.aws/credentials are never touched, whatev
     assert.equal(r.status, 0, r.stderr)
     assert.equal(readFileSync(join(dir, 'config'), 'utf8'), config)
     assert.equal(statSync(join(dir, 'config')).mode & 0o777, 0o644)
+    // chezmoi owns the ~/.aws directory entry (private_dot_aws), so an existing
+    // 0755 ~/.aws is tightened to 0700. Pinned: this is the one change it makes
+    // to a directory the user already had.
+    assert.equal(statSync(dir).mode & 0o777, 0o700)
     assert.equal(readFileSync(join(dir, 'credentials'), 'utf8'), creds)
     assert.equal(readFileSync(join(dir, 'snyk-sandbox.config'), 'utf8'), read(SRC))
     r = cz('diff', dir)
     assert.equal(r.status, 0, r.stderr)
     assert.equal(r.stdout, '')
+  }))
+
+// The managed file's header says edits there are overwritten on the next
+// apply; the hourly job runs `chezmoi update --force`, so that is silent.
+test('[work=true] an edited ~/.aws/snyk-sandbox.config is put back by the next apply', { skip: cskip }, () =>
+  withDeploy(true, ({ home, cz }) => {
+    const dir = join(home, '.aws')
+    let r = cz('apply', '--force', dir)
+    assert.equal(r.status, 0, r.stderr)
+    writeFileSync(join(dir, 'snyk-sandbox.config'), read(SRC).replace('region = us-west-2', 'region = eu-central-1'))
+    r = cz('apply', '--force', dir)
+    assert.equal(r.status, 0, r.stderr)
+    assert.equal(readFileSync(join(dir, 'snyk-sandbox.config'), 'utf8'), read(SRC))
+  }))
+
+// Some machines keep ~/.aws as a symlink to a synced or encrypted directory.
+// The README promises chezmoi never touches ~/.aws/config, so after an apply the
+// user's config must still be at ~/.aws/config. Observed on chezmoi 2.73.1:
+// `apply --force` replaces the symlink with a new 0700 directory holding only
+// snyk-sandbox.config, so ~/.aws/config, ~/.aws/credentials, and the SSO cache
+// all vanish from ~/.aws (the target directory itself is left as it was).
+test('[work=true] a symlinked ~/.aws stays a symlink and ~/.aws/config stays readable', { skip: cskip }, () =>
+  withDeploy(true, ({ home, cz }) => {
+    const real = join(home, '..', 'real-aws')
+    mkdirSync(real)
+    const config = '[profile other]\nregion = us-east-1\n'
+    writeFileSync(join(real, 'config'), config)
+    symlinkSync(real, join(home, '.aws'))
+    cz('apply', '--force', join(home, '.aws'))
+    assert.equal(readFileSync(join(real, 'config'), 'utf8'), config, 'the symlink target changed')
+    assert.ok(lstatSync(join(home, '.aws')).isSymbolicLink(), '~/.aws is no longer a symlink')
+    assert.equal(readFileSync(join(home, '.aws', 'config'), 'utf8'), config)
   }))
 
 test('[work=false] a full apply creates no ~/.aws', { skip: cskip }, () =>
@@ -361,6 +397,26 @@ for (const cmd of [
     assert.deepEqual(r.envs, [PLAIN])
   })
 }
+
+// A session-free command with --profile snyk-sandbox reads (and, for
+// `configure set`, writes) the managed file, never ~/.aws/config. Writes there
+// are reverted by the next apply (see the deploy test above).
+for (const cmd of [
+  'aws configure list --profile snyk-sandbox', 'aws configure set region eu-central-1 --profile snyk-sandbox',
+  'aws sso logout --profile snyk-sandbox', 'aws --profile=snyk-sandbox help',
+]) {
+  test(`\`${cmd}\` runs no check and targets only the managed file`, { skip: fskip }, () => {
+    const r = withFn(cmd, { STUB_EXPORT: 'fail' })
+    assert.deepEqual(r.calls, [cmd.slice(4)])
+    assert.deepEqual(r.envs, [SANDBOX])
+  })
+}
+
+test('a HOME with spaces and unicode reaches AWS_CONFIG_FILE intact', { skip: fskip }, () => {
+  const r = withFn('HOME="$HOME/h ome ☃"; aws s3 ls', { STUB_EXPORT: 'fail' })
+  assert.deepEqual(r.calls, [CHECK, 'sso login --profile snyk-sandbox', '--profile snyk-sandbox s3 ls'])
+  assert.deepEqual(r.envs, [SANDBOX, SANDBOX, SANDBOX])
+})
 
 test('`aws sso login --profile snyk-sandbox` logs in once, against the managed file', { skip: fskip }, () => {
   const r = withFn('aws sso login --profile snyk-sandbox', { STUB_EXPORT: 'fail' })
