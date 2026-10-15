@@ -5,7 +5,7 @@
 // Run from the repo root (zsh is needed for the function tests, chezmoi for
 // the render and deploy tests; without them those tests skip):
 //   docker run --rm -v "$PWD":/w -w /w node:latest sh -c \
-//     'apt-get update -qq && apt-get install -y -qq zsh >/dev/null &&
+//     'apt-get update -qq && apt-get install -y -qq zsh gawk original-awk busybox >/dev/null &&
 //      sh -c "$(curl -fsLS get.chezmoi.io)" -- -b /usr/local/bin &&
 //      node --test tests/aws/'
 //
@@ -22,11 +22,15 @@
 // for snyk-sandbox; logs in on stderr only when the check fails, with
 // --use-device-code over SSH; and runs nothing after a failed login. It says
 // nothing about the real AWS CLI or Identity Center; those were checked by hand
-// on the work laptop in the gate run.
+// on the work laptop in the gate run. The collision-invariant tests read the
+// script's output the way botocore's configloader does (RawConfigParser, then
+// shlex.split on section names), via python3; gawk, original-awk (BWK, the
+// macOS awk family) and busybox awk are optional and their tests skip without
+// them.
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync, writeFileSync, mkdirSync, mkdtempSync, rmSync, statSync, existsSync, chmodSync } from 'node:fs'
+import { readFileSync, writeFileSync, mkdirSync, mkdtempSync, rmSync, statSync, existsSync, chmodSync, symlinkSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -231,7 +235,9 @@ test('[work=false] no aws function is rendered', { skip: cskip }, () => {
 // Runs `cmd` in zsh with the rendered aliases sourced and a stub `aws` first on
 // PATH. The stub logs each call's argv to a file and its env view to stdout.
 // STUB_EXPORT=fail makes `configure export-credentials` fail (expired session);
-// STUB_LOGIN=fail makes `sso login` fail.
+// STUB_LOGIN=fail makes `sso login` fail. STUB_EXPORT_OUT=1 makes the check print
+// a fake secret on stdout and stderr, as the real export-credentials prints keys.
+// STUB_RC sets the exit code of the final command.
 function withFn(cmd, env = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'aws-fn-'))
   try {
@@ -242,10 +248,13 @@ function withFn(cmd, env = {}) {
     writeFileSync(stub, `#!/bin/sh
 printf '%s\\n' "$*" >> "${log}"
 case "$*" in
-  *"configure export-credentials"*) [ "\${STUB_EXPORT-}" = fail ] && exit 255; exit 0 ;;
+  *"configure export-credentials"*)
+    [ -n "\${STUB_EXPORT_OUT-}" ] && { echo '{"SecretAccessKey": "STUB-SECRET"}'; echo 'STUB-SECRET-ERR' >&2; }
+    [ "\${STUB_EXPORT-}" = fail ] && exit 255; exit 0 ;;
   "sso login"*) echo "login-output"; [ "\${STUB_LOGIN-}" = fail ] && exit 1; exit 0 ;;
 esac
 printf 'ran:'; for a; do printf ' [%s]' "$a"; done; echo
+exit "\${STUB_RC:-0}"
 `)
     chmodSync(stub, 0o755)
     const r = spawnSync('zsh', ['-f', '-c', `source ${aliases}; PATH=${dir}:$PATH; ${cmd}`], {
@@ -336,4 +345,163 @@ for (const first of ['', 'sso login', 'configure list', 'help', '--version', '--
 test('arguments with spaces reach the binary intact', { skip: cskip || zskip }, () => {
   const r = withFn(`aws s3 cp "a b.txt" s3://bucket/`)
   assert.equal(r.stdout.trim(), 'ran: [--profile] [snyk-sandbox] [s3] [cp] [a b.txt] [s3://bucket/]')
+})
+
+// --- Tester additions: collisions as the AWS CLI reads them ---------------------------
+
+// botocore (configloader.raw_config_parse / build_profile_map) reads the file
+// with a strict RawConfigParser, so an exact duplicate section header is a
+// parse error for every profile, and it maps a section to a profile by
+// shlex.split(name), so quoted names alias the managed ones and the later
+// section wins. This helper reads the script's output that way.
+const pyskip = has('python3') ? false : 'python3 not installed (node:latest ships it)'
+const CLI_VIEW = String.raw`
+import configparser, json, shlex, sys
+cp = configparser.RawConfigParser()
+try:
+    cp.read(sys.argv[1])
+except configparser.Error as e:
+    print(json.dumps({"error": type(e).__name__})); sys.exit(0)
+out = {"profile": {}, "sso-session": {}}
+for name in cp.sections():
+    for kind in out:
+        if name.startswith(kind):
+            try: parts = shlex.split(name)
+            except ValueError: continue
+            if len(parts) == 2: out[kind][parts[1]] = dict(cp.items(name))
+print(json.dumps(out))
+`
+function cliView(text) {
+  const dir = mkdtempSync(join(tmpdir(), 'aws-cli-view-'))
+  try {
+    const f = join(dir, 'config')
+    writeFileSync(f, text)
+    const r = spawnSync('python3', ['-c', CLI_VIEW, f], { encoding: 'utf8' })
+    assert.equal(r.status, 0, r.stderr)
+    return JSON.parse(r.stdout)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+}
+
+test('control: the managed block alone parses, and the CLI resolves the managed values', { skip: pyskip }, () => {
+  const v = cliView(BLOCK)
+  assert.equal(v.error, undefined)
+  assert.equal(v.profile['snyk-sandbox'].sso_account_id, '597564118722')
+  assert.equal(v.profile['snyk-sandbox'].sso_session, 'snyk')
+  assert.equal(v['sso-session'].snyk.sso_start_url, 'https://identitycenter.amazonaws.com/ssoins-6804c38450c29714')
+})
+
+// Invariant behind the README's fail-closed promise: whatever the existing file
+// holds, the script either fails closed (non-zero, no output) or prints a file
+// the CLI can parse in which snyk-sandbox and sso-session snyk carry the managed
+// values. Each case below was also run through the real aws-cli 2.38.1 on the
+// work laptop (AWS_CONFIG_FILE on a scratch file): the comment and CRLF outputs
+// made every command fail with "Unable to parse config file", and the quoted
+// profile made `aws configure get sso_account_id --profile snyk-sandbox` print
+// 111111111111.
+for (const [name, input] of [
+  ['control: a tab inside the header (caught today)', BLOCK + '[profile\tsnyk-sandbox]\nsso_account_id = 111111111111\n'],
+  ['a trailing comment on a foreign header', '[profile snyk-sandbox] ; mine\nsso_account_id = 111111111111\n'],
+  ['a CRLF foreign file', '[profile snyk-sandbox]\r\nsso_account_id = 111111111111\r\n'],
+  ['a quoted profile name after the block', BLOCK + '[profile "snyk-sandbox"]\nsso_account_id = 111111111111\n'],
+  ["a single-quoted profile name after the block", BLOCK + "[profile 'snyk-sandbox']\nsso_account_id = 111111111111\n"],
+  ['a quoted sso-session name after the block', BLOCK + '[sso-session "snyk"]\nsso_start_url = https://attacker.example/start\n'],
+]) {
+  test(`a collision the CLI sees never reaches the output: ${name}`, { skip: pyskip }, () => {
+    const r = modify(input)
+    if (r.status !== 0) {
+      assert.equal(r.stdout, '', 'failed, but still printed output')
+      return
+    }
+    const v = cliView(r.stdout)
+    assert.equal(v.error, undefined, `script exited 0 but the CLI cannot parse its output (${v.error}):\n${r.stdout}`)
+    assert.equal(v.profile['snyk-sandbox']?.sso_account_id, '597564118722', `snyk-sandbox resolves to a foreign section:\n${r.stdout}`)
+    assert.equal(v['sso-session'].snyk?.sso_start_url, 'https://identitycenter.amazonaws.com/ssoins-6804c38450c29714', `sso-session snyk resolves to a foreign section:\n${r.stdout}`)
+  })
+}
+
+// --- Tester additions: every awk family gives the same result -------------------------
+
+// The script says "POSIX sh and awk only"; macOS runs it with BWK awk, the image
+// with mawk. Each awk must give mawk's stdout and exit status on every fixture.
+const AWK_FIXTURES = [
+  '',
+  '[default]\nregion = eu-west-1\n\n# c\n[profile other]\n  role_arn = x\t \n',
+  '[profile other]\nregion = eu-west-1',
+  `[profile a]\nx = 1\n${START}\n[sso-session snyk]\nsso_region = us-east-1\n${END}\n[profile b]\n`,
+  '[profile other]\n  [ sso-session   snyk ]  \n',
+  `${START}\n[profile x]\n`,
+  `[profile x]\n${END}\n`,
+  `${START}\n${START}\n${END}\n`,
+  'café = ümläut ☃\n',
+]
+for (const [name, argv] of [['gawk', ['gawk']], ['original-awk', ['original-awk']], ['busybox awk', ['busybox', 'awk']]]) {
+  const skip = has(argv[0]) ? false : `${argv[0]} not installed (see the run command at the top)`
+  test(`the modify script under ${name} matches mawk on every fixture`, { skip }, () => {
+    const shim = mkdtempSync(join(tmpdir(), 'aws-awk-'))
+    try {
+      const bin = spawnSync('sh', ['-c', `command -v ${argv[0]}`], { encoding: 'utf8' }).stdout.trim()
+      if (argv.length === 1) symlinkSync(bin, join(shim, 'awk'))
+      else writeFileSync(join(shim, 'awk'), `#!/bin/sh\nexec ${bin} ${argv.slice(1).join(' ')} "$@"\n`, { mode: 0o755 })
+      const env = { ...process.env, PATH: `${shim}:${process.env.PATH}` }
+      const used = spawnSync('sh', ['-c', 'command -v awk'], { env, encoding: 'utf8' }).stdout.trim()
+      assert.equal(used, join(shim, 'awk'))
+      for (const input of AWK_FIXTURES) {
+        const want = modify(input)
+        const got = spawnSync('sh', [MODIFY], { input, encoding: 'utf8', env })
+        assert.equal(got.status === 0, want.status === 0, `status differs for ${JSON.stringify(input)}: ${got.stderr}`)
+        assert.equal(got.stdout, want.stdout, `stdout differs for ${JSON.stringify(input)}`)
+      }
+    } finally {
+      rmSync(shim, { recursive: true, force: true })
+    }
+  })
+}
+
+// --- Tester additions: the aws function -------------------------------------------------
+
+test('the session check never leaks export-credentials output (it prints keys)', { skip: cskip || zskip }, () => {
+  const r = withFn('aws s3 ls', { STUB_EXPORT_OUT: '1' })
+  assert.equal(r.status, 0, r.stderr)
+  assert.doesNotMatch(r.stdout + r.stderr, /STUB-SECRET/)
+  assert.equal(r.stdout, 'ran: [--profile] [snyk-sandbox] [s3] [ls]\n')
+})
+
+test("the command's exit status is the function's exit status", { skip: cskip || zskip }, () => {
+  assert.equal(withFn('aws s3 ls', { STUB_RC: '254' }).status, 254)
+  assert.equal(withFn('aws s3 ls', { STUB_RC: '254', STUB_EXPORT: 'fail' }).status, 254)
+  assert.equal(withFn('aws --profile other s3 ls', { STUB_RC: '3' }).status, 3)
+})
+
+test('empty, glob, and unicode arguments reach the binary intact', { skip: cskip || zskip }, () => {
+  const r = withFn(`aws s3 cp "" 's3://b/*' 'café ☃.txt'`)
+  assert.equal(r.stdout, `ran: [--profile] [snyk-sandbox] [s3] [cp] [] [s3://b/*] [café ☃.txt]\n`)
+})
+
+test('--profile with no value falls back to the default and keeps the user argument (pinned)', { skip: cskip || zskip }, () => {
+  // Observed behavior: the CLI then rejects the dangling --profile itself.
+  const r = withFn('aws s3 ls --profile')
+  assert.deepEqual(r.calls, [CHECK, '--profile snyk-sandbox s3 ls --profile'])
+})
+
+// A global option before the subcommand hides `sso` from the first-word
+// exemption. Logging out must never open a browser login first, and one
+// `sso login` must not run two.
+test('`aws --debug sso logout` with an expired session runs no sso login', { skip: cskip || zskip }, () => {
+  const r = withFn('aws --debug sso logout', { STUB_EXPORT: 'fail' })
+  assert.ok(!r.calls.some((c) => c.startsWith('sso login')), `a logout started a browser login:\n${r.calls.join('\n')}`)
+})
+
+test('`aws --region us-west-2 sso login` with an expired session runs one login, not two', { skip: cskip || zskip }, () => {
+  const r = withFn('aws --region us-west-2 sso login', { STUB_EXPORT: 'fail' })
+  const logins = r.calls.filter((c) => /(^| )sso login( |$)/.test(c))
+  assert.equal(logins.length, 1, r.calls.join('\n'))
+})
+
+// The real CLI also selects a profile from AWS_DEFAULT_PROFILE (checked with
+// aws-cli 2.38.1: AWS_DEFAULT_PROFILE=other `aws configure get region` printed
+// other's region). The README lists only AWS_PROFILE, so this is a proposal.
+test('PROPOSED CONTRACT: AWS_DEFAULT_PROFILE is honored like AWS_PROFILE', { skip: cskip || zskip, todo: 'README lists only AWS_PROFILE; maker to decide' }, () => {
+  assert.deepEqual(withFn('aws s3 ls', { AWS_DEFAULT_PROFILE: 'other' }).calls, ['s3 ls'])
 })
