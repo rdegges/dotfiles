@@ -18,6 +18,8 @@ Library/Application Support/com.vorssaint.utils
 {{/* The Codex render names work-tracking only in its .work branch, so Codex
      gets the link to it only on a work machine. */}}
 .agents/skills/work-tracking
+{{/* Work-only Homebrew packages (awscli). */}}
+.brew/Brewfile.work
 {{/* GitHub-SSH-over-443 is for the work network, where port 22 times out. */}}
 .ssh
 {{ end }}

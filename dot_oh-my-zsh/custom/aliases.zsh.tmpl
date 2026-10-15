@@ -49,7 +49,11 @@ alias cu="chezmoi update --force"
 alias cy="chezmoi apply"
 
 # Brew helpers.
+{{ if .work -}}
+alias bd="brew bundle dump --force --file=~/.brew/Brewfile && grep -vxFf ~/.brew/Brewfile.work ~/.brew/Brewfile > ~/.brew/Brewfile.tmp && mv ~/.brew/Brewfile.tmp ~/.brew/Brewfile && chezmoi add ~/.brew/Brewfile"
+{{ else -}}
 alias bd="brew bundle dump --force --file=~/.brew/Brewfile; chezmoi add ~/.brew/Brewfile"
+{{ end -}}
 alias bi="brew install"
 
 # Mac helpers.
