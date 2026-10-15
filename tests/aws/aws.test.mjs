@@ -435,6 +435,13 @@ const AWK_FIXTURES = [
   `[profile x]\n${END}\n`,
   `${START}\n${START}\n${END}\n`,
   'café = ümläut ☃\n',
+  // Round-2 parser paths: quotes (the -v q="'" variable), a trailing comment
+  // (the last-"]" scan), CRLF, and a foreign quoted name that must pass.
+  '[profile other]\n[profile "snyk-sandbox"]\n',
+  "[profile other]\n[profile 'snyk-sandbox']\n",
+  '[profile snyk-sandbox] ; mine\n',
+  '[profile snyk-sandbox]\r\nx = 1\r\n',
+  '[profile "other one"] ; c\n[sso-session \'snyk-prod\']\n',
 ]
 for (const [name, argv] of [['gawk', ['gawk']], ['original-awk', ['original-awk']], ['busybox awk', ['busybox', 'awk']]]) {
   const skip = has(argv[0]) ? false : `${argv[0]} not installed (see the run command at the top)`
@@ -525,4 +532,101 @@ for (const cmd of ['aws --region us-west-2 configure list', 'aws --output=json h
 
 test('an option value that looks like a command does not hide the real command', { skip: cskip || zskip }, () => {
   assert.deepEqual(withFn('aws --query sso s3 ls').calls, [CHECK, '--profile snyk-sandbox --query sso s3 ls'])
+})
+
+// --- Tester additions, round 2: header forms the botocore mimic still misses ------------
+
+// The same invariant as above, on forms the round-2 parser does not read the way
+// botocore does. Each input was run through the script with macOS awk and then
+// through the real aws-cli 2.38.1 (AWS_CONFIG_FILE on a scratch file): the
+// backslash profile made `aws configure get sso_account_id --profile
+// snyk-sandbox` print 111111111111; every other case made the CLI fail with
+// "Unable to parse config file". The script exited 0 on all of them.
+// - shlex.split drops a backslash outside quotes, so snyk\-sandbox is snyk-sandbox.
+// - Python's str.strip() and \S treat \f and U+00A0 as whitespace; awk's [ \t] does not.
+// - Python reads a lone CR as a line break; awk does not.
+// - A key line right after the end marker belongs to [profile snyk-sandbox]; a key
+//   the block also sets is a DuplicateOptionError. `aws configure set <new key>
+//   --profile snyk-sandbox` writes its line right there (checked with 2.38.1), so
+//   a key the block adds later turns that line into this case.
+for (const [name, input] of [
+  ['a backslash-escaped profile name after the block', BLOCK + '[profile snyk\\-sandbox]\nsso_account_id = 111111111111\n'],
+  ['a backslash-escaped sso-session name after the block', BLOCK + '[sso-session sn\\yk]\nsso_start_url = https://attacker.example/start\n'],
+  ['a form-feed-indented header before the block', '[profile other]\n\f[profile snyk-sandbox]\nsso_account_id = 111111111111\n' + BLOCK],
+  ['a no-break-space-indented header before the block', '[profile other]\n [profile snyk-sandbox]\nsso_account_id = 111111111111\n' + BLOCK],
+  ['CR-only line endings before the block', '[profile other]\rregion = x\r[profile snyk-sandbox]\rsso_account_id = 111111111111\n' + BLOCK],
+  ['a managed key on the line after the end marker', BLOCK + 'sso_account_id = 111111111111\n'],
+]) {
+  test(`a collision the CLI sees never reaches the output: ${name}`, { skip: pyskip }, () => {
+    const r = modify(input)
+    if (r.status !== 0) {
+      assert.equal(r.stdout, '', 'failed, but still printed output')
+      return
+    }
+    const v = cliView(r.stdout)
+    assert.equal(v.error, undefined, `script exited 0 but the CLI cannot parse its output (${v.error}):\n${JSON.stringify(r.stdout)}`)
+    assert.equal(v.profile['snyk-sandbox']?.sso_account_id, '597564118722', `snyk-sandbox resolves to a foreign section:\n${r.stdout}`)
+    assert.equal(v['sso-session'].snyk?.sso_start_url, 'https://identitycenter.amazonaws.com/ssoins-6804c38450c29714', `sso-session snyk resolves to a foreign section:\n${r.stdout}`)
+  })
+}
+
+// Pins: forms the round-2 parser gets right, and safe over-matches (fail closed
+// where the CLI would not see a collision). Both are fine; a parser change that
+// flips one should be a decision, not an accident.
+test('a whole-file CRLF config fails closed, markers included (pinned)', () => {
+  const r = modify(BLOCK.replace(/\n/g, '\r\n'))
+  assert.notEqual(r.status, 0)
+  assert.equal(r.stdout, '')
+})
+
+test('a key line after the end marker that the block does not set passes through (pinned)', () => {
+  const r = modify(BLOCK + 'cli_pager =\n')
+  assert.equal(r.status, 0, r.stderr)
+  assert.equal(r.stdout, BLOCK + 'cli_pager =\n')
+})
+
+// --- Tester additions, round 2: the aws function -----------------------------------------
+
+// `aws login` and `aws logout` are top-level commands in aws-cli 2.38.1 (console
+// credentials; `aws help` lists both). Like `sso logout`, a logout must never
+// open a browser login first, and a login must not run a second login first.
+test('`aws logout` with an expired session runs no sso login', { skip: cskip || zskip }, () => {
+  const r = withFn('aws logout', { STUB_EXPORT: 'fail' })
+  assert.ok(!r.calls.some((c) => c.startsWith('sso login')), `a logout started a browser login:\n${r.calls.join('\n')}`)
+})
+
+test('`aws login` with an expired session runs no sso login first', { skip: cskip || zskip }, () => {
+  const r = withFn('aws login', { STUB_EXPORT: 'fail' })
+  assert.ok(!r.calls.some((c) => c.startsWith('sso login')), `a login started a second browser login:\n${r.calls.join('\n')}`)
+})
+
+// --cli-error-format takes a value in aws-cli 2.38.1 (`aws help`, GLOBAL
+// OPTIONS: "--cli-error-format (string)"), but it is missing from the
+// function's list of value-taking options, so its value is read as the command.
+test('`aws --cli-error-format json sso logout` with an expired session runs no sso login', { skip: cskip || zskip }, () => {
+  const r = withFn('aws --cli-error-format json sso logout', { STUB_EXPORT: 'fail' })
+  assert.ok(!r.calls.some((c) => c.startsWith('sso login')), `a logout started a browser login:\n${r.calls.join('\n')}`)
+})
+
+test('`aws --cli-error-format json sso login` with an expired session runs one login, not two', { skip: cskip || zskip }, () => {
+  const r = withFn('aws --cli-error-format json sso login', { STUB_EXPORT: 'fail' })
+  const logins = r.calls.filter((c) => /(^| )sso login( |$)/.test(c))
+  assert.equal(logins.length, 1, r.calls.join('\n'))
+})
+
+for (const cmd of ['aws --cli-error-format=json sso logout', 'aws --region=us-west-2 sso login', 'aws --endpoint-url http://localhost:4566 configure list']) {
+  test(`\`${cmd}\` runs no check and no injection`, { skip: cskip || zskip }, () => {
+    assert.deepEqual(withFn(cmd, { STUB_EXPORT: 'fail' }).calls, [cmd.slice(4)])
+  })
+}
+
+test('a profile named like a command is a profile, not a command', { skip: cskip || zskip }, () => {
+  assert.deepEqual(withFn('aws --profile sso s3 ls', { STUB_EXPORT: 'fail' }).calls, ['--profile sso s3 ls'])
+})
+
+// Observed: `aws s3 help` checks the session and, when it has expired, opens a
+// browser login before it shows a help page. Whether nested help is exempt is
+// the maker's call.
+test('PROPOSED CONTRACT: `aws <service> help` needs no session', { skip: cskip || zskip, todo: 'nested help is not exempt today; maker to decide' }, () => {
+  assert.deepEqual(withFn('aws s3 help', { STUB_EXPORT: 'fail' }).calls, ['s3 help'])
 })
