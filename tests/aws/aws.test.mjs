@@ -445,6 +445,11 @@ const AWK_FIXTURES = [
   '[profile snyk-sandbox] ; mine\n',
   '[profile snyk-sandbox]\r\nx = 1\r\n',
   '[profile "other one"] ; c\n[sso-session \'snyk-prod\']\n',
+  // Round-3 after-marker paths: an indented header (a continuation line to
+  // botocore), a tab-indented one after a blank line, and [DEFAULT].
+  `${START}\n${END}\n  [profile other]\nx = 1\n`,
+  `${START}\n${END}\n\n\t[profile other]\nx = 1\n`,
+  '[DEFAULT]\nrole_arn = arn:aws:iam::111111111111:role/x\n',
 ]
 for (const [name, argv] of [['gawk', ['gawk']], ['original-awk', ['original-awk']], ['busybox awk', ['busybox', 'awk']]]) {
   const skip = has(argv[0]) ? false : `${argv[0]} not installed (see the run command at the top)`
@@ -657,9 +662,15 @@ test('a profile named like a command is a profile, not a command', { skip: cskip
 // Observed: `aws s3 help` checks the session and, when it has expired, opens a
 // browser login before it shows a help page. Whether nested help is exempt is
 // the maker's call.
+// Round 3: relaxed from "exactly [cmd]" to "no check, no login, the help command
+// runs (with or without --profile snyk-sandbox)". `aws --profile snyk-sandbox s3
+// help` shows the same page (aws-cli 2.38.1), so injecting is harmless, and it
+// is one valid fix for the trailing-help defect pinned further down.
 for (const cmd of ['aws s3 help', 'aws s3 ls help']) {
-  test(`\`${cmd}\` needs no session: no check, no injection`, { skip: cskip || zskip }, () => {
-    assert.deepEqual(withFn(cmd, { STUB_EXPORT: 'fail' }).calls, [cmd.slice(4)])
+  test(`\`${cmd}\` needs no session: no check, no login`, { skip: cskip || zskip }, () => {
+    const { calls } = withFn(cmd, { STUB_EXPORT: 'fail' })
+    assert.equal(calls.length, 1, calls.join('\n'))
+    assert.ok([cmd.slice(4), `--profile snyk-sandbox ${cmd.slice(4)}`].includes(calls[0]), calls[0])
   })
 }
 
@@ -673,4 +684,97 @@ test('an unexported AWS_PROFILE does not count: the default is injected', { skip
   assert.deepEqual(withFn('AWS_PROFILE=other; aws s3 ls').calls, [CHECK, '--profile snyk-sandbox s3 ls'])
   assert.deepEqual(withFn('AWS_PROFILE=snyk-sandbox; aws s3 ls').calls, [CHECK, '--profile snyk-sandbox s3 ls'])
   assert.deepEqual(withFn('AWS_DEFAULT_PROFILE=other; aws s3 ls').calls, [CHECK, '--profile snyk-sandbox s3 ls'])
+})
+
+// --- Tester additions, round 3: the managed sections resolve to exactly the block ---------
+
+// The round-1/2 invariant checks two keys. The README's promise is wider: the
+// CLI must read [profile snyk-sandbox] and [sso-session snyk] as the block
+// wrote them, with no foreign key added (that is why a key after the end marker
+// fails closed). cliView uses cp.items(), which, like botocore's
+// raw_config_parse, includes keys inherited from configparser's [DEFAULT].
+const MANAGED = () => {
+  const v = cliView(BLOCK)
+  return { profile: v.profile['snyk-sandbox'], session: v['sso-session'].snyk }
+}
+function assertManagedExactly(input) {
+  const r = modify(input)
+  if (r.status !== 0) {
+    assert.equal(r.stdout, '', 'failed, but still printed output')
+    return
+  }
+  const v = cliView(r.stdout)
+  const want = MANAGED()
+  assert.equal(v.error, undefined, `script exited 0 but the CLI cannot parse its output (${v.error}):\n${JSON.stringify(r.stdout)}`)
+  assert.deepEqual(v.profile['snyk-sandbox'], want.profile, `script exited 0 but snyk-sandbox is not the managed profile:\n${JSON.stringify(r.stdout)}`)
+  assert.deepEqual(v['sso-session'].snyk, want.session, `script exited 0 but sso-session snyk is not the managed session:\n${JSON.stringify(r.stdout)}`)
+}
+
+// Controls: foreign content the CLI keeps out of the managed sections.
+for (const [name, input] of [
+  ['control: the block alone', BLOCK],
+  ['control: foreign profiles before and after (comment, then a column-0 header)', '[default]\nregion = x\n\n' + BLOCK + '\n# mine\n[profile other]\ncli_pager = cat\n'],
+  ['control: lowercase [default] with role_arn is a profile, not configparser DEFAULT', '[default]\nrole_arn = arn:aws:iam::111111111111:role/x\nsource_profile = other\n'],
+]) {
+  test(`the managed sections resolve to exactly the block: ${name}`, { skip: pyskip }, () => assertManagedExactly(input))
+}
+
+// Defects. Each output below was run through the real aws-cli 2.38.1 on the work
+// laptop (AWS_CONFIG_FILE on a scratch file; script run with /bin/sh and macOS
+// awk). The script exited 0 on all of them.
+// - configparser reads an indented line after a key as a continuation of that
+//   key, even after comments and blank lines. After the end marker that key is
+//   snyk-sandbox's `output`, so "  [profile other]" is not a header: `aws
+//   configure get output --profile snyk-sandbox` printed "json\n[profile
+//   other]", list-profiles dropped `other`, and the column-0 key lines below it
+//   joined snyk-sandbox (cli_pager = cat was read from snyk-sandbox; a key the
+//   block sets made every command fail with "Unable to parse config file").
+//   The after-marker rule strips whitespace before it tests for "[", so it
+//   takes the indented line as the next header.
+// - configparser's [DEFAULT] section (uppercase) gives its keys to every section.
+//   With role_arn and source_profile there, `aws configure get role_arn
+//   --profile snyk-sandbox` printed the foreign role and `aws configure list
+//   --profile snyk-sandbox` called AssumeRole: snyk-sandbox no longer used SSO
+//   for its credentials. This holds on a first apply, with no block in the input.
+for (const [name, input] of [
+  ['an indented header after the end marker, then a key the block sets', BLOCK + '  [profile other]\nsso_account_id = 111111111111\n'],
+  ['an indented header after the end marker, then a foreign key', BLOCK + '  [profile other]\ncli_pager = cat\n'],
+  ['a tab-indented header after a blank line after the end marker', BLOCK + '\n\t[profile other]\nregion = eu-central-1\n'],
+  ['a [DEFAULT] section with role_arn before the block (first apply)', '[DEFAULT]\nrole_arn = arn:aws:iam::111111111111:role/other\nsource_profile = other\n\n[profile other]\nregion = x\n'],
+  ['a [DEFAULT] section with credential_process after the block', BLOCK + '[DEFAULT]\ncredential_process = /bin/false\n'],
+]) {
+  test(`the managed sections resolve to exactly the block: ${name}`, { skip: pyskip }, () => assertManagedExactly(input))
+}
+
+// --- Tester additions, round 3: the aws function -------------------------------------------
+
+// The function treats any trailing `help` word as a help request and sends the
+// command to the real binary with no --profile. aws-cli 2.38.1 does not: with an
+// empty scratch config, `aws s3 cp s3://example-bucket/x help` (download to a
+// local file named help) and `aws ssm get-parameter --name help` both tried to
+// call the API ("Unable to locate credentials"), while `aws s3 help` showed the
+// man page. So these API calls run on the CLI's default chain, not snyk-sandbox:
+// on a machine with a [default] profile that is another account. Invariant: an
+// API call with no profile chosen runs with --profile snyk-sandbox.
+for (const cmd of ['aws s3 cp s3://bucket/key help', 'aws ssm get-parameter --name help']) {
+  test(`\`${cmd}\` is an API call, not help: it runs on snyk-sandbox`, { skip: cskip || zskip }, () => {
+    const { calls } = withFn(cmd)
+    assert.equal(calls.at(-1), `--profile snyk-sandbox ${cmd.slice(4)}`, calls.join('\n'))
+  })
+}
+
+// --no-sign-request sends unsigned requests (public buckets), so it needs no
+// session; today an expired session opens a browser login first. Design call.
+test('PROPOSED CONTRACT: `aws --no-sign-request s3 ls s3://public` with an expired session runs no sso login', { skip: cskip || zskip, todo: true }, () => {
+  const r = withFn('aws --no-sign-request s3 ls s3://public', { STUB_EXPORT: 'fail' })
+  assert.ok(!r.calls.some((c) => c.startsWith('sso login')), r.calls.join('\n'))
+})
+
+// The `out[n] != ""` branch: a file that already ends in a blank line gets no
+// second blank line before the block, and a second pass changes nothing.
+test('a file ending in a blank line gets no extra blank line before the block', () => {
+  const r = modify('[profile other]\nx = 1\n\n')
+  assert.equal(r.status, 0, r.stderr)
+  assert.equal(r.stdout, '[profile other]\nx = 1\n\n' + BLOCK)
+  assert.equal(modify(r.stdout).stdout, r.stdout)
 })
