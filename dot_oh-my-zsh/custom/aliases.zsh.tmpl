@@ -56,6 +56,77 @@ alias bd="brew bundle dump --force --file=~/.brew/Brewfile; chezmoi add ~/.brew/
 {{ end -}}
 alias bi="brew install"
 
+{{ if .work -}}
+# AWS helpers (work only). A function, not an alias: with no --profile and no
+# exported AWS_PROFILE, AWS_DEFAULT_PROFILE, or keys, it uses the snyk-sandbox
+# SSO profile and signs in first when its session has expired. snyk-sandbox
+# calls read only ~/.config/aws/snyk-sandbox.config (chezmoi owns that whole
+# file), so nothing in ~/.aws/config, which chezmoi never touches, can change
+# that profile. The CLI signs requests itself; this only picks the profile and
+# keeps the session alive. Login output goes to stderr so pipes stay clean. Over SSH
+# it uses the device-code flow, since there is no local browser.
+aws() {
+  # Exported keys are an explicit choice; --profile would silently override them.
+  if [[ ${(t)AWS_ACCESS_KEY_ID-} == *export* ]]; then
+    command aws "$@"; return
+  fi
+  local profile="" picked=0 cmd="" helpish=0 skip=0 a i
+  for (( i = 1; i <= $#; i++ )); do
+    case $argv[i] in
+      --profile) picked=1; profile=${argv[i+1]-} ;;
+      --profile=*) picked=1; profile=${argv[i]#--profile=} ;;
+    esac
+  done
+  # The command is the first word that is not an option or an option's value,
+  # so `aws --region x sso login` is still an sso command.
+  for (( i = 1; i <= $#; i++ )); do
+    a=$argv[i]
+    case $a in
+      --version|--help) helpish=1 ;;
+      --profile|--region|--output|--endpoint-url|--ca-bundle|--query|--color|\
+      --cli-read-timeout|--cli-connect-timeout|--cli-binary-format|--cli-error-format) (( i++ )) ;;
+      -*) ;;
+      *) cmd=$a; break ;;
+    esac
+  done
+  # These need no session. With no profile chosen they keep the CLI's own
+  # default, so `aws sso logout` or `aws configure list` act on ~/.aws/config.
+  if (( helpish )) || [[ $cmd == (|sso|configure|help|login|logout) ]]; then
+    skip=1
+  fi
+  local -a inject=()
+  if (( ! picked )); then
+    # Only exported variables reach the CLI, so only they count here.
+    if [[ -n ${AWS_PROFILE-} && ${(t)AWS_PROFILE-} == *export* ]]; then
+      profile=$AWS_PROFILE
+    elif [[ -n ${AWS_DEFAULT_PROFILE-} && ${(t)AWS_DEFAULT_PROFILE-} == *export* ]]; then
+      profile=$AWS_DEFAULT_PROFILE
+    elif (( skip )); then
+      command aws "$@"; return
+    else
+      profile=snyk-sandbox
+      inject=(--profile snyk-sandbox)
+    fi
+  fi
+  if [[ $profile != snyk-sandbox ]]; then
+    command aws "$@"; return
+  fi
+  # The CLI merges a [snyk-sandbox] section in the credentials file into the
+  # profile (a role_arn there would move it to another account), so that file
+  # is cut off too. local -x scopes both to this call.
+  local -x AWS_CONFIG_FILE=$HOME/.config/aws/snyk-sandbox.config AWS_SHARED_CREDENTIALS_FILE=/dev/null
+  # A trailing `help` (aws s3 help) shows a man page, so skip the session check;
+  # some API calls end in a `help` value too, so the profile is still injected.
+  if (( ! skip )) && [[ ${argv[-1]-} != help ]] &&
+    ! command aws configure export-credentials --profile snyk-sandbox >/dev/null 2>&1; then
+    local -a login=(sso login --profile snyk-sandbox)
+    [[ -n ${SSH_CONNECTION-} ]] && login+=(--use-device-code)
+    command aws "${login[@]}" >&2 || return
+  fi
+  command aws "${inject[@]}" "$@"
+}
+{{ end -}}
+
 # Mac helpers.
 alias dstore="find . -name '.DS_Store' -delete"
 
