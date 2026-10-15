@@ -56,6 +56,44 @@ alias bd="brew bundle dump --force --file=~/.brew/Brewfile; chezmoi add ~/.brew/
 {{ end -}}
 alias bi="brew install"
 
+{{ if .work -}}
+# AWS helpers (work only). A function, not an alias: with no --profile,
+# AWS_PROFILE, or exported keys it defaults to the chezmoi-managed snyk-sandbox
+# SSO profile (see private_dot_aws/modify_private_config), and it signs in
+# first when that profile's session has expired. The CLI signs requests itself;
+# this only picks the profile and keeps the session alive. Any other profile
+# goes straight to the real binary. Login output goes to stderr so pipes stay
+# clean. Over SSH it uses the device-code flow, since there is no local browser.
+aws() {
+  local profile="" i
+  for (( i = 1; i <= $#; i++ )); do
+    case $argv[i] in
+      --profile) profile=${argv[i+1]-} ;;
+      --profile=*) profile=${argv[i]#--profile=} ;;
+    esac
+  done
+  case ${1-} in
+    ""|sso|configure|help|--version|--help) command aws "$@"; return ;;
+  esac
+  local -a inject=()
+  if [[ -z $profile ]]; then
+    if [[ -n ${AWS_PROFILE-} ]]; then
+      profile=$AWS_PROFILE
+    elif [[ -z ${AWS_ACCESS_KEY_ID-} ]]; then
+      profile=snyk-sandbox
+      inject=(--profile snyk-sandbox)
+    fi
+  fi
+  if [[ $profile == snyk-sandbox ]] &&
+    ! command aws configure export-credentials --profile snyk-sandbox >/dev/null 2>&1; then
+    local -a login=(sso login --profile snyk-sandbox)
+    [[ -n ${SSH_CONNECTION-} ]] && login+=(--use-device-code)
+    command aws "${login[@]}" >&2 || return
+  fi
+  command aws "${inject[@]}" "$@"
+}
+{{ end -}}
+
 # Mac helpers.
 alias dstore="find . -name '.DS_Store' -delete"
 

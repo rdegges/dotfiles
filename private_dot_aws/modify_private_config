@@ -1,0 +1,71 @@
+#!/bin/sh
+# chezmoi modify_ script for ~/.aws/config (work machines only, see
+# .chezmoiignore). chezmoi pipes the current file in on stdin and writes
+# whatever this prints. The AWS config format has no include directive, so
+# chezmoi owns only the block between the markers below and passes every other
+# line through untouched: other work machines may hold profiles that chezmoi
+# has never seen, and those must survive the hourly update.
+#
+# It fails closed, printing nothing and exiting non-zero, when:
+# - a section with a managed name also sits outside the markers. A duplicate
+#   section breaks the AWS CLI's parser for every profile in the file, so the
+#   hourly update should go red instead.
+# - the markers are unbalanced, or there is more than one block.
+# POSIX sh and awk only: the toolchain on other work machines is unknown.
+
+set -u
+
+block=$(mktemp) || exit 1
+trap 'rm -f "$block"' EXIT
+
+cat > "$block" <<'EOF'
+# >>> chezmoi: snyk-sandbox >>>
+# Managed by chezmoi (dotfiles: private_dot_aws/modify_private_config).
+# Edits between these markers are overwritten on the next apply.
+[sso-session snyk]
+sso_start_url = https://identitycenter.amazonaws.com/ssoins-6804c38450c29714
+sso_region = eu-west-1
+sso_registration_scopes = sso:account:access
+
+[profile snyk-sandbox]
+sso_session = snyk
+sso_account_id = 597564118722
+sso_role_name = AWSPowerUserAccess
+region = us-west-2
+output = json
+# <<< chezmoi: snyk-sandbox <<<
+EOF
+
+awk '
+  NR == FNR { blk[++nb] = $0; next }
+  {
+    line = $0
+    if (line == blk[1]) {
+      if (inside || seen) { bad = "more than one managed block, or a nested start marker"; exit 1 }
+      inside = 1; seen = 1; out[++n] = "\001BLOCK"; next
+    }
+    if (line == blk[nb]) {
+      if (!inside) { bad = "end marker without a start marker"; exit 1 }
+      inside = 0; next
+    }
+    if (inside) next
+    h = line
+    gsub(/[ \t]+/, " ", h); sub(/^ /, "", h); sub(/ $/, "", h)
+    if (h ~ /^\[ ?(sso-session snyk|profile snyk-sandbox) ?\]$/) {
+      bad = "section " line " sits outside the chezmoi markers; remove it or move it inside them"; exit 1
+    }
+    out[++n] = line
+  }
+  END {
+    if (bad == "" && inside) bad = "start marker without an end marker"
+    if (bad != "") { print "modify_private_config: ~/.aws/config: " bad > "/dev/stderr"; exit 1 }
+    if (!seen) {
+      if (n > 0 && out[n] != "") out[++n] = ""
+      out[++n] = "\001BLOCK"
+    }
+    for (i = 1; i <= n; i++) {
+      if (out[i] == "\001BLOCK") { for (j = 1; j <= nb; j++) print blk[j] }
+      else print out[i]
+    }
+  }
+' "$block" -

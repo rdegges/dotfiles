@@ -97,9 +97,17 @@ To make any new item work-only, gate it on `.work` — this works in any templat
 {{ end }}
 ```
 
-Several things consume this pattern today: the Himalaya email config (below), the `agentw` shell alias (a work-only agent server), and gated blocks in the install/cron scripts. For example, the personal iCloud account renders everywhere, while the work Gmail account only renders when `work = true`.
+Several things consume this pattern today: the Himalaya email config (below), the `agentw` shell alias (a work-only agent server), the AWS SSO profile and the `aws` shell function (below), and gated blocks in the install/cron scripts. For example, the personal iCloud account renders everywhere, while the work Gmail account only renders when `work = true`.
 
 Work-only Homebrew packages (today: `awscli`) go in `dot_brew/Brewfile.work`, not the shared `dot_brew/Brewfile`. chezmoi writes `~/.brew/Brewfile.work` only when `work = true`, and `run_onchange_install-packages.sh.tmpl` bundles it after the shared Brewfile. The hourly `chezmoi update` installs a new entry on every work machine, and the daily brew job upgrades it. On work machines, the `bd` alias removes the lines listed in `Brewfile.work` from the dump before it runs `chezmoi add`.
+
+On work machines, chezmoi also manages part of `~/.aws/config` and wraps the `aws` command:
+
+- `private_dot_aws/modify_private_config` owns only the block between the `# >>> chezmoi: snyk-sandbox >>>` and `# <<< chezmoi: snyk-sandbox <<<` markers. Each apply overwrites that block and keeps every line outside it, so other profiles on a machine stay as they are. The AWS config format has no include directive, so this block is the only way to share the profile without overwriting the file.
+- The block defines `[sso-session snyk]` (Snyk's IAM Identity Center) and `[profile snyk-sandbox]` (my sandbox account `597564118722`, role `AWSPowerUserAccess`, region `us-west-2`).
+- If `[sso-session snyk]` or `[profile snyk-sandbox]` also appears outside the markers, the script stops and changes nothing, so the hourly update fails on purpose. A duplicate section would break the AWS CLI for every profile in the file. To fix it, delete the copy outside the markers and run `chezmoi apply`.
+- The `aws` function in `dot_oh-my-zsh/custom/aliases.zsh.tmpl` uses `snyk-sandbox` when you give no `--profile` (or `--profile=`), no `AWS_PROFILE`, and no exported `AWS_ACCESS_KEY_ID`. For `snyk-sandbox` only, it runs `aws configure export-credentials` first. That command fails when the session has expired, and the function then runs `aws sso login` (with `--use-device-code` over SSH) before your command. Login output goes to stderr. Other profiles go straight to the real binary. Scripts and non-interactive shells always use the real binary.
+- chezmoi never manages `~/.aws/credentials` or the `~/.aws/sso` and `~/.aws/cli` caches.
 
 
 ## Email (Himalaya)
