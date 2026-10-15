@@ -23,7 +23,7 @@ Library/Application Support/com.vorssaint.utils
 .agents/skills/work-tracking
 {{/* Work-only Homebrew packages (awscli). */}}
 .brew/Brewfile.work
-{{/* The snyk-sandbox AWS SSO profile block (aws CLI is work-only). */}}
+{{/* The snyk-sandbox AWS SSO profile file (aws CLI is work-only). */}}
 .aws
 {{/* GitHub-SSH-over-443 is for the work network, where port 22 times out. */}}
 .ssh
