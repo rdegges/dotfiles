@@ -21,9 +21,11 @@ chezmoi init --apply git@github.com:rdegges/dotfiles.git
 
 After that, launchd runs `chezmoi update --force` hourly at :15 through
 `~/.cron/chezmoi-update.sh` (source: `dot_cron/executable_chezmoi-update.sh`).
-Output goes to `~/.cron/logs/chezmoi.log`. A failure writes
+Output goes to `~/.cron/logs/chezmoi.log`. A failed update writes
 `~/.cron/logs/chezmoi.FAILED`, and every new shell prints it in red until a
 later run succeeds. To fix it, read the log and run `chezmoi update` by hand.
+A run that skips because the network is down writes no marker (see
+[Scheduled jobs (launchd)](#scheduled-jobs-launchd)).
 
 On work machines (`work = true`), SSH to `github.com` goes over
 port 443 (`ssh.github.com`), not port 22. On other machines chezmoi does not
@@ -48,6 +50,16 @@ Each job still writes its log to `~/.cron/logs/<job>.log`.
 
 If the Mac sleeps through a job's time, launchd runs the job once when the Mac
 wakes. Cron skipped these runs.
+
+At wake, Wi-Fi and DNS are often not back yet, so the chezmoi, cf, and rea
+jobs first run `~/.cron/wait-for-network.sh`. This script waits up to 60
+seconds for a default route and a DNS answer for `github.com`. If the network
+is still down, the job logs `network not up; skipped`, exits 0, and does not
+change its `.FAILED` marker. Each successful run touches
+`~/.cron/logs/<job>.ok`. If no marker exists and no run succeeded in the last
+24 hours (chezmoi) or 72 hours (cf, rea), the skip writes the marker with
+`network check failed and no successful run in N hours`. If the wait script is
+missing or cannot check the network, the job runs as before.
 
 - To list the loaded jobs, run `launchctl print gui/$UID | grep com.rdegges`.
 - To run a job now, run `launchctl kickstart gui/$UID/com.rdegges.<job>`.

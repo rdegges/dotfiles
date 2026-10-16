@@ -12,16 +12,21 @@
 // `rea setup` for Claude Code and OpenCode only (never Codex, whose config
 // chezmoi owns) with --yes and no stdin, then `rea doctor --client codex`; it
 // writes ~/.cron/logs/rea.FAILED on each failure step, a stale Codex entry
-// included, and removes it on success. The Codex entry renders with the
-// Node version pinned in dot_tool-versions and fails the render when none is
-// pinned. It says nothing about the real npm registry or the real `rea setup`;
+// included, and removes it on success, where it also touches
+// ~/.cron/logs/rea.ok. With a stub network wait (WAIT_FOR_NETWORK): status 1
+// skips the run with exit 0 and never touches an existing marker; it writes a
+// marker that does not say "update failed" only when rea.ok is missing or over
+// 72 hours old; any other status (2, 126, 127) runs the update as before; an
+// empty WAIT_FOR_NETWORK runs ~/.cron/wait-for-network.sh. The Codex entry
+// renders with the Node version pinned in dot_tool-versions and fails the
+// render when none is pinned. It says nothing about the real npm registry or the real `rea setup`;
 // a Docker probe of rea-agents 6.4.0 showed setup writes this exact Codex entry
 // that a second setup run changes no file, and that `rea doctor --client codex`
 // exits 0 for this entry and 1 for a stale path, a missing key, or no entry.
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync, writeFileSync, mkdirSync, mkdtempSync, existsSync, chmodSync, rmSync, cpSync, readdirSync } from 'node:fs'
+import { readFileSync, writeFileSync, mkdirSync, mkdtempSync, existsSync, chmodSync, rmSync, cpSync, readdirSync, statSync, utimesSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -56,18 +61,26 @@ function sandbox({ stubs = ['npm', 'asdf', 'rea'], homeName = 'home' } = {}) {
     writeFileSync(join(bin, s), STUBS[s])
     chmodSync(join(bin, s), 0o755)
   }
+  // The network wait, stubbed: exits STUB_WAIT_RC (default 0, network up).
+  const wait = join(base, 'wait-for-network')
+  writeFileSync(wait, '#!/bin/sh\nexit "${STUB_WAIT_RC:-0}"\n')
+  chmodSync(wait, 0o755)
   const calls = join(base, 'calls')
   writeFileSync(calls, '')
-  const marker = join(home, '.cron', 'logs', 'rea.FAILED')
+  const logs = join(home, '.cron', 'logs')
+  const marker = join(logs, 'rea.FAILED')
   return {
+    base,
     home,
+    logs,
     marker,
+    stamp: join(logs, 'rea.ok'),
     calls: () => readFileSync(calls, 'utf8').split('\n').filter(Boolean),
     run: (env = {}) =>
       spawnSync('sh', [SCRIPT], {
         encoding: 'utf8',
         input: 'stdin must not reach rea setup\n',
-        env: { HOME: home, PATH: `${bin}:${SYS_PATH}`, CALLS: calls, ...env },
+        env: { HOME: home, PATH: `${bin}:${SYS_PATH}`, CALLS: calls, WAIT_FOR_NETWORK: wait, ...env },
       }),
     cleanup: () => rmSync(base, { recursive: true, force: true }),
   }
@@ -171,6 +184,118 @@ test('rea-update.sh: POSIX sh shebang, parses under sh -n', () => {
   assert.match(read('dot_cron/executable_rea-update.sh'), /^#!\/bin\/sh\n/)
   assert.equal(spawnSync('sh', ['-n', SCRIPT]).status, 0)
 })
+
+// --- rea-update.sh: network wait (WAIT_FOR_NETWORK) --------------------------------------------------
+
+// Sets the stamp's mtime to `minutes` ago.
+function setStamp(sb, minutes) {
+  mkdirSync(sb.logs, { recursive: true })
+  writeFileSync(sb.stamp, '')
+  const t = (Date.now() - minutes * 60_000) / 1000
+  utimesSync(sb.stamp, t, t)
+}
+
+function assertBackstop(sb) {
+  assert.ok(existsSync(sb.marker), 'no backstop marker written')
+  const m = readFileSync(sb.marker, 'utf8')
+  assert.match(
+    m,
+    /^\d{4}-\d{2}-\d{2} \d{2}:\d{2} rea: network check failed and no successful run in 72 hours \(see ~\/\.cron\/logs\/rea\.log\)\n$/,
+  )
+  assert.doesNotMatch(m, /update failed/)
+}
+
+test('success touches the rea.ok stamp; a failure does not', () =>
+  withSandbox({}, (sb) => {
+    assert.equal(sb.run({ STUB_NPM_RC: '1' }).status, 1)
+    assert.equal(existsSync(sb.stamp), false)
+    const before = Date.now()
+    assert.equal(sb.run().status, 0)
+    assert.ok(statSync(sb.stamp).mtimeMs >= before - 2000, 'stamp not fresh')
+  }))
+
+test('network down (wait exits 1), fresh stamp: exit 0, logs the skip, nothing runs, no marker', () =>
+  withSandbox({}, (sb) => {
+    setStamp(sb, 71 * 60)
+    const r = sb.run({ STUB_WAIT_RC: '1' })
+    assert.equal(r.status, 0, r.stdout + r.stderr)
+    assert.equal(r.stdout, 'rea-update: network not up; skipped\n')
+    assert.deepEqual(sb.calls(), [])
+    assert.equal(existsSync(sb.marker), false)
+  }))
+
+for (const [name, age] of [['fresh stamp', 60], ['missing stamp', null], ['stale stamp', 73 * 60]]) {
+  test(`network down, ${name}: an existing marker stays byte for byte`, () =>
+    withSandbox({}, (sb) => {
+      if (age !== null) setStamp(sb, age)
+      mkdirSync(sb.logs, { recursive: true })
+      writeFileSync(sb.marker, 'old failure\n')
+      const r = sb.run({ STUB_WAIT_RC: '1' })
+      assert.equal(r.status, 0, r.stdout + r.stderr)
+      assert.equal(readFileSync(sb.marker, 'utf8'), 'old failure\n')
+    }))
+}
+
+for (const [name, age] of [['missing stamp', null], ['stamp 72h1m old', 72 * 60 + 1]]) {
+  test(`network down, ${name}: writes the no-success marker (not "update failed"), still exits 0`, () =>
+    withSandbox({}, (sb) => {
+      if (age !== null) setStamp(sb, age)
+      const r = sb.run({ STUB_WAIT_RC: '1' })
+      assert.equal(r.status, 0, r.stdout + r.stderr)
+      assert.deepEqual(sb.calls(), [])
+      assertBackstop(sb)
+    }))
+}
+
+test('network down, stamp 71h55m old: no marker; the skip never touches the stamp', () =>
+  withSandbox({}, (sb) => {
+    setStamp(sb, 72 * 60 - 5)
+    const mtime = statSync(sb.stamp).mtimeMs
+    sb.run({ STUB_WAIT_RC: '1' })
+    assert.equal(existsSync(sb.marker), false)
+    assert.equal(statSync(sb.stamp).mtimeMs, mtime)
+  }))
+
+test('wait exits 2 (cannot evaluate): the update runs as before', () =>
+  withSandbox({}, (sb) => {
+    const r = sb.run({ STUB_WAIT_RC: '2' })
+    assert.equal(r.status, 0, r.stdout + r.stderr)
+    assert.equal(sb.calls()[0], 'npm install --global rea-agents@latest')
+    assert.doesNotMatch(r.stdout, /skipped/)
+  }))
+
+test('wait missing (127) or not executable (126): the update runs as before, failures still mark', () =>
+  withSandbox({}, (sb) => {
+    let r = sb.run({ WAIT_FOR_NETWORK: join(sb.base, 'no-such-wait') })
+    assert.equal(r.status, 0, r.stdout + r.stderr)
+    assert.equal(sb.calls()[0], 'npm install --global rea-agents@latest')
+    const noexec = join(sb.base, 'noexec-wait')
+    writeFileSync(noexec, '#!/bin/sh\nexit 1\n')
+    chmodSync(noexec, 0o644)
+    r = sb.run({ WAIT_FOR_NETWORK: noexec, STUB_NPM_RC: '1' })
+    assertFailed(sb, r, /npm install/)
+  }))
+
+test('empty WAIT_FOR_NETWORK runs ~/.cron/wait-for-network.sh', () =>
+  withSandbox({}, (sb) => {
+    mkdirSync(join(sb.home, '.cron'), { recursive: true })
+    const deployed = join(sb.home, '.cron', 'wait-for-network.sh')
+    writeFileSync(deployed, '#!/bin/sh\nexit 1\n')
+    chmodSync(deployed, 0o755)
+    const r = sb.run({ WAIT_FOR_NETWORK: '' })
+    assert.match(r.stdout, /network not up; skipped/)
+    assert.deepEqual(sb.calls(), [])
+  }))
+
+test('skip -> success -> skip: the backstop marker clears on success and does not come back', () =>
+  withSandbox({}, (sb) => {
+    sb.run({ STUB_WAIT_RC: '1' })
+    assertBackstop(sb)
+    assert.equal(sb.run().status, 0)
+    assert.equal(existsSync(sb.marker), false)
+    assert.equal(sb.run({ STUB_WAIT_RC: '1' }).status, 0)
+    assert.equal(existsSync(sb.marker), false)
+  }))
 
 // dot_zshrc's failure-banner loop, run alone (zsh -f: no startup files).
 const zshrcLine = read('dot_zshrc')
