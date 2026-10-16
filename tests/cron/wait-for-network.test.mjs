@@ -13,8 +13,9 @@
 // reports an interface and dscacheutil prints an ip_address: or ipv6_address:
 // line. The up fixtures (ROUTE_UP, DNS_UP) and empty DNS output were captured
 // on macOS; the no-route stub copies the macOS behavior with no default route
-// (exit 0, empty stdout, "not in table" on stderr); the other fixtures are
-// made up. With no default route (that stub, or route exiting 1) or empty DNS
+// (exit 0, empty stdout, "route: writing to routing socket: not in table" on
+// stderr, seen on macOS 27.0.1 via `/sbin/route -n get -ifscope lo0 default`);
+// the other fixtures are made up. With no default route (that stub, or route exiting 1) or empty DNS
 // output it polls every 2s and exits 1 once WAIT_FOR_NETWORK_TIMEOUT seconds
 // have passed; a network that comes up within the timeout exits 0. A missing
 // tool, a dscacheutil error, output it cannot read, or a bad or over-long
@@ -436,3 +437,32 @@ for (const [tmpl, script] of [
     }
   })
 }
+
+// `waited` counts only the 2s sleeps, not the time each probe takes. If
+// dscacheutil is slow offline, the wait runs past WAIT_FOR_NETWORK_TIMEOUT:
+// with a 3s probe and a 2s timeout it gives up after about 8s (probe, sleep,
+// probe), not after the first probe that ends past 2s. Real offline dscacheutil
+// speed after a wake is not measured. Counting wall-clock time would fix it.
+test.todo('PROPOSED CONTRACT: gives up within the timeout plus one probe, even when a probe is slow', () => {
+  const base = mkdtempSync(join(tmpdir(), 'wait-slow-'))
+  try {
+    const bin = join(base, 'bin')
+    mkdirSync(bin)
+    writeFileSync(join(bin, 'route'), `#!/bin/sh\nprintf '%s' '${ROUTE_UP}'\n`)
+    // Offline lookup: slow, exit 0, no output (what dscacheutil prints on a failed lookup).
+    writeFileSync(join(bin, 'dscacheutil'), '#!/bin/sh\nsleep 3\n')
+    chmodSync(join(bin, 'route'), 0o755)
+    chmodSync(join(bin, 'dscacheutil'), 0o755)
+    const t0 = Date.now()
+    const r = spawnSync('sh', [SCRIPT], {
+      encoding: 'utf8',
+      timeout: 30000,
+      env: { PATH: `${bin}:${SYS_PATH}`, WAIT_FOR_NETWORK_TIMEOUT: '2' },
+    })
+    const ms = Date.now() - t0
+    assert.equal(r.status, 1, r.stdout + r.stderr)
+    assert.ok(ms < 2000 + 3000 + 1000, `took ${ms}ms with a 2s timeout and a 3s probe`)
+  } finally {
+    rmSync(base, { recursive: true, force: true })
+  }
+})
