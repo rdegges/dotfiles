@@ -24,7 +24,8 @@ After that, launchd runs `chezmoi update --force` hourly at :15 through
 Output goes to `~/.cron/logs/chezmoi.log`. A failed update writes
 `~/.cron/logs/chezmoi.FAILED`, and every new shell prints it in red until a
 later run succeeds. To fix it, read the log and run `chezmoi update` by hand.
-A run that skips because the network is down writes no marker (see
+A run that skips because the network is down writes no marker, unless no run
+has succeeded in the last 24 hours (see
 [Scheduled jobs (launchd)](#scheduled-jobs-launchd)).
 
 On work machines (`work = true`), SSH to `github.com` goes over
@@ -54,8 +55,8 @@ wakes. Cron skipped these runs.
 At wake, Wi-Fi and DNS are often not back yet, so the chezmoi, cf, and rea
 jobs first run `~/.cron/wait-for-network.sh`. This script waits up to 60
 seconds for a default route and a DNS answer for `github.com`. If the network
-is still down, the job logs `network not up; skipped`, exits 0, and does not
-change its `.FAILED` marker. If the wait script is missing or cannot check the
+is still down, the job logs `network not up; skipped`, exits 0, and never
+removes or rewrites an existing `.FAILED` marker. If the wait script is missing or cannot check the
 network, the job runs as before.
 
 Each successful run touches `~/.cron/logs/<job>.ok`. If no marker exists and no
