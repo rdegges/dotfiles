@@ -21,7 +21,7 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync, writeFileSync, mkdirSync, mkdtempSync, chmodSync, rmSync } from 'node:fs'
+import { readFileSync, writeFileSync, mkdirSync, mkdtempSync, chmodSync, rmSync, readdirSync, existsSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -72,12 +72,12 @@ function sandbox({ tools = ['route', 'dscacheutil'] } = {}) {
   writeFileSync(calls, '')
   return {
     calls: () => readFileSync(calls, 'utf8').split('\n').filter(Boolean),
-    run(env = {}, shell = SHELLS[0]) {
+    run(env = {}, shell = SHELLS[0], timeout = 30000) {
       // Built from scratch so the host's WAIT_FOR_NETWORK_TIMEOUT never leaks in.
       const t0 = Date.now()
       const r = spawnSync(shell.argv[0], [...shell.argv.slice(1), SCRIPT], {
         encoding: 'utf8',
-        timeout: 30000,
+        timeout,
         env: {
           PATH: `${bin}:${SYS_PATH}`,
           CALLS: calls,
@@ -233,3 +233,151 @@ test('wait-for-network.sh: POSIX sh shebang, parses under sh -n and bash --posix
     assert.equal(r.status, 0, `${shell.name}: ${r.stderr}`)
   }
 })
+
+// --- Under launchd -----------------------------------------------------------
+//
+// What a pass proves: run the way launchd runs them -- `/bin/sh -c <command>`
+// with exactly the EnvironmentVariables the rendered plist sets -- the chezmoi,
+// cf, and rea jobs reach the deployed ~/.cron/wait-for-network.sh, and it can
+// evaluate: it finds route and dscacheutil where macOS ships them
+// (/sbin/route and /usr/bin/dscacheutil, checked on macOS 27). With no default
+// route the job skips and never runs its update; with the network up the job
+// runs. macOS dirs are emulated by prefixing a sandbox root to every absolute
+// dir in the plist PATH (and to /sbin, /usr/sbin, and /usr/bin/dscacheutil in
+// the deployed scripts, so an absolute-path fix counts too); the real /usr/bin
+// and /bin follow for sh's own tools and hold no route or dscacheutil (first
+// test above). It says nothing about the real launchd or real macOS output.
+
+const cskip = has('chezmoi') ? false : 'chezmoi not installed (see the run command at the top)'
+const MAC_TOOLS = { route: '/sbin', dscacheutil: '/usr/bin' }
+const JOBS = [
+  { job: 'chezmoi', runs: 'chezmoi update --force' },
+  { job: 'cf', runs: 'npm install --global cf@latest' },
+  { job: 'rea', runs: 'npm install --global rea-agents@latest' },
+]
+
+// Rewrites absolute macOS system paths in a deployed script to live under root.
+const macify = (text, root) =>
+  text
+    .replace(/(?<![\w./~-])\/(usr\/)?sbin(?![\w.-])/g, (m) => root + m)
+    .replace(/(?<![\w./~-])\/usr\/bin\/dscacheutil/g, (m) => root + m)
+
+function renderPlist(job, home) {
+  const xml = spawnSync('chezmoi', ['--source', ROOT.pathname, '--destination', home, 'execute-template'], {
+    encoding: 'utf8',
+    input: read(`private_Library/LaunchAgents/com.rdegges.${job}.plist.tmpl`),
+    env: { PATH: process.env.PATH, HOME: home },
+  })
+  assert.equal(xml.status, 0, xml.stderr)
+  const json = spawnSync('python3', ['-c', 'import plistlib,sys,json; json.dump(plistlib.loads(sys.stdin.buffer.read()), sys.stdout)'], {
+    encoding: 'utf8',
+    input: xml.stdout,
+  })
+  assert.equal(json.status, 0, json.stderr)
+  return JSON.parse(json.stdout)
+}
+
+// Deploys every dot_cron script into a sandbox HOME, puts stub macOS tools and
+// stub job tools under root, and runs the job's plist command as launchd would.
+function launchdRun(job, { route }) {
+  const base = mkdtempSync(join(tmpdir(), 'wait-launchd-'))
+  try {
+    const root = join(base, 'root')
+    const home = join(base, 'home')
+    const calls = join(base, 'calls')
+    writeFileSync(calls, '')
+    mkdirSync(join(home, '.cron', 'logs'), { recursive: true })
+    for (const f of readdirSync(new URL('dot_cron/', ROOT))) {
+      if (!f.startsWith('executable_')) continue
+      const dest = join(home, '.cron', f.slice('executable_'.length))
+      writeFileSync(dest, macify(read(`dot_cron/${f}`), root))
+      chmodSync(dest, 0o755)
+    }
+    const put = (dir, name, body) => {
+      mkdirSync(join(root, dir), { recursive: true })
+      writeFileSync(join(root, dir, name), body)
+      chmodSync(join(root, dir, name), 0o755)
+    }
+    put(MAC_TOOLS.route, 'route', stub('route', 'ROUTE'))
+    put(MAC_TOOLS.dscacheutil, 'dscacheutil', stub('dscacheutil', 'DNS'))
+    // Job tools, where Homebrew would put them; each logs its call and exits 0.
+    for (const t of ['chezmoi', 'npm']) put('/opt/homebrew/bin', t, `#!/bin/sh\necho "${t} $*" >> "$CALLS"\n`)
+
+    const p = renderPlist(job, home)
+    assert.deepEqual(p.ProgramArguments.slice(0, 2), ['/bin/sh', '-c'])
+    const PATH = [...p.EnvironmentVariables.PATH.split(':').map((d) => root + d), SYS_PATH].join(':')
+    const r = spawnSync('/bin/sh', ['-c', p.ProgramArguments[2]], {
+      encoding: 'utf8',
+      timeout: 120000,
+      env: {
+        ...p.EnvironmentVariables,
+        PATH,
+        HOME: home,
+        CALLS: calls,
+        STUB_ROUTE: route,
+        STUB_DNS: DNS_UP,
+        // Not in the plist; keeps the down case to one probe.
+        WAIT_FOR_NETWORK_TIMEOUT: '0',
+      },
+    })
+    return {
+      status: r.status,
+      log: readFileSync(join(home, '.cron', 'logs', `${job}.log`), 'utf8'),
+      calls: readFileSync(calls, 'utf8').split('\n').filter(Boolean),
+      marker: existsSync(join(home, '.cron', 'logs', `${job}.FAILED`)),
+    }
+  } finally {
+    rmSync(base, { recursive: true, force: true })
+  }
+}
+
+for (const { job, runs } of JOBS) {
+  test(`launchd ${job}: under the plist's own PATH the network check can evaluate (finds route and dscacheutil)`, { skip: cskip }, () => {
+    const r = launchdRun(job, { route: ROUTE_UP })
+    assert.doesNotMatch(r.log, /wait-for-network: .*(not found|cannot check)/, r.log)
+    assert.ok(r.calls.includes('route -n get default'), `route never probed; log:\n${r.log}`)
+    assert.ok(r.calls.includes('dscacheutil -q host -a name github.com'), `dscacheutil never probed; log:\n${r.log}`)
+  })
+
+  test(`launchd ${job}: no default route -> the job skips and never runs its update`, { skip: cskip }, () => {
+    const r = launchdRun(job, { route: 'rc=1' })
+    assert.equal(r.status, 0, r.log)
+    assert.match(r.log, new RegExp(`^${job}-update: network not up; skipped$`, 'm'), r.log)
+    assert.ok(!r.calls.includes(runs), `ran "${runs}" with the network down; log:\n${r.log}`)
+  })
+
+  test(`launchd ${job}: network up -> the job runs its update`, { skip: cskip }, () => {
+    const r = launchdRun(job, { route: ROUTE_UP })
+    assert.ok(r.calls.includes(runs), `"${runs}" never ran; log:\n${r.log}`)
+    assert.doesNotMatch(r.log, /skipped/)
+  })
+}
+
+// A timeout the validator accepts must not hit a shell error in the loop. Today
+// a 20-digit value passes the [0-9] check, then every `[ -ge ]` fails with
+// "Illegal number" / "integer expression expected", so the loop never gives up.
+// Either rejecting it (exit 2) or handling it passes; a shell error does not.
+for (const shell of SHELLS) {
+  test(`[${shell.name}] an over-long WAIT_FOR_NETWORK_TIMEOUT never makes test(1) error`, { skip: shell.skip }, () =>
+    withSandbox({}, (sb) => {
+      const r = sb.run({ WAIT_FOR_NETWORK_TIMEOUT: '99999999999999999999', STUB_ROUTE: 'rc=1' }, shell, 3000)
+      assert.doesNotMatch(r.stderr, /Illegal number|integer expression expected|out of range/, r.stderr)
+    }))
+}
+
+// chezmoi apply also runs cf-update.sh and rea-update.sh (run_onchange_after_*),
+// keyed on the ~/.tool-versions hash. A network skip there exits 0, so chezmoi
+// records the run_onchange as done and a Node bump leaves cf/rea missing until
+// the next daily run. One way out: the template bypasses the wait
+// (WAIT_FOR_NETWORK=true) so an offline apply fails loudly and re-runs next time.
+for (const [tmpl, script] of [
+  ['run_onchange_after_install-cloudflare-cli.sh.tmpl', 'cf-update.sh'],
+  ['run_onchange_after_install-rea.sh.tmpl', 'rea-update.sh'],
+]) {
+  test.todo(`PROPOSED CONTRACT: ${tmpl}: an offline chezmoi apply cannot record the install as done via a network skip`, () => {
+    const src = read(tmpl)
+    const exec = src.split('\n').find((l) => l.includes(script) && /^\s*exec\b/.test(l))
+    assert.ok(exec, `no exec line for ${script}`)
+    assert.match(exec, /WAIT_FOR_NETWORK=/, 'the apply-time run still takes the skip-and-exit-0 path')
+  })
+}
