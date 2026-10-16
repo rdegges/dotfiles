@@ -35,12 +35,16 @@ first clone over port 22, before this config exists, so run it on a network
 that allows port 22.
 
 The hourly job owns `~/.ssh/config` and overwrites it. Put machine-local hosts
-in `~/.ssh/config.local`, which it includes first. If chezmoi did not write the
-existing `~/.ssh/config`, `run_once_before_preserve-ssh-config.sh` copies it
-once to `~/.ssh/config.local` before the apply replaces it. If
+in `~/.ssh/config.local`, which it includes first. If the existing
+`~/.ssh/config` lacks the line `Include ~/.ssh/config.local`,
+`run_once_before_preserve-ssh-config.sh` copies it once to
+`~/.ssh/config.local` before the apply replaces it. If
 `~/.ssh/config.local` already exists, the script stops the apply and writes
 nothing. Then merge `~/.ssh/config` into `~/.ssh/config.local` by hand,
-delete `~/.ssh/config`, and run `chezmoi apply` again.
+delete `~/.ssh/config`, and run `chezmoi apply` again. The copy runs only in a
+full `chezmoi apply` or `chezmoi update`; `chezmoi apply ~/.ssh` runs no
+scripts and replaces a hand-written config without copying it, so make the
+first apply on a machine a full one.
 
 OpenSSH uses the first value it finds for each setting, so the local file
 wins. As a result, a migrated config that sets `Hostname` or `Port` for
