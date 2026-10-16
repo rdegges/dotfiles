@@ -11,11 +11,14 @@
 // real ones (they are macOS tools), the script asks `route -n get default` and
 // `dscacheutil -q host -a name github.com`, and exits 0 only when route
 // reports an interface and dscacheutil prints an ip_address: or ipv6_address:
-// line (the stubs replay real macOS output). With no default route or empty
-// DNS output it polls every 2s and exits 1 once WAIT_FOR_NETWORK_TIMEOUT
-// seconds have passed; a network that comes up within the timeout exits 0. A
-// missing tool, a dscacheutil error, output it cannot read, or a bad timeout
-// exits 2 at once. It holds under dash and under bash --posix (macOS /bin/sh is
+// line. The up fixtures (ROUTE_UP, DNS_UP) and empty DNS output were captured
+// on macOS; the no-route stub copies the macOS behavior with no default route
+// (exit 0, empty stdout, "not in table" on stderr); the other fixtures are
+// made up. With no default route (that stub, or route exiting 1) or empty DNS
+// output it polls every 2s and exits 1 once WAIT_FOR_NETWORK_TIMEOUT seconds
+// have passed; a network that comes up within the timeout exits 0. A missing
+// tool, a dscacheutil error, output it cannot read, or a bad or over-long
+// (7+ digit) timeout exits 2 at once. It holds under dash and under bash --posix (macOS /bin/sh is
 // bash in POSIX mode). It says nothing about real macOS route or dscacheutil
 // output after a wake; the host smoke run in the PR checks one connected Mac.
 
@@ -31,6 +34,8 @@ const read = (p) => readFileSync(new URL(p, ROOT), 'utf8')
 const SCRIPT = new URL('dot_cron/executable_wait-for-network.sh', ROOT).pathname
 // Only system dirs, so no real route or dscacheutil can answer in place of a stub.
 const SYS_PATH = '/usr/bin:/bin'
+// The script appends these itself (launchd's PATH has no /sbin).
+const SBIN = '/usr/sbin:/sbin'
 
 const has = (cmd) => spawnSync('sh', ['-c', `command -v ${cmd}`], { encoding: 'utf8' }).status === 0
 const SHELLS = [
@@ -47,16 +52,20 @@ const ROUTE_UP =
   '       0         0         0         0         0         0      1500         0 \n'
 const DNS_UP = 'name: github.com\nip_address: 20.29.134.23\n\n'
 const DNS_UP6 = 'name: github.com\nipv6_address: 2606:50c0:8000::154\n\n'
+// No default route on macOS: exit 0, empty stdout, "not in table" on stderr.
+const ROUTE_NONE = 'rc=0'
+// A route that fails outright: also no route.
+const ROUTE_FAIL = 'rc=1'
 
 // Each stub logs its call, then replays the output for this call number:
 // STUB_<TOOL>_<n> (1-based), else STUB_<TOOL>. A value "rc=<k>" exits k with no
-// output (route: "not in table" on stderr).
+// stdout and the macOS route "not in table" line on stderr.
 const stub = (name, envName) =>
   '#!/bin/sh\n' +
   `echo "${name} $*" >> "$CALLS"\n` +
   `n=$(grep -c '^${name} ' "$CALLS")\n` +
   `eval "v=\\\${STUB_${envName}_$n-\\\${STUB_${envName}-}}"\n` +
-  'case "$v" in rc=*) echo "not in table" >&2; exit "${v#rc=}" ;; esac\n' +
+  'case "$v" in rc=*) echo "route: writing to routing socket: not in table" >&2; exit "${v#rc=}" ;; esac\n' +
   'printf "%s" "$v"\n'
 
 function sandbox({ tools = ['route', 'dscacheutil'] } = {}) {
@@ -105,8 +114,8 @@ function withSandbox(opts, fn) {
 
 test('the test PATH has no real route or dscacheutil (else the stubs prove nothing)', () => {
   for (const t of ['route', 'dscacheutil']) {
-    const r = spawnSync('sh', ['-c', `command -v ${t}`], { env: { PATH: SYS_PATH } })
-    assert.notEqual(r.status, 0, `${t} found on ${SYS_PATH}`)
+    const r = spawnSync('sh', ['-c', `command -v ${t}`], { env: { PATH: `${SYS_PATH}:${SBIN}` } })
+    assert.notEqual(r.status, 0, `${t} found on ${SYS_PATH}:${SBIN}`)
   }
 })
 
@@ -127,12 +136,19 @@ for (const shell of SHELLS) {
       assert.equal(r.status, 0, r.stdout + r.stderr)
     }))
 
-  t('no default route (route exits 1): exit 1 and says why', () =>
-    withSandbox({}, (sb) => {
-      const r = sb.run({ STUB_ROUTE: 'rc=1' }, shell)
-      assert.equal(r.status, 1, r.stdout + r.stderr)
-      assert.match(r.stdout, /^wait-for-network: down after 0s \(default route: no, github\.com DNS: yes\)$/m)
-    }))
+  for (const [name, route] of [
+    ['macOS: exit 0, empty stdout, "not in table" on stderr', ROUTE_NONE],
+    ['route exits 1', ROUTE_FAIL],
+  ]) {
+    t(`no default route (${name}): exit 1 after the timeout and says why`, () =>
+      withSandbox({}, (sb) => {
+        const r = sb.run({ STUB_ROUTE: route, WAIT_FOR_NETWORK_TIMEOUT: '2' }, shell)
+        assert.equal(r.status, 1, r.stdout + r.stderr)
+        assert.match(r.stdout, /^wait-for-network: down after 2s \(default route: no, github\.com DNS: yes\)$/m)
+        assert.equal(r.stderr, '', 'route stderr must not reach the log')
+        assert.equal(sb.calls().filter((c) => c.startsWith('route')).length, 2)
+      }))
+  }
 
   t('empty DNS output (dscacheutil exits 0 on a failed lookup): exit 1', () =>
     withSandbox({}, (sb) => {
@@ -189,7 +205,13 @@ for (const shell of SHELLS) {
       assert.equal(r.status, 0, r.stdout + r.stderr)
     }))
 
-  for (const bad of ['abc', '-5', '1.5']) {
+  t('a 6-digit WAIT_FOR_NETWORK_TIMEOUT is accepted', () =>
+    withSandbox({}, (sb) => {
+      const r = sb.run({ WAIT_FOR_NETWORK_TIMEOUT: '999999' }, shell)
+      assert.equal(r.status, 0, r.stdout + r.stderr)
+    }))
+
+  for (const bad of ['abc', '-5', '1.5', '1000000', '99999999999999999999']) {
     t(`WAIT_FOR_NETWORK_TIMEOUT=${JSON.stringify(bad)}: exit 2, no probe runs`, () =>
       withSandbox({}, (sb) => {
         const r = sb.run({ WAIT_FOR_NETWORK_TIMEOUT: bad }, shell)
@@ -209,7 +231,7 @@ for (const shell of SHELLS) {
 
   t('still down: gives up once the timeout has passed, not before', () =>
     withSandbox({}, (sb) => {
-      const r = sb.run({ WAIT_FOR_NETWORK_TIMEOUT: '3', STUB_ROUTE: 'rc=1' }, shell)
+      const r = sb.run({ WAIT_FOR_NETWORK_TIMEOUT: '3', STUB_ROUTE: ROUTE_NONE }, shell)
       assert.equal(r.status, 1, r.stdout + r.stderr)
       assert.match(r.stdout, /down after 4s/)
       // Probes at 0s, 2s, 4s.
@@ -339,12 +361,14 @@ for (const { job, runs } of JOBS) {
     assert.ok(r.calls.includes('dscacheutil -q host -a name github.com'), `dscacheutil never probed; log:\n${r.log}`)
   })
 
-  test(`launchd ${job}: no default route -> the job skips and never runs its update`, { skip: cskip }, () => {
-    const r = launchdRun(job, { route: 'rc=1' })
-    assert.equal(r.status, 0, r.log)
-    assert.match(r.log, new RegExp(`^${job}-update: network not up; skipped$`, 'm'), r.log)
-    assert.ok(!r.calls.includes(runs), `ran "${runs}" with the network down; log:\n${r.log}`)
-  })
+  for (const [name, route] of [['macOS no-route output', ROUTE_NONE], ['route exits 1', ROUTE_FAIL]]) {
+    test(`launchd ${job}: no default route (${name}) -> the job skips and never runs its update`, { skip: cskip }, () => {
+      const r = launchdRun(job, { route })
+      assert.equal(r.status, 0, r.log)
+      assert.match(r.log, new RegExp(`^${job}-update: network not up; skipped$`, 'm'), r.log)
+      assert.ok(!r.calls.includes(runs), `ran "${runs}" with the network down; log:\n${r.log}`)
+    })
+  }
 
   test(`launchd ${job}: network up -> the job runs its update`, { skip: cskip }, () => {
     const r = launchdRun(job, { route: ROUTE_UP })
@@ -360,24 +384,55 @@ for (const { job, runs } of JOBS) {
 for (const shell of SHELLS) {
   test(`[${shell.name}] an over-long WAIT_FOR_NETWORK_TIMEOUT never makes test(1) error`, { skip: shell.skip }, () =>
     withSandbox({}, (sb) => {
-      const r = sb.run({ WAIT_FOR_NETWORK_TIMEOUT: '99999999999999999999', STUB_ROUTE: 'rc=1' }, shell, 3000)
+      const r = sb.run({ WAIT_FOR_NETWORK_TIMEOUT: '99999999999999999999', STUB_ROUTE: ROUTE_NONE }, shell, 3000)
       assert.doesNotMatch(r.stderr, /Illegal number|integer expression expected|out of range/, r.stderr)
     }))
 }
 
 // chezmoi apply also runs cf-update.sh and rea-update.sh (run_onchange_after_*),
-// keyed on the ~/.tool-versions hash. A network skip there exits 0, so chezmoi
-// records the run_onchange as done and a Node bump leaves cf/rea missing until
-// the next daily run. One way out: the template bypasses the wait
-// (WAIT_FOR_NETWORK=true) so an offline apply fails loudly and re-runs next time.
+// keyed on the ~/.tool-versions hash. A network skip there would exit 0, so
+// chezmoi would record an install that did not happen as done. The templates
+// bypass the wait (WAIT_FOR_NETWORK=true), so an offline apply fails loudly and
+// runs again on the next apply.
 for (const [tmpl, script] of [
   ['run_onchange_after_install-cloudflare-cli.sh.tmpl', 'cf-update.sh'],
   ['run_onchange_after_install-rea.sh.tmpl', 'rea-update.sh'],
 ]) {
-  test.todo(`PROPOSED CONTRACT: ${tmpl}: an offline chezmoi apply cannot record the install as done via a network skip`, () => {
+  test(`${tmpl}: an offline chezmoi apply cannot record the install as done via a network skip`, () => {
     const src = read(tmpl)
-    const exec = src.split('\n').find((l) => l.includes(script) && /^\s*exec\b/.test(l))
-    assert.ok(exec, `no exec line for ${script}`)
-    assert.match(exec, /WAIT_FOR_NETWORK=/, 'the apply-time run still takes the skip-and-exit-0 path')
+    const execs = src.split('\n').filter((l) => l.includes(script) && /^\s*(\w+=\S*\s+)*exec\b/.test(l))
+    assert.equal(execs.length, 1, `want one exec line for ${script}`)
+    assert.equal(execs[0], `WAIT_FOR_NETWORK=true exec "$HOME/.cron/${script}"`, 'the apply-time run still takes the skip-and-exit-0 path')
+  })
+
+  test(`${tmpl}: run as written, the update runs and fails loudly even when the network wait would skip`, () => {
+    const base = mkdtempSync(join(tmpdir(), 'wait-onchange-'))
+    try {
+      const home = join(base, 'home')
+      const bin = join(base, 'bin')
+      const calls = join(base, 'calls')
+      writeFileSync(calls, '')
+      mkdirSync(join(home, '.cron'), { recursive: true })
+      mkdirSync(bin)
+      const deployed = join(home, '.cron', script)
+      writeFileSync(deployed, read(`dot_cron/executable_${script}`))
+      chmodSync(deployed, 0o755)
+      // A deployed wait that always reports the network down.
+      writeFileSync(join(home, '.cron', 'wait-for-network.sh'), '#!/bin/sh\nexit 1\n')
+      chmodSync(join(home, '.cron', 'wait-for-network.sh'), 0o755)
+      writeFileSync(join(bin, 'npm'), '#!/bin/sh\necho "npm $*" >> "$CALLS"\nexit 1\n')
+      chmodSync(join(bin, 'npm'), 0o755)
+      // The template body without its chezmoi {{ }} lines.
+      const body = read(tmpl).split('\n').filter((l) => !l.includes('{{')).join('\n')
+      const r = spawnSync('bash', ['-c', body], {
+        encoding: 'utf8',
+        env: { HOME: home, PATH: `${bin}:${SYS_PATH}`, CALLS: calls },
+      })
+      assert.equal(r.status, 1, r.stdout + r.stderr)
+      assert.doesNotMatch(r.stdout, /skipped/)
+      assert.match(readFileSync(calls, 'utf8'), /^npm install --global /m)
+    } finally {
+      rmSync(base, { recursive: true, force: true })
+    }
   })
 }

@@ -386,7 +386,7 @@ test('run_onchange: after_ script, re-runs on Node pin or script change, execs t
   assert.match(onchange, /^\{\{- if eq \.chezmoi\.os "darwin" -\}\}\n#!\/bin\/bash\n/)
   assert.match(onchange, /\{\{ include "dot_tool-versions" \| sha256sum \}\}/)
   assert.match(onchange, /\{\{ include "dot_cron\/executable_cf-update\.sh" \| sha256sum \}\}/)
-  assert.match(onchange, /^exec "\$HOME\/\.cron\/cf-update\.sh"$/m)
+  assert.match(onchange, /^WAIT_FOR_NETWORK=true exec "\$HOME\/\.cron\/cf-update\.sh"$/m)
   // Every included source file must exist, or chezmoi apply errors out.
   for (const [, f] of onchange.matchAll(/include "([^"]+)"/g)) {
     assert.ok(existsSync(new URL(f, ROOT)), `include target ${f} missing`)

@@ -12,8 +12,9 @@
 # output decides.
 #
 # Exit 0: up. Exit 1: still down after WAIT_FOR_NETWORK_TIMEOUT seconds
-# (default 60). Exit 2: cannot evaluate (route or dscacheutil missing, or
-# output this script cannot read); the caller then runs the job as before.
+# (default 60). Exit 2: cannot evaluate (route or dscacheutil not found, output
+# this script cannot read, or a bad timeout); the caller then runs the job as
+# before.
 
 set -u
 
@@ -21,8 +22,11 @@ timeout="${WAIT_FOR_NETWORK_TIMEOUT:-60}"
 host=github.com
 
 case "$timeout" in
-    '' | *[!0-9]*) echo "wait-for-network: bad WAIT_FOR_NETWORK_TIMEOUT: $timeout" >&2; exit 2 ;;
+    '' | *[!0-9]* | ???????*) echo "wait-for-network: bad WAIT_FOR_NETWORK_TIMEOUT: $timeout" >&2; exit 2 ;;
 esac
+
+# The launchd plist PATH has no /sbin, and macOS ships route only as /sbin/route.
+PATH="$PATH:/usr/sbin:/sbin"
 
 for tool in route dscacheutil; do
     command -v "$tool" >/dev/null 2>&1 \
@@ -33,8 +37,10 @@ done
 probe() {
     route_ok=no
     dns_ok=no
-    # No default route: route exits non-zero ("not in table").
-    if out=$(route -n get default 2>/dev/null); then
+    # No default route: macOS route prints "not in table" on stderr and
+    # nothing on stdout, and exits 0. A non-zero exit also counts as no route.
+    # Only stdout with no interface: line is output this script cannot read.
+    if out=$(route -n get default 2>/dev/null) && [ -n "$out" ]; then
         case "$out" in
             *interface:*) route_ok=yes ;;
             *) echo "wait-for-network: cannot read 'route -n get default' output" >&2; exit 2 ;;

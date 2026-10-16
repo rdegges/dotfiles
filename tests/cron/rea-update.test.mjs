@@ -395,7 +395,7 @@ test('run_onchange: after_ script, re-runs on Node pin or script change, execs t
   assert.match(s, /^\{\{- if eq \.chezmoi\.os "darwin" -\}\}\n#!\/bin\/bash\n/)
   assert.match(s, /\{\{ include "dot_tool-versions" \| sha256sum \}\}/)
   assert.match(s, /\{\{ include "dot_cron\/executable_rea-update\.sh" \| sha256sum \}\}/)
-  assert.match(s, /^exec "\$HOME\/\.cron\/rea-update\.sh"$/m)
+  assert.match(s, /^WAIT_FOR_NETWORK=true exec "\$HOME\/\.cron\/rea-update\.sh"$/m)
 })
 
 // --- Codex registration --------------------------------------------------------
