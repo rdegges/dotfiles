@@ -1,0 +1,6 @@
+# Starship's default command_timeout is 500ms. The asdf python shim
+# (~/.asdf/shims/python) runs in about 170ms warm but takes more than 500ms
+# cold (the first shell after login or wake), so every new terminal printed
+# "[WARN] ... Executing command ... timed out". The cost of 2000ms: the first
+# prompt after wake can stall up to 2s instead of printing that warning.
+command_timeout = 2000
