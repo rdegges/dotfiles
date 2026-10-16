@@ -13,9 +13,14 @@
 // runs exactly `chezmoi update --force`, passes its output through to the log,
 // exits with chezmoi's own status, writes ~/.cron/logs/chezmoi.FAILED (one
 // entry, replaced, never appended) on any non-zero status -- chezmoi missing
-// and chezmoi killed by a signal included -- and removes it on success. It
-// holds under dash and under bash --posix (macOS /bin/sh is bash in POSIX
-// mode). The agent's rendered command, run as written, produces that log. With
+// and chezmoi killed by a signal included -- and removes it on success, where
+// it also touches ~/.cron/logs/chezmoi.ok. With a stub network wait
+// (WAIT_FOR_NETWORK): status 1 skips the run with exit 0 and never touches an
+// existing marker; it writes a marker that does not say "update failed" only
+// when chezmoi.ok is missing or over 24 hours old; any other status (2, 126,
+// 127) runs chezmoi as before; an empty WAIT_FOR_NETWORK runs
+// ~/.cron/wait-for-network.sh. It holds under dash and under bash --posix
+// (macOS /bin/sh is bash in POSIX mode). The agent's rendered command, run as written, produces that log. With
 // the real chezmoi: the deployed script is mode 0755; the agent-load step runs
 // after ~/.cron/chezmoi-update.sh and the agent plist are written, so a newly
 // loaded agent never points at a missing script; and a `chezmoi update` that
@@ -24,7 +29,7 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync, writeFileSync, mkdirSync, mkdtempSync, existsSync, chmodSync, rmSync, statSync, copyFileSync, cpSync, readdirSync } from 'node:fs'
+import { readFileSync, writeFileSync, mkdirSync, mkdtempSync, existsSync, chmodSync, rmSync, statSync, copyFileSync, cpSync, readdirSync, utimesSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -68,6 +73,10 @@ function sandbox({ stub = true, homeName = 'home' } = {}) {
     copyFileSync(stubPath, join(bin, 'chezmoi'))
     chmodSync(join(bin, 'chezmoi'), 0o755)
   }
+  // The network wait, stubbed: exits STUB_WAIT_RC (default 0, network up).
+  const wait = join(base, 'wait-for-network')
+  writeFileSync(wait, '#!/bin/sh\nexit "${STUB_WAIT_RC:-0}"\n')
+  chmodSync(wait, 0o755)
   const calls = join(base, 'calls')
   writeFileSync(calls, '')
   const logs = join(home, '.cron', 'logs')
@@ -78,9 +87,10 @@ function sandbox({ stub = true, homeName = 'home' } = {}) {
     bin,
     logs,
     marker,
+    stamp: join(logs, 'chezmoi.ok'),
     stubPath,
     calls: () => readFileSync(calls, 'utf8').split('\n').filter(Boolean),
-    env: (env = {}) => ({ HOME: home, PATH: `${bin}:${SYS_PATH}`, CALLS: calls, ...env }),
+    env: (env = {}) => ({ HOME: home, PATH: `${bin}:${SYS_PATH}`, CALLS: calls, WAIT_FOR_NETWORK: wait, ...env }),
     run(env = {}, shell = SHELLS[0]) {
       // Built from scratch so the host's CHEZMOI etc. never leak in.
       return spawnSync(shell.argv[0], [...shell.argv.slice(1), SCRIPT], { encoding: 'utf8', env: this.env(env) })
@@ -126,8 +136,8 @@ for (const shell of SHELLS) {
       assert.deepEqual(sb.calls(), ['chezmoi update --force'])
       assert.match(r.stdout, /^chezmoi-update: ok$/m)
       assert.equal(existsSync(sb.marker), false)
-      // Nothing created under HOME on success: no stray logs dir.
-      assert.equal(existsSync(sb.logs), false)
+      // Nothing else created under HOME on success: only the success stamp.
+      assert.deepEqual(readdirSync(sb.logs), ['chezmoi.ok'])
     }))
 
   t("chezmoi's stdout and stderr pass through (the cron log is the only record)", () =>
@@ -199,6 +209,125 @@ for (const shell of SHELLS) {
       assertFailed(sb, r, 1)
       assert.ok(sb.marker.includes('Ränd all ☁️'))
     }))
+
+  // --- network wait (WAIT_FOR_NETWORK) ----------------------------------------
+
+  t('success touches the chezmoi.ok stamp; a failure does not', () =>
+    withSandbox({}, (sb) => {
+      assertFailed(sb, sb.run({ STUB_CHEZMOI_RC: '1' }, shell), 1)
+      assert.equal(existsSync(sb.stamp), false)
+      const before = Date.now()
+      assert.equal(sb.run({}, shell).status, 0)
+      assert.ok(statSync(sb.stamp).mtimeMs >= before - 2000, 'stamp not fresh')
+    }))
+
+  t('network down (wait exits 1), fresh stamp: exit 0, logs the skip, chezmoi never runs, no marker', () =>
+    withSandbox({}, (sb) => {
+      setStamp(sb, 23 * 60)
+      const r = sb.run({ STUB_WAIT_RC: '1' }, shell)
+      assert.equal(r.status, 0, r.stdout + r.stderr)
+      assert.equal(r.stdout, 'chezmoi-update: network not up; skipped\n')
+      assert.deepEqual(sb.calls(), [])
+      assert.equal(existsSync(sb.marker), false)
+    }))
+
+  for (const [name, age] of [['fresh stamp', 60], ['missing stamp', null], ['stale stamp', 25 * 60]]) {
+    t(`network down, ${name}: an existing marker stays byte for byte`, () =>
+      withSandbox({}, (sb) => {
+        if (age !== null) setStamp(sb, age)
+        mkdirSync(sb.logs, { recursive: true })
+        writeFileSync(sb.marker, 'old failure\n')
+        const r = sb.run({ STUB_WAIT_RC: '1' }, shell)
+        assert.equal(r.status, 0, r.stdout + r.stderr)
+        assert.equal(readFileSync(sb.marker, 'utf8'), 'old failure\n')
+      }))
+  }
+
+  for (const [name, age] of [['missing stamp', null], ['stamp 24h1m old', 24 * 60 + 1]]) {
+    t(`network down, ${name}: writes the no-success marker (not "update failed"), still exits 0`, () =>
+      withSandbox({}, (sb) => {
+        if (age !== null) setStamp(sb, age)
+        const r = sb.run({ STUB_WAIT_RC: '1' }, shell)
+        assert.equal(r.status, 0, r.stdout + r.stderr)
+        assert.deepEqual(sb.calls(), [])
+        assertBackstop(sb)
+      }))
+  }
+
+  t('network down, stamp 23h55m old: no marker', () =>
+    withSandbox({}, (sb) => {
+      setStamp(sb, 24 * 60 - 5)
+      sb.run({ STUB_WAIT_RC: '1' }, shell)
+      assert.equal(existsSync(sb.marker), false)
+    }))
+
+  t('a skip never touches the stamp', () =>
+    withSandbox({}, (sb) => {
+      setStamp(sb, 60)
+      const mtime = statSync(sb.stamp).mtimeMs
+      sb.run({ STUB_WAIT_RC: '1' }, shell)
+      assert.equal(statSync(sb.stamp).mtimeMs, mtime)
+    }))
+
+  t('wait exits 2 (cannot evaluate): chezmoi runs as before', () =>
+    withSandbox({}, (sb) => {
+      const r = sb.run({ STUB_WAIT_RC: '2' }, shell)
+      assert.equal(r.status, 0, r.stdout + r.stderr)
+      assert.deepEqual(sb.calls(), ['chezmoi update --force'])
+      assert.doesNotMatch(r.stdout, /skipped/)
+    }))
+
+  t('wait missing (127) or not executable (126): chezmoi runs as before, failures still mark', () =>
+    withSandbox({}, (sb) => {
+      let r = sb.run({ WAIT_FOR_NETWORK: join(sb.base, 'no-such-wait') }, shell)
+      assert.equal(r.status, 0, r.stdout + r.stderr)
+      assert.deepEqual(sb.calls(), ['chezmoi update --force'])
+      const noexec = join(sb.base, 'noexec-wait')
+      writeFileSync(noexec, '#!/bin/sh\nexit 1\n')
+      chmodSync(noexec, 0o644)
+      r = sb.run({ WAIT_FOR_NETWORK: noexec, STUB_CHEZMOI_RC: '1' }, shell)
+      assertFailed(sb, r, 1)
+      assert.equal(sb.calls().length, 2)
+    }))
+
+  t('empty WAIT_FOR_NETWORK runs ~/.cron/wait-for-network.sh', () =>
+    withSandbox({}, (sb) => {
+      mkdirSync(join(sb.home, '.cron'), { recursive: true })
+      const deployed = join(sb.home, '.cron', 'wait-for-network.sh')
+      writeFileSync(deployed, '#!/bin/sh\nexit 1\n')
+      chmodSync(deployed, 0o755)
+      const r = sb.run({ WAIT_FOR_NETWORK: '' }, shell)
+      assert.match(r.stdout, /network not up; skipped/)
+      assert.deepEqual(sb.calls(), [])
+    }))
+
+  t('skip -> success -> skip: the backstop marker clears on success and does not come back', () =>
+    withSandbox({}, (sb) => {
+      sb.run({ STUB_WAIT_RC: '1' }, shell)
+      assertBackstop(sb)
+      assert.equal(sb.run({}, shell).status, 0)
+      assert.equal(existsSync(sb.marker), false)
+      assert.equal(sb.run({ STUB_WAIT_RC: '1' }, shell).status, 0)
+      assert.equal(existsSync(sb.marker), false)
+    }))
+}
+
+// Sets the stamp's mtime to `minutes` ago.
+function setStamp(sb, minutes) {
+  mkdirSync(sb.logs, { recursive: true })
+  writeFileSync(sb.stamp, '')
+  const t = (Date.now() - minutes * 60_000) / 1000
+  utimesSync(sb.stamp, t, t)
+}
+
+function assertBackstop(sb) {
+  assert.ok(existsSync(sb.marker), 'no backstop marker written')
+  const m = readFileSync(sb.marker, 'utf8')
+  assert.match(
+    m,
+    /^\d{4}-\d{2}-\d{2} \d{2}:\d{2} chezmoi: network check failed and no successful run in 24 hours \(see ~\/\.cron\/logs\/chezmoi\.log\)\n$/,
+  )
+  assert.doesNotMatch(m, /update failed/)
 }
 
 test('chezmoi-update.sh: POSIX sh shebang, parses under sh -n and bash --posix -n', () => {
@@ -232,6 +361,12 @@ test('end to end: a failed run shows a red banner line, the next good run clears
     )
     sb.run()
     assert.equal(banner(sb.home).stdout, '')
+  }))
+
+test('end to end: the no-success marker from a skipped run shows in the banner', { skip: zskip }, () =>
+  withSandbox({}, (sb) => {
+    sb.run({ STUB_WAIT_RC: '1' })
+    assert.match(banner(sb.home).stdout, /cron: .* chezmoi: network check failed and no successful run in 24 hours/)
   }))
 
 // --- Wiring -------------------------------------------------------------------

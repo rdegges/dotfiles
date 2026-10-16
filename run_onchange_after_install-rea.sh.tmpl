@@ -12,5 +12,7 @@
 # has installed the pinned Node. A failure here blocks no other file.
 set -uo pipefail
 
-exec "$HOME/.cron/rea-update.sh"
+# Never take the cron job's network skip here: it exits 0, and chezmoi would
+# record an install that did not happen as done. Offline, the apply fails.
+WAIT_FOR_NETWORK=true exec "$HOME/.cron/rea-update.sh"
 {{ end -}}
