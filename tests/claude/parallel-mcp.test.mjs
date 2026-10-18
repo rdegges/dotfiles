@@ -545,7 +545,7 @@ for (const [reader, target, everyOs] of [
       test(`${reader} os=${os} work=${work}: web-search rule ${renders ? 'renders once after Email' : 'is absent'}`, () => {
         const t = renderRules(target, work, os)
         assert.doesNotMatch(t, /\{\{|\}\}|<no value>/)
-        const lines = t.split('\n').filter((l) => l.includes('Web search') || l.includes('parallel'))
+        const lines = t.split('\n').filter((l) => /Web search|Parallel \(|mcp__parallel|parallel_web_search|`parallel`/.test(l))
         if (renders) {
           assert.deepEqual(lines, [SEARCH_RULE[reader].trimEnd()])
           assert.ok(t.includes(EMAIL + SEARCH_RULE[reader]), 'web-search rule is not right after the Email bullet')

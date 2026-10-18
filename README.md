@@ -255,7 +255,10 @@ The only per-machine step is `cf auth login`. `cf` keeps its own credentials, ou
   each new shell. The script reruns only when its text changes, so to rotate
   the key, update the 1Password item, run
   `(umask 077; rm -f ~/.config/parallel/api-key; op read op://Private/Parallel/credential > ~/.config/parallel/api-key)`,
-  and open a new shell.
+  and open a new shell. The global rules file (dot_claude/CLAUDE.md.tmpl) tells
+  each agent to search with Parallel instead of its built-in search tool
+  wherever the server is registered, and to fall back to the built-in tool and
+  tell me if Parallel is not connected.
 
 `run_onchange_reconcile-agent-clis.sh.tmpl` keeps exactly one copy of `claude`
 and `codex` on each box: it removes stray installs from other channels (npm
