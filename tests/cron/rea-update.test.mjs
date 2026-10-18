@@ -423,7 +423,7 @@ test('codex: renders the exact entry rea setup writes, at the pinned Node', () =
   assert.ifError(r.error)
   assert.equal(r.status, 0, r.stderr)
   const block = r.stdout.slice(r.stdout.indexOf('[mcp_servers.rea]'))
-  assert.match(block, /^\[mcp_servers\.rea\]\ncommand = "\/.+\/\.asdf\/installs\/nodejs\/26\.4\.0\/bin\/rea"\nargs = \[ "mcp" \]\nstartup_timeout_sec = 30\n/)
+  assert.match(block, /^\[mcp_servers\.rea\]\ncommand = "\/.+\/\.asdf\/installs\/nodejs\/26\.4\.0\/bin\/rea"\nargs = \[ "mcp" \]\nstartup_timeout_sec = 30\ntool_timeout_sec = 450\n/)
   // The durable prefs above it survive the move to a template.
   assert.match(r.stdout, /^approval_policy = "never"$/m)
 })

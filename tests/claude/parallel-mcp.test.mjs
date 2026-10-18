@@ -87,7 +87,7 @@ for (const work of [false, true]) {
     assert.equal(t.includes('[mcp_servers.parallel]'), !work)
     assert.ok(!t.includes(KEY))
     // The rea entry above it must survive the new block.
-    assert.match(t, /\[mcp_servers\.rea\]\ncommand = ".*\/bin\/rea"\nargs = \[ "mcp" \]\nstartup_timeout_sec = 30\n/)
+    assert.match(t, /\[mcp_servers\.rea\]\ncommand = ".*\/bin\/rea"\nargs = \[ "mcp" \]\nstartup_timeout_sec = 30\ntool_timeout_sec = 450\n/)
   })
 }
 
