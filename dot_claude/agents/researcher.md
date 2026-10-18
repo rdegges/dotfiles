@@ -1,7 +1,7 @@
 ---
 name: researcher
 description: 'Answers one research question from current, citable web sources and returns a short brief: the answer first, a link and date on every claim, conflicts between sources, and gaps. Use instead of a general-purpose agent for research questions, vendor/tool/model comparisons, and "what''s current" lookups. Read-only.'
-tools: Read, Grep, Glob, Bash, WebSearch, WebFetch
+tools: Read, Grep, Glob, Bash, WebSearch, WebFetch, mcp__parallel__web_search
 model: opus
 effort: medium
 color: purple

@@ -503,3 +503,81 @@ for (const present of [true, false]) {
     }
   })
 }
+
+// --- CLAUDE.md / AGENTS.md: the web-search rule ------------------------------
+// What a pass proves: each agent's rendered rules name its own Parallel tool
+// exactly where the server is registered (Codex: work=false on any OS; Claude
+// Code and opencode: darwin + work=false), sit right after the Email bullet in
+// Environment, and are absent everywhere else.
+
+function renderRules(target, work, os) {
+  const home = mkdtempSync(join(tmpdir(), 'parallel-rules-'))
+  try {
+    const r = spawnSync(
+      'chezmoi',
+      ['--source', SOURCE, '--destination', home, '--override-data', JSON.stringify({ work, chezmoi: { os } }), 'cat', join(home, target)],
+      { encoding: 'utf8', env: { PATH: process.env.PATH, HOME: home } },
+    )
+    assert.ifError(r.error)
+    assert.equal(r.status, 0, `chezmoi cat ${target} (work=${work} os=${os}) exited ${r.status}: ${r.stderr}`)
+    return r.stdout
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+}
+
+const EMAIL = '- Email: `himalaya` CLI (personal and work accounts) unless I ask otherwise.\n'
+const FALLBACK = 'If the `parallel` server is not connected or a call fails, tell me, then use the built-in tool for that search.'
+const SEARCH_RULE = {
+  claude: `- Web search: use Parallel (\`mcp__parallel__web_search\`), not your built-in WebSearch. ${FALLBACK}\n`,
+  codex: `- Web search: use Parallel (the \`parallel\` MCP server's \`web_search\` tool), not your built-in web search. ${FALLBACK}\n`,
+  opencode: `- Web search: use Parallel (\`parallel_web_search\`), not your built-in \`websearch\` tool. ${FALLBACK}\n`,
+}
+
+for (const [reader, target, everyOs] of [
+  ['claude', '.claude/CLAUDE.md', false],
+  ['codex', '.codex/AGENTS.md', true],
+  ['opencode', '.config/opencode/AGENTS.md', false],
+]) {
+  for (const os of ['darwin', 'linux']) {
+    for (const work of [false, true]) {
+      const renders = !work && (everyOs || os === 'darwin')
+      test(`${reader} os=${os} work=${work}: web-search rule ${renders ? 'renders once after Email' : 'is absent'}`, () => {
+        const t = renderRules(target, work, os)
+        assert.doesNotMatch(t, /\{\{|\}\}|<no value>/)
+        const lines = t.split('\n').filter((l) => /Web search|Parallel \(|mcp__parallel|parallel_web_search|`parallel`/.test(l))
+        if (renders) {
+          assert.deepEqual(lines, [SEARCH_RULE[reader].trimEnd()])
+          assert.ok(t.includes(EMAIL + SEARCH_RULE[reader]), 'web-search rule is not right after the Email bullet')
+        } else {
+          assert.deepEqual(lines, [])
+          assert.ok(t.includes(EMAIL + '- A new or changed scheduled job'), 'Email bullet no longer runs straight into the next bullet')
+        }
+      })
+    }
+  }
+}
+
+// The matrix above is hardcoded, so it would stay green if the registration
+// gates moved and the rule's gate did not. What a pass proves: for every
+// os/work pair, each agent gets the rule exactly when its server is
+// registered there, read from the real registration templates (the setup
+// script for Claude Code and opencode, config.toml for Codex), so an agent is
+// never told to use a server it lacks, nor left on built-in search where it
+// has one. It says nothing about whether the server works on that machine.
+for (const os of ['darwin', 'linux']) {
+  for (const work of [false, true]) {
+    test(`os=${os} work=${work}: web-search rule renders exactly where Parallel is registered`, () => {
+      const scriptRegisters = execTemplate({ work, chezmoi: { os } }).trim() !== ''
+      const codexRegisters = chezmoi((home) => ['cat', join(home, '.codex/config.toml')], { work, chezmoi: { os } }).includes('[mcp_servers.parallel]')
+      for (const [reader, target, registered] of [
+        ['claude', '.claude/CLAUDE.md', scriptRegisters],
+        ['codex', '.codex/AGENTS.md', codexRegisters],
+        ['opencode', '.config/opencode/AGENTS.md', scriptRegisters],
+      ]) {
+        const hasRule = renderRules(target, work, os).includes(SEARCH_RULE[reader])
+        assert.equal(hasRule, registered, `${reader}: rule=${hasRule} but server registered=${registered}`)
+      }
+    })
+  }
+}
