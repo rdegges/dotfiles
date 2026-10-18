@@ -15,7 +15,8 @@
 // parses, whose Label is its file name, whose command is byte for byte the
 // command the old crontab ran for that job, whose schedule is that job's old
 // cron schedule, and whose PATH is absolute (also for a HOME with spaces, `&`,
-// `<`, and quotes). The loader's hash header covers the shared template and
+// `<`, and quotes) and passes the Codex installer's ~/.local/bin check, with
+// ~/.local/bin ahead of the Homebrew prefixes. The loader's hash header covers the shared template and
 // every agent. With a stub launchctl that keeps load state and refuses a
 // bootstrap while a label is still loaded, the loader boots out and then
 // bootstraps every agent, waits until a booted-out label is really gone, fails
@@ -160,6 +161,66 @@ for (const [job, line] of Object.entries(OLD_CRONTAB)) {
     }
   })
 }
+
+// `codex update` runs https://chatgpt.com/codex/install.sh. Its add_to_path()
+// appends a `# >>> Codex installer >>>` block to ~/.zprofile unless
+// `case ":$PATH:" in *":$BIN_DIR:"*)` matches, with BIN_DIR="$HOME/.local/bin";
+// chezmoi then deletes that block on the next update. It also edits the profile
+// when `command -v codex` finds a copy under /opt/homebrew or /usr/local (a
+// "brew" conflict), so ~/.local/bin must come before those. This is the
+// installer's check copied as of 2026-10-17, not the installer itself.
+const INSTALLER_PATH_CHECK = 'case ":$PATH:" in *":$HOME/.local/bin:"*) exit 0 ;; esac; exit 1'
+
+function agentPath(home, source = SOURCE) {
+  const tmpl = readFileSync(join(source, AGENTS_DIR, 'com.rdegges.codex.plist.tmpl'), 'utf8')
+  return parsePlist(execTemplate(tmpl, { source, home })).EnvironmentVariables.PATH
+}
+
+test('agents: the job PATH passes the Codex installer check, so `codex update` leaves ~/.zprofile alone', () => {
+  for (const make of [() => { const b = mkdtempSync(join(tmpdir(), 'launch-agents-')); return { base: b, home: b } }, hostileHome]) {
+    const { base, home } = make()
+    try {
+      const path = agentPath(home)
+      const r = spawnSync('/bin/sh', ['-c', INSTALLER_PATH_CHECK], { encoding: 'utf8', env: { PATH: path, HOME: home } })
+      assert.equal(r.status, 0, `installer would edit ~/.zprofile: HOME=${home} PATH=${path}`)
+
+      const dirs = path.split(':')
+      const local = dirs.indexOf(`${home}/.local/bin`)
+      assert.ok(local >= 0, path)
+      assert.ok(local < dirs.indexOf('/opt/homebrew/bin') && local < dirs.indexOf('/usr/local/bin'), `~/.local/bin is after a Homebrew prefix: ${path}`)
+
+      // The codex in ~/.local/bin is the one `command -v codex` finds, so the
+      // installer sees no conflicting install.
+      mkdirSync(join(home, '.local/bin'), { recursive: true })
+      writeFileSync(join(home, '.local/bin/codex'), '#!/bin/sh\n')
+      chmodSync(join(home, '.local/bin/codex'), 0o755)
+      const found = spawnSync('/bin/sh', ['-c', 'command -v codex'], { encoding: 'utf8', env: { PATH: path, HOME: home } })
+      assert.equal(found.stdout.trim(), `${home}/.local/bin/codex`)
+    } finally {
+      rmSync(base, { recursive: true, force: true })
+    }
+  }
+})
+
+test('agents: the installer check fails on the old PATH without ~/.local/bin (the check is not vacuous)', () => {
+  const src = mkdtempSync(join(tmpdir(), 'launch-agents-src-'))
+  const home = mkdtempSync(join(tmpdir(), 'launch-agents-'))
+  try {
+    for (const p of ['.chezmoitemplates', AGENTS_DIR]) cpSync(join(SOURCE, p), join(src, p), { recursive: true })
+    const tmpl = join(src, '.chezmoitemplates/launchagent.plist')
+    const text = readFileSync(tmpl, 'utf8')
+    const old = text.replace('{{ .home | html }}/.local/bin:', '')
+    assert.notEqual(old, text, 'the shared template no longer has the ~/.local/bin entry this test removes')
+    writeFileSync(tmpl, old)
+    const path = agentPath(home, src)
+    assert.equal(path, `${home}/.asdf/shims:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin`)
+    const r = spawnSync('/bin/sh', ['-c', INSTALLER_PATH_CHECK], { encoding: 'utf8', env: { PATH: path, HOME: home } })
+    assert.equal(r.status, 1)
+  } finally {
+    rmSync(src, { recursive: true, force: true })
+    rmSync(home, { recursive: true, force: true })
+  }
+})
 
 test('agents: the command is XML-escaped in the source XML, not passed through raw', () => {
   const xml = execTemplate(read(`${AGENTS_DIR}/com.rdegges.codex.plist.tmpl`))
