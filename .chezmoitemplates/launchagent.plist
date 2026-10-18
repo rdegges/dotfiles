@@ -18,7 +18,9 @@
   so absolute paths are required. The command runs via /bin/sh -c, so $HOME
   does expand there (launchd sets HOME). Commands are bare (resolved via PATH)
   rather than hardcoded to /opt/homebrew, so this works on both Apple Silicon
-  (/opt/homebrew) and Intel (/usr/local).
+  (/opt/homebrew) and Intel (/usr/local). ~/.local/bin must be on PATH: the
+  installer that `codex update` runs appends a PATH block to ~/.zprofile
+  whenever it is missing, and the next `chezmoi update` deletes that block.
 
   Homebrew, non-interactively: quiet the env hints, skip the redundant implicit
   auto-update (the brew job runs `brew update` explicitly), and never block on
@@ -55,7 +57,7 @@
 	<key>EnvironmentVariables</key>
 	<dict>
 		<key>PATH</key>
-		<string>{{ .home | html }}/.asdf/shims:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+		<string>{{ .home | html }}/.asdf/shims:{{ .home | html }}/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
 		<key>HOMEBREW_NO_ENV_HINTS</key>
 		<string>1</string>
 		<key>HOMEBREW_NO_AUTO_UPDATE</key>

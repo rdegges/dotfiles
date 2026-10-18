@@ -141,7 +141,7 @@ for (const [job, line] of Object.entries(OLD_CRONTAB)) {
       assert.deepEqual(p.StartCalendarInterval, want.schedule)
 
       const path = p.EnvironmentVariables.PATH
-      assert.equal(path, `${home}/.asdf/shims:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin`)
+      assert.equal(path, `${home}/.asdf/shims:${home}/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin`)
       for (const dir of path.split(':')) assert.ok(dir.startsWith('/'), `relative PATH entry ${dir}`)
       assert.deepEqual(p.EnvironmentVariables, {
         PATH: path,
