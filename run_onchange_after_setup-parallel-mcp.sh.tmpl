@@ -1,0 +1,88 @@
+{{- if and (eq .chezmoi.os "darwin") (not .work) -}}
+#!/bin/bash
+# Register Parallel's Search MCP server (https://parallel.ai) for Claude Code
+# and opencode on personal machines, signed with my Parallel API key. Both
+# tools keep their user-level MCP servers in state files chezmoi must not own
+# (~/.claude.json, ~/.config/opencode/opencode.json, which `rea setup` also
+# writes), so this drives each CLI instead. Codex's entry is in
+# dot_codex/config.toml.tmpl, because chezmoi owns that file.
+#
+# The key comes from 1Password once per machine, into a 0600 file that
+# dot_zshenv exports as PARALLEL_API_KEY. It is read here, not with a
+# onepasswordRead template, because the hourly `chezmoi update` job cannot
+# approve a Touch ID prompt. Neither config stores the key itself: Claude Code
+# expands ${PARALLEL_API_KEY} from its environment, and opencode reads the file
+# through {file:...}, so the desktop app gets it without a shell.
+#
+# This is an `after_` script so it runs after run_once_install-claude-code.
+set -uo pipefail
+
+CLAUDE="$HOME/.local/bin/claude"
+URL="https://search.parallel.ai/mcp"
+KEY_FILE="$HOME/.config/parallel/api-key"
+KEY_REF="op://Private/Parallel/credential"
+status=0
+
+if [ ! -s "$KEY_FILE" ]; then
+  mkdir -p "${KEY_FILE%/*}" || exit 1
+  key="$(op read "$KEY_REF")" || {
+    echo "parallel-mcp: could not read $KEY_REF; sign in to 1Password (op), then re-run chezmoi apply" >&2
+    exit 1
+  }
+  [ -n "$key" ] || {
+    echo "parallel-mcp: $KEY_REF is empty; put the key in the item's credential field, then re-run chezmoi apply" >&2
+    exit 1
+  }
+  # umask sets the mode only for a new file, so drop any old one first.
+  rm -f "$KEY_FILE" || exit 1
+  (umask 077 && printf '%s\n' "$key" > "$KEY_FILE") || exit 1
+  echo "parallel-mcp: wrote $KEY_FILE; open a new shell so PARALLEL_API_KEY is set"
+fi
+chmod 600 "$KEY_FILE" || exit 1
+
+if [ ! -x "$CLAUDE" ]; then
+  echo "parallel-mcp: $CLAUDE not found; install Claude Code, then re-run chezmoi apply" >&2
+  status=1
+else
+  # Single quotes: Claude Code must store the ${...} reference, not the key.
+  header='Authorization: Bearer ${PARALLEL_API_KEY}'
+  current="$("$CLAUDE" mcp get parallel 2>/dev/null)"
+  if printf '%s\n' "$current" | grep -qxF "  URL: $URL" &&
+    printf '%s\n' "$current" | grep -qxF "    $header"; then
+    echo "parallel-mcp: claude: already registered"
+  else
+    # A user-scope entry with another URL or header is stale; replace it.
+    # Entries in other scopes belong to a project, so leave them alone.
+    if printf '%s\n' "$current" | grep -qF "Scope: User config"; then
+      "$CLAUDE" mcp remove --scope user parallel || status=1
+    fi
+    if [ "$status" -eq 0 ]; then
+      # `mcp get` shows a local or project entry first, so a user entry can
+      # still exist behind it. Replace that one and try again.
+      add=(mcp add --scope user --transport http parallel "$URL" --header "$header")
+      if ! out="$("$CLAUDE" "${add[@]}" 2>&1)"; then
+        printf '%s\n' "$out" >&2
+        if printf '%s\n' "$out" | grep -qF "already exists in user config"; then
+          { "$CLAUDE" mcp remove --scope user parallel && "$CLAUDE" "${add[@]}"; } || status=1
+        else
+          status=1
+        fi
+      else
+        printf '%s\n' "$out"
+      fi
+    fi
+  fi
+fi
+
+# `opencode mcp add --global` replaces an existing `parallel` entry and keeps
+# the rest of the file. Run it from $HOME so no project config is picked up.
+if ! command -v opencode >/dev/null 2>&1; then
+  echo "parallel-mcp: opencode not found on PATH; install it (Brewfile), then re-run chezmoi apply" >&2
+  status=1
+else
+  (cd "$HOME" && opencode mcp add --global --url "$URL" \
+    --header 'Authorization=Bearer {file:~/.config/parallel/api-key}' parallel) || status=1
+fi
+
+exit "$status"
+{{ end -}}

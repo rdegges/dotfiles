@@ -16,6 +16,15 @@ persistence = "save-all"
 [notice]
 hide_full_access_warning = true
 
+{{ if not (dig "work" false .) -}}
+# Parallel's Search MCP (https://parallel.ai), personal machines only, signed
+# with the key that run_onchange_after_setup-parallel-mcp.sh.tmpl fetches and
+# dot_zshenv exports. That script also registers Claude Code and opencode.
+[mcp_servers.parallel]
+url = "https://search.parallel.ai/mcp"
+bearer_token_env_var = "PARALLEL_API_KEY"
+
+{{ end -}}
 # REA (https://rea.tools): the same entry `rea setup --client codex` writes.
 # chezmoi owns this entry because it owns this file, so `rea setup` must not
 # write it. ~/.cron/rea-update.sh installs the binary it names and fails if

@@ -237,6 +237,25 @@ The only per-machine step is `cf auth login`. `cf` keeps its own credentials, ou
   with `claude mcp add`. It does not manage `~/.claude.json`, which is Claude
   Code state. The only per-machine step is to run `/mcp` in Claude Code once and
   finish the WorkOS OAuth sign-in. The script reruns only when its text changes; if you remove the server by hand, add it back with `claude mcp add --scope user --transport http workos https://mcp.workos.com/mcp`.
+- **Parallel Search MCP** — on personal machines (`work = false`), Claude Code,
+  opencode, and Codex get [Parallel's Search MCP server](https://parallel.ai)
+  (`https://search.parallel.ai/mcp`, tools `web_search` and `web_fetch`),
+  signed with my API key (higher rate limits; calls spend the free $5/month
+  credit). `run_onchange_after_setup-parallel-mcp.sh.tmpl` reads the key once
+  from `op://Private/Parallel/credential` into `~/.config/parallel/api-key`
+  (mode 0600), then registers the server with `claude mcp add --scope user` and
+  `opencode mcp add --global`, because chezmoi does not own those tools' config
+  files. The Codex entry is in `dot_codex/config.toml.tmpl`. Claude Code and
+  Codex read the key from `PARALLEL_API_KEY`, which `dot_zshenv` exports from
+  that file. opencode reads the file directly (`{file:...}`), so the desktop
+  app works too. No config stores the key. The only per-machine step: before
+  the first apply, sign in to `op` and make sure that the `Private` vault has an
+  API Credential item named `Parallel` with the key in its `credential` field.
+  Until then every apply fails, and the hourly job shows `chezmoi.FAILED` in
+  each new shell. The script reruns only when its text changes, so to rotate
+  the key, update the 1Password item, run
+  `(umask 077; rm -f ~/.config/parallel/api-key; op read op://Private/Parallel/credential > ~/.config/parallel/api-key)`,
+  and open a new shell.
 
 `run_onchange_reconcile-agent-clis.sh.tmpl` keeps exactly one copy of `claude`
 and `codex` on each box: it removes stray installs from other channels (npm
