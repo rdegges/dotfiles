@@ -557,3 +557,27 @@ for (const [reader, target, everyOs] of [
     }
   }
 }
+
+// The matrix above is hardcoded, so it would stay green if the registration
+// gates moved and the rule's gate did not. What a pass proves: for every
+// os/work pair, each agent gets the rule exactly when its server is
+// registered there, read from the real registration templates (the setup
+// script for Claude Code and opencode, config.toml for Codex), so an agent is
+// never told to use a server it lacks, nor left on built-in search where it
+// has one. It says nothing about whether the server works on that machine.
+for (const os of ['darwin', 'linux']) {
+  for (const work of [false, true]) {
+    test(`os=${os} work=${work}: web-search rule renders exactly where Parallel is registered`, () => {
+      const scriptRegisters = execTemplate({ work, chezmoi: { os } }).trim() !== ''
+      const codexRegisters = chezmoi((home) => ['cat', join(home, '.codex/config.toml')], { work, chezmoi: { os } }).includes('[mcp_servers.parallel]')
+      for (const [reader, target, registered] of [
+        ['claude', '.claude/CLAUDE.md', scriptRegisters],
+        ['codex', '.codex/AGENTS.md', codexRegisters],
+        ['opencode', '.config/opencode/AGENTS.md', scriptRegisters],
+      ]) {
+        const hasRule = renderRules(target, work, os).includes(SEARCH_RULE[reader])
+        assert.equal(hasRule, registered, `${reader}: rule=${hasRule} but server registered=${registered}`)
+      }
+    })
+  }
+}
