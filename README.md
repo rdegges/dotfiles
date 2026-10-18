@@ -241,16 +241,20 @@ The only per-machine step is `cf auth login`. `cf` keeps its own credentials, ou
   opencode, and Codex get [Parallel's Search MCP server](https://parallel.ai)
   (`https://search.parallel.ai/mcp`, tools `web_search` and `web_fetch`),
   signed with my API key (higher rate limits; calls spend the free $5/month
-  credit). `run_onchange_after_add-parallel-mcp.sh.tmpl` reads the key once
+  credit). `run_onchange_after_setup-parallel-mcp.sh.tmpl` reads the key once
   from `op://Private/Parallel/credential` into `~/.config/parallel/api-key`
   (mode 0600), then registers the server with `claude mcp add --scope user` and
   `opencode mcp add --global`, because chezmoi does not own those tools' config
   files. The Codex entry is in `dot_codex/config.toml.tmpl`. Claude Code and
   Codex read the key from `PARALLEL_API_KEY`, which `dot_zshenv` exports from
   that file. opencode reads the file directly (`{file:...}`), so the desktop
-  app works too. No config stores the key. The script reruns only when its text
-  changes, so to rotate the key, update the 1Password item, run
-  `(umask 077; op read op://Private/Parallel/credential > ~/.config/parallel/api-key)`,
+  app works too. No config stores the key. The only per-machine step: before
+  the first apply, sign in to `op` and make sure that the `Private` vault has an
+  API Credential item named `Parallel` with the key in its `credential` field.
+  Until then every apply fails, and the hourly job shows `chezmoi.FAILED` in
+  each new shell. The script reruns only when its text changes, so to rotate
+  the key, update the 1Password item, run
+  `(umask 077; rm -f ~/.config/parallel/api-key; op read op://Private/Parallel/credential > ~/.config/parallel/api-key)`,
   and open a new shell.
 
 `run_onchange_reconcile-agent-clis.sh.tmpl` keeps exactly one copy of `claude`

@@ -16,5 +16,5 @@ export PATH="$HOME/.local/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bi
 export OP_BIOMETRIC_UNLOCK_ENABLED=true
 
 # Parallel Search MCP key for Claude Code and Codex, written once from
-# 1Password by run_onchange_after_add-parallel-mcp.sh.tmpl (personal machines).
+# 1Password by run_onchange_after_setup-parallel-mcp.sh.tmpl (personal machines).
 [ -r "$HOME/.config/parallel/api-key" ] && export PARALLEL_API_KEY="$(<"$HOME/.config/parallel/api-key")"

@@ -1,4 +1,4 @@
-// Parallel Search MCP on personal machines: run_onchange_after_add-parallel-mcp.sh.tmpl
+// Parallel Search MCP on personal machines: run_onchange_after_setup-parallel-mcp.sh.tmpl
 // registers it for Claude Code and opencode, and dot_codex/config.toml.tmpl
 // carries the Codex entry.
 //
@@ -33,7 +33,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 const SOURCE = new URL('../../', import.meta.url).pathname
-const TEMPLATE = 'run_onchange_after_add-parallel-mcp.sh.tmpl'
+const TEMPLATE = 'run_onchange_after_setup-parallel-mcp.sh.tmpl'
 const URL_ = 'https://search.parallel.ai/mcp'
 const HEADER = 'Authorization: Bearer ${PARALLEL_API_KEY}'
 const CLAUDE_ADD = `claude mcp add --scope user --transport http parallel ${URL_} --header ${HEADER}`
@@ -145,7 +145,7 @@ function sandbox({ claude = true, opencode = true, op = true, keyFile = true } =
   mkdirSync(bin, { recursive: true })
   mkdirSync(pathBin)
   mkdirSync(join(home, 'project'))
-  const script = join(base, 'add-parallel-mcp.sh')
+  const script = join(base, 'setup-parallel-mcp.sh')
   writeFileSync(script, SCRIPT_TEXT)
   const keyPath = join(home, '.config/parallel/api-key')
   if (keyFile) {
