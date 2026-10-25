@@ -6,6 +6,10 @@
     ]
   },
   "model": "opus",
+  "attribution": {
+    "commit": "",
+    "pr": ""
+  },
   "enabledPlugins": {
     "gopls-lsp@claude-plugins-official": true,
     "pkms@rdegges": true
