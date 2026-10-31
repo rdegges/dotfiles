@@ -288,3 +288,56 @@ test('Seerr reset is behind an ask; the no-ask Seerr bullet only runs the scan j
   assert.doesNotMatch(free.find((b) => b.startsWith('**Seerr sync.**')), /unknown/)
   assert.match(bullets(subsection(section('Step 5'), 'Ask before you do these')).join('\n'), /Set a Seerr item to unknown/)
 })
+
+// --- Series layout and leftovers of deleted media ----------------------------
+
+test('scope offers series and leftovers runs, and all includes both', () => {
+  const scope = section('Scope')
+  assert.match(scope, /^- `series`:/m)
+  assert.match(scope, /^- `leftovers`:/m)
+  assert.match(scope, /full `all` run includes the `series` and `leftovers` checks/)
+  assert.match(frontmatter(skill).description, /'series', 'leftovers'/)
+})
+
+test('series layout: Sonarr is the source of truth and every known fault class is listed', () => {
+  const body = subsection(section('Step 4'), 'Series layout')
+  assert.match(body, /Sonarr is the source of truth/)
+  for (const f of ['Folder name', 'Duplicate folders', 'Unmanaged folder', 'Missing folder', 'Loose files', 'Wrong library', 'Wrong match', 'No TMDB ID', 'Seerr link']) {
+    assert.match(body, new RegExp(`^\\| ${f} \\|`, 'm'), `no "${f}" row`)
+  }
+})
+
+test('leftovers: all six places are examined, and sizes are reported', () => {
+  const body = subsection(section('Step 4'), 'Leftovers from deleted media')
+  for (const p of ['Library folders', 'Sonarr and Radarr', 'Jellyfin', 'Seerr', 'qBittorrent', 'Download folders']) {
+    assert.match(body, new RegExp(`^\\| ${p} \\|`, 'm'), `no "${p}" row`)
+  }
+  assert.match(body, /Give the size of each leftover/)
+})
+
+test('series and leftover changes that move, add, or delete data sit behind an ask', () => {
+  const ask = bullets(subsection(section('Step 5'), 'Ask before you do these')).join('\n')
+  for (const re of [/Fix a series folder\. Change the series path in Sonarr with the option that moves the files/,
+    /Add an unmanaged series or movie folder to Sonarr or Radarr\. Add it unmonitored and with no search/,
+    /Move a series to the other library/, /Remove a series or movie from Sonarr or Radarr when its path does not exist/,
+    /Delete a torrent and its data in qBittorrent, or delete files from a download folder\. Give the size of each first/]) {
+    assert.match(ask, re)
+  }
+})
+
+test('the no-ask Jellyfin series match uses only the exact ID from Sonarr; empty folders go to holding', () => {
+  const free = bullets(subsection(section('Step 5'), 'Fix these without asking'))
+  const match = free.find((b) => b.startsWith('**Jellyfin series match from Sonarr.**'))
+  assert.ok(match, 'no Jellyfin series match bullet')
+  assert.match(match, /exact TVDB or TMDB ID that Sonarr has/)
+  assert.match(match, /Do this only when Sonarr gives the ID/)
+  const empty = free.find((b) => b.startsWith('**Empty media folders.**'))
+  assert.ok(empty, 'no empty-folder bullet')
+  assert.match(empty, /holds no video file to the holding folder/)
+})
+
+test('Step 6 checks series fixes against Sonarr and Seerr, and reports freed space', () => {
+  const s6 = section('Step 6')
+  assert.match(s6, /one series item with the Sonarr TVDB and TMDB IDs/)
+  assert.match(s6, /disk space that the cleanup made free/)
+})
