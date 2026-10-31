@@ -70,7 +70,8 @@ Use read-only commands until Step 5. Run `ffprobe` from inside the Jellyfin cont
     - Every Sonarr series: path, title, year, TVDB ID, TMDB ID, series type, and episode file counts.
     - Every Radarr movie: path, TMDB ID, and whether it has a file.
     - Every Jellyfin series and movie: path and provider IDs (with a `userId`).
-    - The folders at the top level of each library root, and the video count in each folder.
+    - The folders at the top level of each library root, and the count of video files in each folder at any depth.
+    - The Sonarr and Radarr history events `episodeFileDeleted` and `movieFileDeleted`, and the import events (`downloadFolderImported`), for every item.
     - The files in the qBittorrent download folders, with sizes and link counts.
 
 ## Step 4: Find the faults
@@ -107,9 +108,9 @@ Examine every series for these faults:
 | Folder name | The series folder is not `Title (Year)` as Sonarr names it, or it does not agree with the Sonarr series path. Two shows with the same title need the year to tell them apart. |
 | Duplicate folders | Two folders hold one series (for example, `Dragonball Z` and `Dragon Ball Z`). Jellyfin then shows two series, and Seerr links to only one. |
 | Unmanaged folder | A series folder has no Sonarr series. Sonarr does not upgrade it, and Seerr has no link to delete it. |
-| Missing folder | A Sonarr series path does not exist. |
+| Missing folder | A Sonarr series path does not exist, and Sonarr imported episode files for it before. A series that is still waiting for its first download has no folder, and that is correct. |
 | Loose files | Episode files are at the top of the library root or of the series folder, with no season folder. A series that Sonarr manages with season folders turned off is correct as it is. |
-| Wrong library | A series of Sonarr type `anime` is in the shows library, or a `standard` series is in the anime library. The track policy and the metadata source of the library then do not fit. |
+| Wrong library | A series of Sonarr type `anime` is in the shows library, or a `standard` series is in the anime library. The track policy and the metadata source of the library then do not fit. Step 3.5 already applies the anime policy by series type, so the user can keep the series there on purpose. Only report it. |
 | Wrong match | The TVDB or TMDB ID of the Jellyfin series does not agree with the Sonarr series. Jellyfin split one series into two items, or put two series into one item. |
 | No TMDB ID | The Jellyfin series has a TVDB ID only. Seerr cannot link it. |
 | Seerr link | The series is in Jellyfin but not "available" in Seerr, or Seerr shows it as "available" with no Sonarr link. |
@@ -121,10 +122,10 @@ Deleted media can leave data in six places. Examine each one:
 | Place | Leftover |
 |---|---|
 | Library folders | A movie or series folder that holds no video, only sidecars, `.nfo` files, images, or app folders. |
-| Sonarr and Radarr | A series or movie whose path does not exist. A monitored item with no file, which Sonarr or Radarr searches for again. Only report it: the user can have deleted it on purpose. |
+| Sonarr and Radarr | A series or movie whose files Sonarr or Radarr imported and that now has no file: its history has an `episodeFileDeleted` or `movieFileDeleted` event, or its path does not exist after an import. An item that never had a file is a pending request, not a leftover. Only report it: the user can have deleted it on purpose. |
 | Jellyfin | An item whose path does not exist. A library scan usually removes it. |
 | Seerr | An item that shows as "available", but Jellyfin has no item with its TMDB ID. |
-| qBittorrent | A torrent whose files have a link count of 1 in the download folder, while the hardlinked library copy is gone. It uses disk space for media that is no longer in the library. |
+| qBittorrent | A complete torrent in a Sonarr or Radarr category whose import is in the Sonarr or Radarr history, and whose imported library file no longer exists. It uses disk space for media that is no longer in the library. A link count of 1 alone does not prove this, because an import by copy also leaves a link count of 1. |
 | Download folders | Files or folders that no torrent and no queue item holds. |
 
 Give the size of each leftover, and the total disk space that the cleanup can make free.
@@ -164,17 +165,17 @@ These fixes are easy to undo.
 - **Fake downloads.** This covers only Sonarr or Radarr queue items whose download is complete or import-blocked. Remove the item from the Sonarr or Radarr queue with `removeFromClient=true` and `blocklist=true`. This deletes the torrent and its files from qBittorrent, and Sonarr or Radarr searches again. Name the Prowlarr indexer that served it in the report. A library file under 50 MB, or an item that is still downloading, goes under "Needs your decision". Never remove or blocklist it without an ask.
 - **Jellyfin metadata.** Refresh an item that has no match. Then start a library scan.
 - **Seerr sync.** After renames, run the Seerr `jellyfin-full-scan` job.
-- **Jellyfin series match from Sonarr.** If the Jellyfin series has a wrong match or no TMDB ID, apply the match with the exact TVDB or TMDB ID that Sonarr has (on Jellyfin: `/Items/RemoteSearch/Apply/{id}`). Do this only when Sonarr gives the ID. Then run the Seerr `jellyfin-full-scan` job.
-- **Empty media folders.** Move a library folder that holds no video file to the holding folder. Write each folder in the report.
+- **Jellyfin series match from Sonarr.** If the Jellyfin series has a wrong match or no TMDB ID, apply the match with the exact TVDB or TMDB ID that Sonarr has (on Jellyfin: `/Items/RemoteSearch/Apply/{id}`). Do this only when Sonarr gives the ID. Pair the Jellyfin series with the Sonarr series by path, never by title. Then run the Seerr `jellyfin-full-scan` job.
 
 ### Ask before you do these
 
 - Rename or move a media file or folder. Use the Sonarr or Radarr rename function when it manages the item, so that their records stay correct. This includes a subtitle file that is next to its video but has a different base name.
+- Move an empty media folder to the holding folder. A folder counts as empty only when, at any depth (season folders included), it holds nothing but sidecar files, `.nfo` files, images, and app folders, and no Sonarr or Radarr item has that path. List each folder with its size first.
 - Delete media, or download it again.
-- Fix a series folder. Change the series path in Sonarr with the option that moves the files, so that Sonarr moves the folder and keeps its records. Then use the Sonarr rename function for the episode files. For duplicate folders, first make sure that no episode file is in both folders, and keep the folder that Sonarr manages.
+- Fix a series folder. Change the series path in Sonarr with the option that moves the files, so that Sonarr moves the folder and keeps its records. Then use the Sonarr rename function for the episode files. For duplicate folders, keep the folder that Sonarr manages. First import every episode that exists only in the other folder, with Sonarr Manual Import. When an episode is in both folders, list both files and ask which one to keep. Never drop a folder that still holds a video file.
 - Add an unmanaged series or movie folder to Sonarr or Radarr. Add it unmonitored and with no search, unless the user says otherwise.
 - Move a series to the other library (shows or anime), or change its Sonarr series type.
-- Remove a series or movie from Sonarr or Radarr when its path does not exist. Then make sure that Seerr no longer shows it as "available".
+- Remove a series or movie from Sonarr or Radarr when the Leftovers row flags it. Never offer to remove an item that never had a file. Then make sure that Seerr no longer shows it as "available".
 - Delete a torrent and its data in qBittorrent, or delete files from a download folder. Give the size of each first.
 - Remux or re-encode a file. MP4 flags and tags cannot be changed in place, so they need a remux.
 - Set a Seerr item to unknown, or clear its data. First make sure that the item is truly missing from Jellyfin: it is not only unmatched (no provider IDs), and it is not a series that has only a TVDB ID.
@@ -196,7 +197,7 @@ The qBittorrent faults from the "Downloads" row are report-only. Put them under 
 4. Read the Sonarr and Radarr queues again after you remove fakes.
 5. The Seerr `jellyfin-full-scan` job runs in the background. Wait for the job to finish. Then compare Seerr with Jellyfin again. The count of stale IDs and missing items must be zero, or you must report each one.
 6. After a series fix, make sure that Jellyfin shows one series item with the Sonarr TVDB and TMDB IDs, and that Seerr shows the series as "available" with a Sonarr link.
-7. After a leftover cleanup, give the disk space that the cleanup made free.
+7. After a leftover cleanup, make sure that each folder you moved is in the holding folder and gone from the library root, and that each removed Sonarr or Radarr item no longer shows in Seerr as "available". Then give the disk space that the cleanup made free.
 8. After the Bazarr search is complete, list each file that still has no subtitle in the language of the user. Put it under "Left as is" or "Needs your decision".
 
 Do not report a fix as done until this step passes.
