@@ -6,7 +6,7 @@
 //     'apt-get update -qq && apt-get install -y -qq ffmpeg mkvtoolnix >/dev/null && node --test tests/skills/'
 //
 // What a pass proves: the skill hardcodes the user's stack (Jellyfin as the
-// server, Infuse as the primary player, Seerr for requests, qBittorrent as the
+// server and a primary player, Infuse as a primary player, Seerr for requests, qBittorrent as the
 // download client, and Sonarr, Radarr, Prowlarr, Bazarr as the *arr apps), with
 // one row per app and no other server, player, request, or download app named;
 // it holds no host, IP, tailnet name, URL, or API key (this repo is public) and
@@ -91,10 +91,10 @@ test('stack table: exactly the user\'s apps, one row each, each with its role', 
   }
 })
 
-test('Infuse is the one primary player; Jellyfin is the server', () => {
+test('Jellyfin and Infuse are the primary players; Jellyfin is also the server', () => {
   const rows = stackRows()
   const primary = Object.keys(rows).filter((a) => /primary player/i.test(rows[a].job))
-  assert.deepEqual(primary, ['Infuse'])
+  assert.deepEqual(primary.sort(), ['Infuse', 'Jellyfin'])
   assert.match(rows.Jellyfin.job, /server/i)
 })
 
@@ -194,8 +194,13 @@ test('track policy: one default audio, at most one default subtitle, no forced f
 test('Step 6 re-probes changed files and gates "done" on its checks', () => {
   const s6 = section('Step 6')
   assert.match(s6, /Run `ffprobe` again on each file that you changed/)
-  assert.match(s6, /exactly one audio track has the `default` flag/)
-  assert.match(s6, /must be zero/)
+  assert.match(s6, /Check every flag and tag that you wrote in Step 5/)
+  assert.match(s6, /exactly one audio track has the `default` flag/i)
+  assert.match(s6, /At most one subtitle track has the `default` flag/)
+  assert.match(s6, /No foreign subtitle has the `forced` flag/)
+  assert.match(s6, /Each language tag that you set is present/)
+  assert.match(s6, /must be zero, or you must report each one/)
+  assert.match(s6, /Wait for the job to finish/)
   assert.match(s6, /Do not report a fix as done until this step passes/)
 })
 
@@ -253,5 +258,33 @@ test('selector rule: mkvpropedit track:(ffprobe index + 1) edits that stream, wi
 
 // --- Proposals for the maker (do not fail the suite) --------------------------
 
-test.todo('PROPOSED CONTRACT: Step 4 "Fakes" auto-removal is limited to queue items; a library file under 50 MB goes to "Needs your decision"')
-test.todo('PROPOSED CONTRACT: Step 1 records whether Infuse reads SMB or a Jellyfin share, since Infuse metadata and the Step 7 advice depend on it')
+test('fake auto-removal covers only complete or import-blocked queue items; library files and active downloads need an ask', () => {
+  const fakes = bullets(subsection(section('Step 5'), 'Fix these without asking'))
+    .find((b) => b.startsWith('**Fake downloads.**'))
+  assert.match(fakes, /only Sonarr or Radarr queue items whose download is complete or import-blocked/)
+  assert.match(fakes, /library file under 50 MB, or an item that is still downloading, goes under "Needs your decision"/)
+  assert.match(fakes, /Never remove or blocklist it without an ask/)
+  assert.match(section('Step 4'), /\| Fakes \| A Sonarr or Radarr queue item whose download is complete or import-blocked/)
+})
+
+test('Step 1 records how Infuse reaches the library, and Step 7 advice depends on it', () => {
+  assert.match(section('Step 1'), /How Infuse reaches the library: SMB .* or a Jellyfin share/)
+  assert.doesNotMatch(stackRows().Infuse.use, /directly over SMB/)
+  const s7 = section('Step 7')
+  assert.match(s7, /If Infuse reads the library over SMB/)
+  assert.match(s7, /If Infuse uses a Jellyfin share, the fix is the Jellyfin match/)
+})
+
+test('seeding guard: no header edit on a hardlinked or still-seeding file', () => {
+  assert.match(section('Step 3'), /link count of each video/)
+  const guard = bullets(subsection(section('Step 5'), 'Fix these without asking'))
+    .find((b) => b.startsWith('**Seeding guard.**'))
+  assert.ok(guard, 'no seeding-guard bullet')
+  assert.match(guard, /link count of the file is more than 1, or a qBittorrent torrent still holds the file, do not edit/)
+})
+
+test('Seerr reset is behind an ask; the no-ask Seerr bullet only runs the scan job', () => {
+  const free = bullets(subsection(section('Step 5'), 'Fix these without asking'))
+  assert.doesNotMatch(free.find((b) => b.startsWith('**Seerr sync.**')), /unknown/)
+  assert.match(bullets(subsection(section('Step 5'), 'Ask before you do these')).join('\n'), /Set a Seerr item to unknown/)
+})
