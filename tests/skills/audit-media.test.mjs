@@ -288,3 +288,132 @@ test('Seerr reset is behind an ask; the no-ask Seerr bullet only runs the scan j
   assert.doesNotMatch(free.find((b) => b.startsWith('**Seerr sync.**')), /unknown/)
   assert.match(bullets(subsection(section('Step 5'), 'Ask before you do these')).join('\n'), /Set a Seerr item to unknown/)
 })
+
+// --- Series layout and leftovers of deleted media ----------------------------
+
+test('scope offers series and leftovers runs, and all includes both', () => {
+  const scope = section('Scope')
+  assert.match(scope, /^- `series`:/m)
+  assert.match(scope, /^- `leftovers`:/m)
+  assert.match(scope, /full `all` run includes the `series` and `leftovers` checks/)
+  assert.match(frontmatter(skill).description, /'series', 'leftovers'/)
+})
+
+test('series layout: Sonarr is the source of truth and every known fault class is listed', () => {
+  const body = subsection(section('Step 4'), 'Series layout')
+  assert.match(body, /Sonarr is the source of truth/)
+  for (const f of ['Folder name', 'Duplicate folders', 'Unmanaged folder', 'Missing folder', 'Loose files', 'Wrong library', 'Wrong match', 'No TMDB ID', 'Seerr link']) {
+    assert.match(body, new RegExp(`^\\| ${f} \\|`, 'm'), `no "${f}" row`)
+  }
+})
+
+test('leftovers: all six places are examined, and sizes are reported', () => {
+  const body = subsection(section('Step 4'), 'Leftovers from deleted media')
+  for (const p of ['Library folders', 'Sonarr and Radarr', 'Jellyfin', 'Seerr', 'qBittorrent', 'Download folders']) {
+    assert.match(body, new RegExp(`^\\| ${p} \\|`, 'm'), `no "${p}" row`)
+  }
+  assert.match(body, /Give the size of each leftover/)
+})
+
+test('series and leftover changes that move, add, or delete data sit behind an ask', () => {
+  const ask = bullets(subsection(section('Step 5'), 'Ask before you do these')).join('\n')
+  for (const re of [/Fix a series folder\. Change the series path in Sonarr with the option that moves the files/,
+    /Add an unmanaged series or movie folder to Sonarr or Radarr\. Add it unmonitored and with no search/,
+    /Move a series to the other library/, /Remove a series or movie from Sonarr or Radarr when the Leftovers row flags it/, /Move an empty media folder to the holding folder/,
+    /Delete a torrent and its data in qBittorrent, or delete files from a download folder\. Give the size of each first/]) {
+    assert.match(ask, re)
+  }
+})
+
+test('the no-ask Jellyfin series match uses only the exact ID from Sonarr, paired by path', () => {
+  const free = bullets(subsection(section('Step 5'), 'Fix these without asking'))
+  const match = free.find((b) => b.startsWith('**Jellyfin series match from Sonarr.**'))
+  assert.ok(match, 'no Jellyfin series match bullet')
+  assert.match(match, /exact TVDB or TMDB ID that Sonarr has/)
+  assert.match(match, /Do this only when Sonarr gives the ID/)
+  assert.match(match, /Pair the Jellyfin series with the Sonarr series by path, never by title/)
+})
+
+test('Step 6 checks series fixes against Sonarr and Seerr, and reports freed space', () => {
+  const s6 = section('Step 6')
+  assert.match(s6, /one series item with the Sonarr TVDB and TMDB IDs/)
+  assert.match(s6, /disk space that the cleanup made free/)
+})
+
+test('Step 3 collects the series and leftover inputs: IDs, types, paths, video counts, and link counts', () => {
+  const s3 = section('Step 3')
+  assert.match(s3, /For the `series` and `leftovers` checks, also read/)
+  assert.match(s3, /Every Sonarr series: path, title, year, TVDB ID, TMDB ID, series type/)
+  assert.match(s3, /Every Radarr movie: path, TMDB ID, and whether it has a file/)
+  assert.match(s3, /Every Jellyfin series and movie: path and provider IDs \(with a `userId`\)/)
+  assert.match(s3, /top level of each library root, and the count of video files in each folder at any depth/)
+  assert.match(s3, /`episodeFileDeleted` and `movieFileDeleted`/)
+  assert.match(s3, /qBittorrent download folders, with sizes and link counts/)
+})
+
+// The series and leftover work adds many destructive actions. Only the fake-download
+// bullet may delete through the no-ask path; everything else must stay behind the ask.
+test('no-ask fixes never delete data, add or remove *arr items, change a series path or type, or reset Seerr', () => {
+  const free = bullets(subsection(section('Step 5'), 'Fix these without asking'))
+    .filter((b) => !b.startsWith('**Fake downloads.**'))
+  const forbidden = /\b(delete|remove|blocklist|series path|series type|unmonitored|unknown|clear its data)\b/i
+  for (const b of free) assert.doesNotMatch(b, forbidden, b)
+})
+
+test('the *arr leftovers row needs evidence of an earlier import; an item that never had a file is not a leftover', () => {
+  const row = subsection(section('Step 4'), 'Leftovers from deleted media').split('\n').find((l) => l.startsWith('| Sonarr and Radarr |'))
+  assert.match(row, /`episodeFileDeleted` or `movieFileDeleted`/)
+  assert.match(row, /never had a file is a pending request, not a leftover/)
+  assert.match(row, /Only report it/)
+  const ask = bullets(subsection(section('Step 5'), 'Ask before you do these')).find((b) => b.startsWith('Remove a series or movie'))
+  assert.match(ask, /Never offer to remove an item that never had a file/)
+})
+
+test('duplicate series folders: import the unique episodes first, ask about shared ones, keep the Sonarr folder', () => {
+  const ask = bullets(subsection(section('Step 5'), 'Ask before you do these')).find((b) => b.startsWith('Fix a series folder.'))
+  assert.ok(ask, 'no series-folder ask bullet')
+  assert.match(ask, /keep the folder that Sonarr manages/)
+  assert.match(ask, /with Sonarr Manual Import/)
+  assert.match(ask, /When an episode is in both folders, list both files and ask which one to keep/)
+  assert.match(ask, /Never drop a folder that still holds a video file/)
+  assert.match(ask, /Sonarr rename function for the episode files/)
+})
+
+test('removing a dead *arr item is followed by a Seerr check; a Sonarr-ID match is followed by the Seerr scan', () => {
+  const ask = bullets(subsection(section('Step 5'), 'Ask before you do these')).find((b) => b.startsWith('Remove a series or movie'))
+  assert.match(ask, /Then make sure that Seerr no longer shows it as "available"/)
+  const match = bullets(subsection(section('Step 5'), 'Fix these without asking'))
+    .find((b) => b.startsWith('**Jellyfin series match from Sonarr.**'))
+  assert.match(match, /Then run the Seerr `jellyfin-full-scan` job/)
+})
+
+test('pitfall: a series folder renamed by hand must also change its path in Sonarr', () => {
+  assert.match(section('Known pitfalls'), /renamed by hand keeps its old path in Sonarr.*Change the path in Sonarr, not only on disk/)
+})
+
+test('Step 6 checks are numbered 1..N with no gap or repeat (the series and leftover checks were inserted mid-list)', () => {
+  const nums = section('Step 6').match(/^\d+(?=\. )/gm).map(Number)
+  assert.deepEqual(nums, nums.map((_, i) => i + 1))
+  assert.match(section('Step 6'), /^8\. After the Bazarr search is complete/m)
+})
+
+// The empty-folder move sits behind an ask and is guarded: a series folder keeps its
+// videos in season folders, and a pending Sonarr or Radarr item can point at a folder.
+test('the empty-folder move is behind an ask, counts at any depth, and skips folders an *arr item points at', () => {
+  const free = bullets(subsection(section('Step 5'), 'Fix these without asking'))
+  assert.ok(!free.some((b) => /empty media folder/i.test(b)), 'empty-folder move is still in the no-ask list')
+  const ask = bullets(subsection(section('Step 5'), 'Ask before you do these')).find((b) => b.startsWith('Move an empty media folder'))
+  assert.ok(ask, 'no empty-folder ask bullet')
+  assert.match(ask, /at any depth/)
+  assert.match(ask, /no Sonarr or Radarr item has that path/)
+})
+
+test('qBittorrent leftovers need an import record and a missing library file, not only a link count', () => {
+  const row = subsection(section('Step 4'), 'Leftovers from deleted media').split('\n').find((l) => l.startsWith('| qBittorrent |'))
+  assert.match(row, /import is in the Sonarr or Radarr history/)
+  assert.match(row, /link count of 1 alone does not prove this/)
+})
+
+test('Step 6 checks moved folders and Seerr after a leftover cleanup', () => {
+  assert.match(section('Step 6'), /each folder you moved is in the holding folder and gone from the library root/)
+})
