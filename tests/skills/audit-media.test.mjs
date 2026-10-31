@@ -341,3 +341,64 @@ test('Step 6 checks series fixes against Sonarr and Seerr, and reports freed spa
   assert.match(s6, /one series item with the Sonarr TVDB and TMDB IDs/)
   assert.match(s6, /disk space that the cleanup made free/)
 })
+
+test('Step 3 collects the series and leftover inputs: IDs, types, paths, video counts, and link counts', () => {
+  const s3 = section('Step 3')
+  assert.match(s3, /For the `series` and `leftovers` checks, also read/)
+  assert.match(s3, /Every Sonarr series: path, title, year, TVDB ID, TMDB ID, series type/)
+  assert.match(s3, /Every Radarr movie: path, TMDB ID, and whether it has a file/)
+  assert.match(s3, /Every Jellyfin series and movie: path and provider IDs \(with a `userId`\)/)
+  assert.match(s3, /top level of each library root, and the video count in each folder/)
+  assert.match(s3, /qBittorrent download folders, with sizes and link counts/)
+})
+
+// The series and leftover work adds many destructive actions. Only the fake-download
+// bullet may delete through the no-ask path; everything else must stay behind the ask.
+test('no-ask fixes never delete data, add or remove *arr items, change a series path or type, or reset Seerr', () => {
+  const free = bullets(subsection(section('Step 5'), 'Fix these without asking'))
+    .filter((b) => !b.startsWith('**Fake downloads.**'))
+  const forbidden = /\b(delete|remove|blocklist|series path|series type|unmonitored|unknown|clear its data)\b/i
+  for (const b of free) assert.doesNotMatch(b, forbidden, b)
+})
+
+test('a monitored *arr item with no file is report-only in the leftovers check', () => {
+  const row = subsection(section('Step 4'), 'Leftovers from deleted media').split('\n').find((l) => l.startsWith('| Sonarr and Radarr |'))
+  assert.match(row, /monitored item with no file/)
+  assert.match(row, /Only report it/)
+})
+
+test('duplicate series folders: check for shared episodes first, then keep the Sonarr folder', () => {
+  const ask = bullets(subsection(section('Step 5'), 'Ask before you do these')).find((b) => b.startsWith('Fix a series folder.'))
+  assert.ok(ask, 'no series-folder ask bullet')
+  assert.match(ask, /first make sure that no episode file is in both folders, and keep the folder that Sonarr manages/)
+  assert.match(ask, /Sonarr rename function for the episode files/)
+})
+
+test('removing a dead *arr item is followed by a Seerr check; a Sonarr-ID match is followed by the Seerr scan', () => {
+  const ask = bullets(subsection(section('Step 5'), 'Ask before you do these')).find((b) => b.startsWith('Remove a series or movie'))
+  assert.match(ask, /Then make sure that Seerr no longer shows it as "available"/)
+  const match = bullets(subsection(section('Step 5'), 'Fix these without asking'))
+    .find((b) => b.startsWith('**Jellyfin series match from Sonarr.**'))
+  assert.match(match, /Then run the Seerr `jellyfin-full-scan` job/)
+})
+
+test('pitfall: a series folder renamed by hand must also change its path in Sonarr', () => {
+  assert.match(section('Known pitfalls'), /renamed by hand keeps its old path in Sonarr.*Change the path in Sonarr, not only on disk/)
+})
+
+test('Step 6 checks are numbered 1..N with no gap or repeat (the series and leftover checks were inserted mid-list)', () => {
+  const nums = section('Step 6').match(/^\d+(?=\. )/gm).map(Number)
+  assert.deepEqual(nums, nums.map((_, i) => i + 1))
+  assert.match(section('Step 6'), /^8\. After the Bazarr search is complete/m)
+})
+
+// PROPOSED CONTRACT (todo: does not fail the suite). The no-ask "Empty media folders"
+// move has no guard: a series folder holds its videos in season subfolders, and Sonarr
+// can create empty folders for monitored series that wait for a download. Moving either
+// breaks the Sonarr path ("Missing folder") or hides a whole series, with no ask.
+test.todo('PROPOSED CONTRACT: the no-ask empty-folder move counts videos at any depth and skips folders a Sonarr or Radarr item points at', () => {
+  const empty = bullets(subsection(section('Step 5'), 'Fix these without asking'))
+    .find((b) => b.startsWith('**Empty media folders.**'))
+  assert.match(empty, /any depth|subfolder|recursive/i)
+  assert.match(empty, /Sonarr|Radarr/)
+})
