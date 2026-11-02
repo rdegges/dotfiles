@@ -143,13 +143,13 @@ On work machines, chezmoi also writes one AWS SSO profile and wraps the `aws` co
 
 ## Email (Himalaya)
 
-The [Himalaya CLI](https://github.com/pimalaya/himalaya) is configured for my iCloud Mail account at `~/.config/himalaya/config.toml`. The config never stores the password — it shells out to macOS `security(1)` at runtime to read an app-specific password from the Keychain.
+The [Himalaya CLI](https://github.com/pimalaya/himalaya) is configured for my iCloud Mail and Fastmail accounts at `~/.config/himalaya/config.toml`. The config never stores the password — it shells out to macOS `security(1)` at runtime to read an app-specific password from the Keychain.
 
 A second, work-only Snyk Gmail account is defined in the same config but gated behind the `work` flag (see [Work vs. personal machines](#work-vs-personal-machines)), so it only renders on my work laptop.
 
 On `chezmoi apply`, a one-shot bootstrap script (`run_once_install-himalaya.sh.tmpl`) installs the himalaya binary to `~/.local/bin` via the [official installer](https://github.com/pimalaya/himalaya#pre-built-binary).
 
-The only per-machine step is loading the iCloud app password into the Keychain:
+Each machine needs one app password in the Keychain per mailbox. The steps below load the iCloud one, which every account except Fastmail and Snyk uses:
 
 1. Generate an app-specific password at <https://account.apple.com> (Sign-In and Security → App-Specific Passwords).
 2. Store it in the login Keychain under the service name the config expects:
@@ -165,6 +165,15 @@ The only per-machine step is loading the iCloud app password into the Keychain:
    ```bash
    himalaya folder list
    ```
+
+`randall@aihackers.club` needs its own app password, generated in Fastmail under Settings, Privacy & Security:
+
+```bash
+read -rs "?Paste app password: " PW; \
+  security add-generic-password -U -s himalaya-fastmail -a rdegges@sent.com -w "$PW"; \
+  unset PW
+himalaya folder list -a aihackers
+```
 
 
 ## Toolchain (asdf)
