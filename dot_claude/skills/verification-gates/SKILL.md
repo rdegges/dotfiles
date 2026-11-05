@@ -37,6 +37,11 @@ A gate is any check that blocks or blesses a merge, deploy, or run.
   nothing matched, API cap, subprocess error) in one classifier and decide
   each deliberately: fail closed, or skip loudly with a reason — never
   report success. "Nothing to do" green is the branch nobody attacks.
+- A negative result ("no leak", "marker absent", "0 matches") counts only with
+  a positive control in the same run: show the probe seeing something it must
+  see (the request carrying the marker arrived). A probe that returns nothing
+  is "cannot evaluate". A probe that also counts traffic from outside the system
+  under test is measuring the wrong thing.
 - A new gate counts as installed only after it has been observed rejecting
   a seeded violation. A green run that had nothing to reject proves nothing;
   making a gate required multiplies the cost of a false green. Before you
