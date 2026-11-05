@@ -94,6 +94,11 @@ reports a bypass, move the guard to that point instead of adding the new
 path to a list. If the code has no such point, do not build one: guard the
 paths you have and name the bypass class under **Not done**.
 
+When the invariant limits what leaves the system (telemetry, logs, a
+third-party API), start deny-by-default on every channel: allow-list what may
+leave and drop the rest. Never write a list of known-bad fields. Read what the
+SDK collects when a setting is omitted, and test that an allowed field arrives.
+
 Write command output to files with unique names outside the worktree, for
 example `<P>/logs/<step>-$(date +%s).log` (create `<P>/logs` first), and test
 the exit code directly or with `set -o pipefail`. Never gate a step on a

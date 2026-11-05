@@ -417,3 +417,67 @@ test('qBittorrent leftovers need an import record and a missing library file, no
 test('Step 6 checks moved folders and Seerr after a leftover cleanup', () => {
   assert.match(section('Step 6'), /each folder you moved is in the holding folder and gone from the library root/)
 })
+
+// --- qBittorrent client health before a dead-torrent verdict (98080f4) --------
+//
+// A stalled torrent on a client with no DHT peers or a broken tracker is a client
+// fault, not a dead release. These pin that the health inputs are read in Step 3,
+// read-only, and that Step 5 refuses removal offers when they show a client fault.
+
+function clientFaultRule() {
+  const para = section('Step 5').split(/\n\s*\n/).find((p) => p.startsWith('The qBittorrent faults from the "Downloads" row'))
+  assert.ok(para, 'no "The qBittorrent faults from the Downloads row" paragraph in Step 5')
+  return para.replace(/\s+/g, ' ')
+}
+
+test('Step 3 reads qBittorrent client health: dht_nodes and connection_status, and tracker messages of stuck torrents', () => {
+  const s3 = section('Step 3')
+  assert.match(s3, /`dht_nodes` and `connection_status` from `\/api\/v2\/transfer\/info`/)
+  assert.match(s3, /tracker messages \(`\/api\/v2\/torrents\/trackers`\) of at least two stuck torrents \(all of them if fewer are stuck\)/)
+})
+
+test('Steps 1-4 name no qBittorrent or *arr write endpoint (the health read stays read-only)', () => {
+  const early = ['Step 1', 'Step 2', 'Step 3', 'Step 4'].map(section).join('\n')
+  const writes = /\/api\/v2\/(torrents\/(delete|pause|stop|resume|start|recheck|reannounce|add|setCategory)|app\/setPreferences)|\/history\/failed/g
+  assert.deepEqual(early.match(writes) ?? [], [])
+})
+
+test('client-fault rule: stalled is not proof of a dead release; dht_nodes 0 or a shared tracker error blocks remove and blocklist offers', () => {
+  const rule = clientFaultRule()
+  assert.match(rule, /report-only/)
+  assert.match(rule, /A stuck or stalled state does not prove that a release is dead/)
+  assert.match(rule, /If `dht_nodes` is 0, `connection_status` is `disconnected`, or at least two stuck torrents share one tracker error, report the client fault and do not offer to remove or blocklist them/)
+})
+
+test('client-fault rule: marking a grab failed through /history/failed counts as a removal', () => {
+  assert.match(clientFaultRule(), /`\/history\/failed` blocklists it and starts a re-search, so treat that as a removal/)
+})
+
+test('every health field the client-fault rule tests is collected in Step 3 (no verdict on an unread input)', () => {
+  // A backticked word after "is " is a value (`disconnected`), not a field name.
+  const used = [...clientFaultRule().matchAll(/(?<!is )`([a-z_]+)`/g)].map((m) => m[1])
+  assert.ok(used.includes('dht_nodes'), `rule tests no backticked health field; saw ${used.join(', ')}`)
+  for (const f of used) assert.ok(section('Step 3').includes(`\`${f}\``), `rule uses \`${f}\`, which Step 3 never reads`)
+  assert.match(section('Step 3'), /tracker messages/)
+})
+
+test('the no-ask path never marks a grab failed (a blocklist and re-search by another name)', () => {
+  const free = bullets(subsection(section('Step 5'), 'Fix these without asking'))
+  for (const b of free) assert.doesNotMatch(b, /\/history\/failed|mark(ed|s)? (it |the grab )?(as )?failed/i, b)
+})
+
+// Proposal for the maker: the rule as written cannot tell "DHT is off" from "DHT is
+// broken".
+test('PROPOSED CONTRACT: the client-fault rule tells DHT turned off (private trackers) from DHT with no nodes', { todo: true }, () => {
+  assert.match(clientFaultRule(), /DHT is (off|disabled)|private torrent|private tracker/i)
+})
+
+test('client-fault rule gives connection_status a meaning: `disconnected` is a client fault', () => {
+  assert.match(clientFaultRule(), /`connection_status` is `disconnected`/)
+})
+
+test('the Fake downloads ask path defers to the client-fault rule for items still downloading', () => {
+  const fakes = bullets(subsection(section('Step 5'), 'Fix these without asking'))
+    .find((b) => b.startsWith('**Fake downloads.**'))
+  assert.match(fakes, /client-fault rule/)
+})

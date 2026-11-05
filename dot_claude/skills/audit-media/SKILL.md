@@ -63,7 +63,7 @@ Use read-only commands until Step 5. Run `ffprobe` from inside the Jellyfin cont
 4. Read the audio and subtitle settings of each Jellyfin user. If a user has no audio language preference, Jellyfin plays the track that has the `default` flag. Infuse does the same when it has no language setting. This makes default flags important.
 5. Get the original language of each title from Sonarr or Radarr (`originalLanguage`). Get the series type from Sonarr. A series of type `anime` uses the anime policy below, even when it is in the shows library.
 6. Read the Sonarr and Radarr queues, including status messages and the download state of each item.
-7. Read the qBittorrent torrent list: state, progress, category, and save path. Find the torrents that still hold a file in scope.
+7. Read the qBittorrent torrent list: state, progress, category, and save path. Find the torrents that still hold a file in scope. Also read the client health: `dht_nodes` and `connection_status` from `/api/v2/transfer/info`, and the tracker messages (`/api/v2/torrents/trackers`) of at least two stuck torrents (all of them if fewer are stuck).
 8. Read the Seerr media list. Compare it with the Jellyfin movies and series by TMDB ID.
 9. Read the Bazarr "wanted" lists for the items in scope.
 10. For the `series` and `leftovers` checks, also read:
@@ -162,7 +162,7 @@ These fixes are easy to undo.
 - **Missing language tags on MKV audio.** Use `mkvpropedit --set language=<code>`. Do this only when the language is certain: from the track title, or because the file has one audio track and the original language is known. If you are not sure, report it.
 - **Missing subtitles.** Start a Bazarr search for the item.
 - **Orphan subtitle files.** Move them to a holding folder outside the library, not to the trash. Write the folder path in the report.
-- **Fake downloads.** This covers only Sonarr or Radarr queue items whose download is complete or import-blocked. Remove the item from the Sonarr or Radarr queue with `removeFromClient=true` and `blocklist=true`. This deletes the torrent and its files from qBittorrent, and Sonarr or Radarr searches again. Name the Prowlarr indexer that served it in the report. A library file under 50 MB, or an item that is still downloading, goes under "Needs your decision". Never remove or blocklist it without an ask.
+- **Fake downloads.** This covers only Sonarr or Radarr queue items whose download is complete or import-blocked. Remove the item from the Sonarr or Radarr queue with `removeFromClient=true` and `blocklist=true`. This deletes the torrent and its files from qBittorrent, and Sonarr or Radarr searches again. Name the Prowlarr indexer that served it in the report. A library file under 50 MB, or an item that is still downloading, goes under "Needs your decision". Never remove or blocklist it without an ask. If the client-fault rule at the end of this step applies, do not offer that ask for an item that is still downloading.
 - **Jellyfin metadata.** Refresh an item that has no match. Then start a library scan.
 - **Seerr sync.** After renames, run the Seerr `jellyfin-full-scan` job.
 - **Jellyfin series match from Sonarr.** If the Jellyfin series has a wrong match or no TMDB ID, apply the match with the exact TVDB or TMDB ID that Sonarr has (on Jellyfin: `/Items/RemoteSearch/Apply/{id}`). Do this only when Sonarr gives the ID. Pair the Jellyfin series with the Sonarr series by path, never by title. Then run the Seerr `jellyfin-full-scan` job.
@@ -183,7 +183,7 @@ These fixes are easy to undo.
 - Change Sonarr or Radarr quality profiles or custom formats, Prowlarr indexers, or Bazarr providers.
 - Restart a container while someone is watching. Read the Jellyfin active sessions first.
 
-The qBittorrent faults from the "Downloads" row are report-only. Put them under "Needs your decision".
+The qBittorrent faults from the "Downloads" row are report-only. Put them under "Needs your decision". A stuck or stalled state does not prove that a release is dead. If `dht_nodes` is 0, `connection_status` is `disconnected`, or at least two stuck torrents share one tracker error, report the client fault and do not offer to remove or blocklist them. Marking a grab failed through `/history/failed` blocklists it and starts a re-search, so treat that as a removal.
 
 ## Step 6: Make sure that the fixes worked
 

@@ -184,3 +184,32 @@ test('a failed cd without a guard lets the write land in the old directory; `|| 
   assert.equal(r.code, 1)
   assert.ok(!readdirSync(dir).includes('guarded'))
 })
+
+// --- Deny-by-default egress (98080f4) ----------------------------------------
+
+function buildSection() {
+  const start = implementer.indexOf('### 3. Build')
+  const end = implementer.indexOf('### 4.', start)
+  assert.ok(start >= 0 && end > start, 'Build section not found in implementer.md')
+  return implementer.slice(start, end).replace(/\s*\n\s*/g, ' ')
+}
+
+test('Build: an egress invariant starts deny-by-default on every channel, with an allow-list, never a deny-list', () => {
+  const b = buildSection()
+  assert.match(b, /When the invariant limits what leaves the system \(telemetry, logs, a third-party API\), start deny-by-default on every channel/)
+  assert.match(b, /allow-list what may leave and drop the rest/)
+  assert.match(b, /Never write a list of known-bad fields/)
+})
+
+test('Build: the egress rule carries its own positive control (SDK defaults read, an allowed field shown arriving)', () => {
+  const b = buildSection()
+  assert.match(b, /Read what the SDK collects when a setting is omitted/)
+  assert.match(b, /test that an allowed field arrives/)
+})
+
+test('Build: the egress rule follows the single-choke-point rule it specializes', () => {
+  const b = buildSection()
+  const choke = b.indexOf('When the change enforces an invariant')
+  const egress = b.indexOf('When the invariant limits what leaves the system')
+  assert.ok(choke >= 0 && egress > choke, 'egress paragraph is missing or no longer follows the invariant paragraph')
+})
