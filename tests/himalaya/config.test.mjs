@@ -25,11 +25,16 @@
 // - Every account has the same shape: IMAP and SMTP share one login and one
 //   Keychain command, which names that login; ports match their encryption; no
 //   account sets a raw password key.
-// - The aihackers account has exactly the agreed Fastmail settings, and the
-//   Fastmail login and Keychain item reach no other account.
+// - The icloud, hardlyfunny, social, and aihackers accounts read and send
+//   through the same Fastmail settings: one IMAP and one SMTP backend, one
+//   login, one Keychain item, and the INBOX/Sent/Drafts/Trash folder aliases.
+//   The aihackers account has exactly the agreed Fastmail settings.
+// - With work = true and work = false the render names neither mail.me.com nor
+//   the himalaya-icloud Keychain item.
 // - A real v1 himalaya binary, if present, accepts the render without running
 //   `security`, and when `security` refuses it stops with an error on the right
-//   Keychain item for each account.
+//   Keychain item: the default account and aihackers both ask for the Fastmail
+//   item.
 // A pass does not prove that Fastmail accepts the login, that the folder names
 // exist on the server, or that SMTP sends. Those were tested by hand. It also does
 // not prove that a fresh machine can use the config (#66), or that no password
@@ -86,6 +91,26 @@ function parse(home, toml) {
 const accountsFor = (work) => withHome((home) => parse(home, render(home, work)).accounts)
 const WORK_VALUES = [true, false]
 const FASTMAIL_CMD = 'security find-generic-password -s himalaya-fastmail -a rdegges@sent.com -w'
+const FASTMAIL_ACCOUNTS = ['icloud', 'hardlyfunny', 'social', 'aihackers']
+const FASTMAIL = {
+  aliases: { inbox: 'INBOX', sent: 'Sent', drafts: 'Drafts', trash: 'Trash' },
+  backend: {
+    type: 'imap',
+    host: 'imap.fastmail.com',
+    port: 993,
+    encryption: { type: 'tls' },
+    login: 'rdegges@sent.com',
+    auth: { type: 'password', cmd: FASTMAIL_CMD },
+  },
+  send: {
+    type: 'smtp',
+    host: 'smtp.fastmail.com',
+    port: 465,
+    encryption: { type: 'tls' },
+    login: 'rdegges@sent.com',
+    auth: { type: 'password', cmd: FASTMAIL_CMD },
+  },
+}
 
 function allKeys(value, path = []) {
   if (value === null || typeof value !== 'object') return []
@@ -182,24 +207,21 @@ for (const work of WORK_VALUES) {
     })
   })
 
-  test(`work=${work}: Fastmail settings reach no other account`, () => {
-    const { aihackers, ...others } = accountsFor(work)
-    assert.ok(aihackers)
-    for (const [name, a] of Object.entries(others)) {
-      assert.doesNotMatch(JSON.stringify(a), /fastmail|sent\.com|aihackers/, name)
+  test(`work=${work}: icloud, hardlyfunny, social, and aihackers all use the same Fastmail settings`, () => {
+    const accounts = accountsFor(work)
+    for (const name of FASTMAIL_ACCOUNTS) {
+      const a = accounts[name]
+      assert.ok(a, `no ${name} account`)
+      assert.deepEqual({ aliases: a.folder.aliases, backend: a.backend, send: a.message.send.backend }, FASTMAIL, name)
     }
   })
 
-  test(`work=${work}: iCloud accounts still use iCloud`, () => {
-    const accounts = accountsFor(work)
-    for (const name of ['icloud', 'hardlyfunny', 'social']) {
-      const a = accounts[name]
-      assert.equal(a.backend.host, 'imap.mail.me.com', name)
-      assert.equal(a.message.send.backend.host, 'smtp.mail.me.com', name)
-      assert.equal(a.backend.login, 'r@rdegges.com', name)
-      assert.equal(a.backend.auth.cmd, 'security find-generic-password -s himalaya-icloud -a r@rdegges.com -w', name)
-      assert.equal(a.folder.aliases.sent, 'Sent Messages', name)
-    }
+  test(`work=${work}: render names no iCloud server or iCloud Keychain item`, () => {
+    withHome((home) => {
+      const out = render(home, work)
+      assert.doesNotMatch(out, /mail\.me\.com/)
+      assert.doesNotMatch(out, /himalaya-icloud/)
+    })
   })
 }
 
@@ -315,11 +337,11 @@ test('himalaya -a aihackers asks for the Fastmail item and fails when security r
   })
 })
 
-test('himalaya with no -a asks for the iCloud item, not Fastmail', { skip }, () => {
+test('himalaya with no -a asks for the Fastmail item', { skip }, () => {
   withHimalaya(false, (run, securityCalls) => {
     const r = run('folder', 'list')
     assert.notEqual(r.status, 0, 'folder list succeeded with no password')
-    assert.equal(securityCalls(), 'find-generic-password -s himalaya-icloud -a r@rdegges.com -w\n')
+    assert.equal(securityCalls(), 'find-generic-password -s himalaya-fastmail -a rdegges@sent.com -w\n')
   })
 })
 

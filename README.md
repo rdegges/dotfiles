@@ -126,7 +126,7 @@ To make any new item work-only, gate it on `.work` — this works in any templat
 {{ end }}
 ```
 
-Several things consume this pattern today: the Himalaya email config (below), the `agentw` shell alias (a work-only agent server), the AWS SSO profile and the `aws` shell function (below), and gated blocks in the install/cron scripts. For example, the personal iCloud account renders everywhere, while the work Gmail account only renders when `work = true`.
+Several things consume this pattern today: the Himalaya email config (below), the `agentw` shell alias (a work-only agent server), the AWS SSO profile and the `aws` shell function (below), and gated blocks in the install/cron scripts. For example, the personal Fastmail accounts render everywhere, while the work Gmail account only renders when `work = true`.
 
 Work-only Homebrew packages (today: `awscli`) go in `dot_brew/Brewfile.work`, not the shared `dot_brew/Brewfile`. chezmoi writes `~/.brew/Brewfile.work` only when `work = true`, and `run_onchange_install-packages.sh.tmpl` bundles it after the shared Brewfile. The hourly `chezmoi update` installs a new entry on every work machine, and the daily brew job upgrades it. On work machines, the `bd` alias removes the lines listed in `Brewfile.work` from the dump before it runs `chezmoi add`.
 
@@ -143,20 +143,20 @@ On work machines, chezmoi also writes one AWS SSO profile and wraps the `aws` co
 
 ## Email (Himalaya)
 
-The [Himalaya CLI](https://github.com/pimalaya/himalaya) is configured for my iCloud Mail and Fastmail accounts at `~/.config/himalaya/config.toml`. The config never stores the password — it shells out to macOS `security(1)` at runtime to read an app-specific password from the Keychain.
+The [Himalaya CLI](https://github.com/pimalaya/himalaya) is configured for my Fastmail accounts at `~/.config/himalaya/config.toml`. The config never stores the password — it shells out to macOS `security(1)` at runtime to read an app-specific password from the Keychain.
 
 A second, work-only Snyk Gmail account is defined in the same config but gated behind the `work` flag (see [Work vs. personal machines](#work-vs-personal-machines)), so it only renders on my work laptop.
 
 On `chezmoi apply`, a one-shot bootstrap script (`run_once_install-himalaya.sh.tmpl`) installs the himalaya binary to `~/.local/bin` via the [official installer](https://github.com/pimalaya/himalaya#pre-built-binary).
 
-Each machine needs one app password in the Keychain per mailbox. The steps below load the iCloud one, which every account except Fastmail and Snyk uses:
+Every account except Snyk uses one Fastmail mailbox and reads one app password from the Keychain. Loading that password is the only per-machine step for these accounts:
 
-1. Generate an app-specific password at <https://account.apple.com> (Sign-In and Security → App-Specific Passwords).
+1. Generate an app password in Fastmail under Settings, Privacy & Security.
 2. Store it in the login Keychain under the service name the config expects:
 
    ```bash
    read -rs "?Paste app password: " PW; \
-     security add-generic-password -U -s himalaya-icloud -a r@rdegges.com -w "$PW"; \
+     security add-generic-password -U -s himalaya-fastmail -a rdegges@sent.com -w "$PW"; \
      unset PW
    ```
 
@@ -166,14 +166,7 @@ Each machine needs one app password in the Keychain per mailbox. The steps below
    himalaya folder list
    ```
 
-`randall@aihackers.club` needs its own app password, generated in Fastmail under Settings, Privacy & Security:
-
-```bash
-read -rs "?Paste app password: " PW; \
-  security add-generic-password -U -s himalaya-fastmail -a rdegges@sent.com -w "$PW"; \
-  unset PW
-himalaya folder list -a aihackers
-```
+`himalaya-icloud` is read only by the temporary `~/Code/rdegges/dns` migration check, on the host that runs it.
 
 
 ## Toolchain (asdf)
