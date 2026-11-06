@@ -17,7 +17,10 @@
 // standalone rollback restores the old container and its restart policy;
 // research that cannot cover the version range gives "ask"; the health wait
 // ends; masking covers values, labels, and Cmd; and Step 8 deletes the inspect
-// JSON and baseline files of passed services. These patterns are generic on purpose: a list
+// JSON and baseline files of passed services. Round 2: services that share an
+// image are one unit; the restore replaces each mount; Compose runs with -p and
+// -f, and its rollback uses --pull never; unreached services are "not started".
+// These patterns are generic on purpose: a list
 // of the user's own host or app names here would publish them. It says
 // nothing about whether an agent obeys the text against a real host; that
 // needs a supervised run.
@@ -201,7 +204,7 @@ test('one service at a time, and the run stops on a failed service after a rollb
   const s7 = flat(section('Step 7'))
   assert.match(s7, /Update only one service at a time/)
   assert.match(s7, /Do not start the next service while the current service fails a check/)
-  assert.match(s7, /`docker compose up -d --no-deps <service>`/)
+  assert.match(s7, /`docker compose -p <project> -f <each config file> up -d --no-deps <service>`/)
   assert.match(s7, /If the service failed, roll it back from the manifest/)
   assert.match(s7, /Then stop the run, and report\. Do not update more services/)
   assert.match(flat(section('Step 6')), /Do Step 6 and Step 7 for one service\. Then do them for the next service/)
@@ -233,12 +236,12 @@ test('cleanup deletes only manifest items, by exact path, and never uses a glob 
   assert.doesNotMatch(raw, /rm -[a-z]*r|-f\b|--force/, 'cleanup uses a recursive or forced delete')
 })
 
-test('cleanup runs after a host-wide check and keeps failed, held, unverified, and skipped backups', () => {
+test('cleanup runs after a host-wide check and keeps failed, held, unverified, skipped, and not started backups', () => {
   const s8 = flat(section('Step 8'))
   assert.match(s8, /do a host-wide check/)
   assert.match(s8, /If the host-wide check shows something new, delete nothing/)
   assert.match(s8, /delete the manifest items of each service that passed/)
-  assert.match(s8, /Keep the backup and the old image of each failed, held, unverified, and skipped service/)
+  assert.match(s8, /Keep the backup and the old image of each failed, held, unverified, skipped, and not started service/)
   assert.match(s8, /Treat an unverified service the same as a held one/)
   assert.match(s8, /dangling images with their sizes .*Do not remove them/)
   assert.match(s8, /backup folders of earlier runs .*Do not delete them unless the user asks/)
@@ -321,11 +324,12 @@ test('no private name from PRIVATE_NAMES_FILE is in the skill or this test file'
     assert.deepEqual(hits, [])
   })
 
-const MUTATING = /docker (compose )?(stop|rm|rmi|tag|run|restart|up|pull)\b|\brm\s|--reflink|\bprune\b/
+// Compose may carry -p and -f flags before its verb (Step 7 runs it that way).
+const MUTATING = /docker (compose (?:-[pf] (?:<[^>]*>|\S+) )*)?(stop|rm|rmi|tag|run|restart|up|pull)\b|\brm\s|--reflink|\bprune\b/
 
 test('positive control: the mutating-command filter finds commands in Steps 6 and 7', () => {
   const late = codeSpans(section('Step 6') + section('Step 7')).filter((c) => MUTATING.test(c))
-  for (const want of ['docker tag', 'docker compose up', 'docker compose stop', '--reflink=always', 'docker pull']) {
+  for (const want of ['docker tag', 'docker compose -p <project> -f <each config file> up', 'docker compose stop', '--reflink=always', 'docker pull']) {
     assert.ok(late.some((c) => c.includes(want)), `filter misses "${want}"; the Steps 1-5 test would pass vacuously`)
   }
 })
@@ -356,7 +360,7 @@ test('the old image is tagged before any recreate, and the manifest holds the ol
   assert.match(s6, /Tag the old image: `docker tag <old image ID> <repository>:pre-<YYYYMMDD-HHMM>`/)
   assert.match(s6, /The old image ID and its `:pre-<YYYYMMDD-HHMM>` tag/)
   assert.match(s6, /The rollback command of the service/)
-  assert.ok(skill.indexOf('docker tag <old image ID>') < skill.indexOf('docker compose up -d --no-deps'), 'tag comes after the recreate')
+  assert.ok(skill.indexOf('docker tag <old image ID>') < skill.indexOf('up -d --no-deps'), 'tag comes after the recreate')
 })
 
 test('standalone recreate keeps the old container under a -pre- name and lists it in the manifest', () => {
@@ -382,8 +386,8 @@ test('the ask lists held services with reasons, and a declined service is held a
 test('a failed check makes the service failed; rollback restores files, database, old image, then checks the baseline', () => {
   const s7 = flat(section('Step 7'))
   assert.match(s7, /\*\*failed\*\*: one or more checks fail/)
-  assert.match(s7, /Put back the compose file, the `\.env` file, and the bind-mount copies/)
-  assert.match(s7, /If a migration ran, restore the database from the backup/)
+  assert.match(s7, /Put back the compose files and the `\.env` file/)
+  assert.match(s7, /If a migration ran, drop and recreate the database, then restore the dump into the empty database/)
   assert.match(s7, /Make sure that the service matches its baseline/)
 })
 
@@ -448,9 +452,9 @@ test('a held or declined service keeps its tag on the old image after the run', 
 test('Compose rollback points the compose tag back at the old image ID before recreate', () => {
   const s7 = flat(section('Step 7'))
   assert.match(s7, /docker tag <old image ID> <repository>:<tag>|pin the old image ID in the compose file/)
-  assert.match(s7, /Compose: run `docker tag <old image ID> <repository>:<tag>`, so that the tag points at the old image again\. Then run `docker compose up -d --no-deps <service>`/)
+  assert.match(s7, /Compose: run `docker tag <old image ID> <repository>:<tag>`, where `<tag>` is the tag in the restored compose or `\.env` file\. Then run `docker compose -p <project> -f <each config file> up -d --no-deps --pull never <service>`/)
   const rollback = s7.slice(s7.indexOf('If the service failed, roll it back'))
-  assert.ok(rollback.indexOf('docker tag <old image ID> <repository>:<tag>') < rollback.indexOf('docker compose up -d --no-deps'), 're-tag comes after the recreate')
+  assert.ok(rollback.indexOf('docker tag <old image ID> <repository>:<tag>') < rollback.indexOf('up -d --no-deps --pull never'), 're-tag comes after the recreate')
   assert.match(flat(section('Step 6')), /The rollback command of the service\. Write the exact command for its form from Step 7 item 6 \(Compose or standalone\)/)
 })
 
@@ -510,7 +514,7 @@ test('after a failed service, Step 8 still runs its host-wide check and cleans o
 // a `docker update --restart=no` or `docker rename` in Steps 1-5 passed the
 // "nothing changes before Step 6" test. This wider filter closes that gap and
 // keeps the read-only verbs (ps, inspect, logs, imagetools, manifest, du, df).
-const MUTATING_WIDE = /\bdocker (compose )?(stop|rm|rmi|tag|run|restart|up|down|pull|update|rename|start|kill|create|pause|commit|cp|load|import|push)\b|\b(rm|mv|cp|chmod|chown|rmdir|truncate)\s|\bsed -i\b|--reflink|\bprune\b/
+const MUTATING_WIDE = /\bdocker (compose (?:-[pf] (?:<[^>]*>|\S+) )*)?(stop|rm|rmi|tag|run|restart|up|down|pull|update|rename|start|kill|create|pause|commit|cp|load|import|push)\b|\b(rm|mv|cp|chmod|chown|rmdir|truncate)\s|\bsed -i\b|--reflink|\bprune\b/
 
 test('Steps 1-5 hold no mutating command, including docker update, rename, start, and kill', () => {
   const early = ['Step 1', 'Step 2', 'Step 3', 'Step 4', 'Step 5'].map(section).join('\n')
@@ -554,7 +558,7 @@ test('Step 7 applies the accepted edit before the pull, and the pull before the 
   const s7 = flat(section('Step 7'))
   const edit = s7.indexOf('apply that diff')
   const pull = s7.indexOf('docker pull <image>:<tag>')
-  const up = s7.indexOf('Compose: `docker compose up -d --no-deps <service>`')
+  const up = s7.indexOf('Compose: `docker compose -p <project> -f <each config file> up -d --no-deps <service>`')
   assert.ok(edit >= 0 && pull > edit && up > pull, `order is edit ${edit}, pull ${pull}, recreate ${up}`)
 })
 
@@ -565,16 +569,17 @@ test('rollback restores the files and the database before it starts the old imag
   const rb = s7.slice(s7.indexOf('If the service failed, roll it back'))
   const at = (s) => { const i = rb.indexOf(s); assert.ok(i >= 0, `rollback has no "${s}"`); return i }
   const stop = at('Stop the service')
+  const aside = at('Move each current bind-mount folder aside')
   const files = at('Put back the compose file')
-  const db = at('restore the database from the backup')
+  const db = at('restore the dump into the empty database')
   const retag = at('docker tag <old image ID> <repository>:<tag>')
-  const up = at('docker compose up -d --no-deps <service>')
+  const up = at('up -d --no-deps --pull never <service>')
   const rm = at('docker rm -f <name>')
   const rename = at('docker rename <name>-pre-<YYYYMMDD-HHMM> <name>')
   const policy = at('docker update --restart=<original policy> <name>')
   const start = at('docker start <name>')
   const check = at('Make sure that the service matches its baseline')
-  assert.ok(stop < files && files < db && db < retag && retag < up, 'Compose rollback order')
+  assert.ok(stop < aside && aside < files && files < db && db < retag && retag < up, 'Compose rollback order')
   assert.ok(db < rm && rm < rename && rename < policy && policy < start, 'standalone rollback order')
   assert.ok(start < check && up < check, 'baseline check comes before the starts')
 })
@@ -591,7 +596,7 @@ test('Step 6 reads free space, stops, copies, then tags, in that order', () => {
   assert.ok(free >= 0 && stop > free && copy > stop && tag > copy, `order is free ${free}, stop ${stop}, copy ${copy}, tag ${tag}`)
 })
 
-// --- Proposals for the maker, round 2 (todo: do not fail the suite) ------------
+// --- Former round-2 proposals, now contracts (were todo against 196da92) --------
 
 // Two services that use the same <image>:<tag> (an app and its worker, or two
 // projects on one image) share one local tag. The Step 7 pull for the first
@@ -601,8 +606,8 @@ test('Step 6 reads free space, stops, copies, then tags, in that order', () => {
 // its tag on the old image". Updating such services as one unit, or re-tagging
 // the old ID for the kept one, are both valid fixes. The same group also gets
 // version skew between the app and its worker when only one is recreated.
-test('PROPOSED CONTRACT: services that share one image tag are updated together or the kept one is re-tagged', { todo: true }, () => {
-  assert.match(flat(skill), /(share|same) (one |the )?(image|`<image>:<tag>`)[^.]*(together|one unit|re-?tag|keeps? its tag)/i)
+test('services that share one image tag are updated together or the kept one is re-tagged', () => {
+  assert.match(flat(skill), /(share|same) (one |the |an )?(image|`<image>:<tag>`|`<repository>:<tag>`)[^.]*(together|one unit|re-?tag|keeps? its tag)/i)
 })
 
 // "Put back the bind-mount copies" does not say the restore replaces the
@@ -611,7 +616,7 @@ test('PROPOSED CONTRACT: services that share one image tag are updated together 
 // replayed into it on the next open. The restore must make each mount equal to
 // its backup (for example, move the failed state aside into the run folder,
 // then copy the backup in).
-test('PROPOSED CONTRACT: rollback makes each bind mount equal to its backup, not the backup copied over the new files', { todo: true }, () => {
+test('rollback makes each bind mount equal to its backup, not the backup copied over the new files', () => {
   const s7 = flat(section('Step 7'))
   assert.match(s7, /(move|rename) the (current|failed|new)[^.]*aside|replace[^.]*(mount|folder)|equal to (its|the) backup|files that the new version (made|created)/i)
 })
@@ -620,7 +625,7 @@ test('PROPOSED CONTRACT: rollback makes each bind mount equal to its backup, not
 // was already pulled before the run (a manual `docker compose pull`), the two
 // match and the run reports "no update", while the container still runs the
 // older image ID from Step 2.
-test('PROPOSED CONTRACT: Step 4 also flags a container whose image ID differs from the image its tag points at', { todo: true }, () => {
+test('Step 4 also flags a container whose image ID differs from the image its tag points at', () => {
   assert.match(flat(section('Step 4')), /image ID of the container[^.]*(differ|not the same)|container runs an older image/i)
 })
 
@@ -628,7 +633,7 @@ test('PROPOSED CONTRACT: Step 4 also flags a container whose image ID differs fr
 // <repository>:<tag>" does not say which tag. Re-tagging the new pin's tag
 // (for example :1.3) at the old image makes a local tag lie about its version.
 // The tag must be the one in the restored compose or .env file.
-test('PROPOSED CONTRACT: the Compose rollback re-tags the tag of the restored compose file, not the new pin', { todo: true }, () => {
+test('the Compose rollback re-tags the tag of the restored compose file, not the new pin', () => {
   assert.match(flat(section('Step 7')), /<tag>[^.]*(restored|old|original) (compose|`\.env`|pin|tag)/i)
 })
 
@@ -636,6 +641,82 @@ test('PROPOSED CONTRACT: the Compose rollback re-tags the tag of the restored co
 // result: the Step 9 list is passed, failed, unverified, held, or skipped, and
 // "skipped" already means a failed backup. Every service in scope needs one
 // result in the report.
-test('PROPOSED CONTRACT: services not reached after a stop get their own result in the report', { todo: true }, () => {
+test('services not reached after a stop get their own result in the report', () => {
   assert.match(flat(skill), /not (yet )?(reached|started|updated)[^.]*(result|report)|\*\*not started\*\*/i)
+})
+
+// --- Round-2 conditions (acceptance gate, PR #69) ------------------------------
+
+test('services that share an image are one update unit: held together, rolled back together, cleaned together', () => {
+  const s4 = flat(section('Step 4'))
+  assert.match(s4, /because the run pulls only in Step 7 and updates services that share an image as one unit/)
+  assert.match(s4, /Services that use the same `<repository>:<tag>`, or the same old image ID, are one update unit\. Back them up, pull once, recreate them, and check each of them together in Steps 6 and 7/)
+  assert.match(s4, /If the user holds or declines one service of the unit, hold the whole unit/)
+  assert.match(s4, /If one service of the unit fails, roll back every service of the unit/)
+  assert.match(s4, /Step 8 cleans a unit only when every service in it passed/)
+})
+
+test('Step 4 reads the digest from buildx only, never from docker manifest inspect', () => {
+  assert.doesNotMatch(section('Step 4'), /docker manifest inspect/)
+  assert.doesNotMatch(skill, /docker manifest inspect/)
+  assert.match(flat(section('Step 4')), /compare the `Digest:` line of `docker buildx imagetools inspect <image>:<tag>` with the RepoDigest of the local tag/)
+})
+
+test('a container on an older image than its local tag counts as an update', () => {
+  const s4 = flat(section('Step 4'))
+  assert.match(s4, /compare the image ID of the container from Step 2 with the image ID that the local tag points at \(`docker image inspect <image>:<tag>`\)\. If they differ, the container runs an older image\. Treat that as an update/)
+})
+
+test('the Compose rollback never pulls again, and Compose always runs with the project and its config files', () => {
+  const s7 = flat(section('Step 7'))
+  const rollback = s7.slice(s7.indexOf('If the service failed, roll it back'))
+  assert.match(rollback, /`docker compose -p <project> -f <each config file> up -d --no-deps --pull never <service>`/)
+  assert.match(s7, /Compose: `docker compose -p <project> -f <each config file> up -d --no-deps <service>`/)
+  assert.match(flat(section('Known pitfalls')), /Always run `docker compose -p <project> -f <each config file> up -d --no-deps <service>`/)
+  // Every Compose up in the skill names the project and the files.
+  for (const c of codeSpans(skill).filter((c) => /docker compose .*\bup\b/.test(c) && c !== 'docker compose up -d' && c !== 'docker compose up')) {
+    assert.match(c, /^docker compose -p <project> -f <each config file> up /, `Compose up without -p and -f: ${c}`)
+  }
+})
+
+test('config_files is recorded in Step 2 and every compose file and env_file target is backed up in Step 6', () => {
+  assert.match(flat(section('Step 2')), /`com\.docker\.compose\.project` label \(the project name\) and the `com\.docker\.compose\.project\.config_files` label/)
+  assert.match(flat(section('Step 6')), /Copy every file in the `config_files` label, the `\.env` file, and each `env_file:` target of the service/)
+})
+
+test('the restore replaces each mount with its backup, moving the failed state aside into the manifest', () => {
+  const s7 = flat(section('Step 7'))
+  assert.match(s7, /Move each current bind-mount folder aside to `<run backup folder>\/<service>\/failed\/`, and add it to the manifest\. Then copy each backup in with `cp -a`, so that each mount is equal to its backup, with no files that the new version made/)
+  assert.match(s7, /drop and recreate the database, then restore the dump into the empty database/)
+})
+
+test('a check row that matches both Pass and Fail is a fail', () => {
+  const s7 = section('Step 7')
+  const table = s7.indexOf('| Special cases |')
+  const rule = s7.indexOf('If a row matches both Pass and Fail, the result is fail.')
+  assert.ok(table >= 0 && rule > table, 'the conflict rule is missing or not under the table')
+  assert.match(s7.slice(s7.indexOf('\n', table), rule), /^\s*$/, 'text sits between the table and the conflict rule')
+})
+
+test('unreached services are "not started", reported, and kept', () => {
+  assert.match(flat(section('Step 7')), /Do not update more services\. Mark each service that the run did not reach as \*\*not started\*\*/)
+  assert.match(flat(section('Step 8')), /each failed, held, unverified, skipped, and not started service/)
+  const s9 = flat(section('Step 9'))
+  assert.match(s9, /The result: passed, failed, unverified, held, skipped, or not started/)
+  assert.match(s9, /\*\*Needs your decision:\*\* each failed, held, unverified, skipped, and not started service/)
+})
+
+test('masking ignores key case and covers hash- or key-like values; memory is written in Step 9', () => {
+  const s2 = flat(section('Step 2'))
+  assert.match(s2, /Its key holds `PASS`, `SECRET`, `TOKEN`, `KEY`, `AUTH`, or `CREDENTIAL`, in any case/)
+  assert.match(s2, /The value looks like a hash or a key/)
+  assert.match(s2, /After the user accepts the command, record its shape in memory in Step 9/)
+})
+
+test('positive control: both mutating filters see a Compose command that carries -p and -f', () => {
+  for (const c of ['docker compose -p <project> -f <each config file> up -d --no-deps <service>', 'docker compose -p box -f a.yml stop web']) {
+    assert.ok(MUTATING.test(c), `MUTATING misses "${c}"`)
+    assert.ok(MUTATING_WIDE.test(c), `MUTATING_WIDE misses "${c}"`)
+  }
+  assert.ok(!MUTATING_WIDE.test('docker compose -p box ps'), 'MUTATING_WIDE flags read-only compose ps')
 })

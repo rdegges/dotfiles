@@ -36,7 +36,7 @@ Make no change to a container, a file, or an image tag before Step 6. Before Ste
 
 1. On each host, list the running containers with `docker ps`. Record the name, the image, the image ID, the status, and the labels of each container.
 2. List the stopped containers too. The run does not update them. Name them in the report.
-3. Group the containers by Compose project with the `com.docker.compose.project.working_dir` label. That folder holds the compose file and the `.env` file. The `com.docker.compose.service` label gives the service name.
+3. Group the containers by Compose project with the `com.docker.compose.project.working_dir` label. That folder holds the compose file and the `.env` file. The `com.docker.compose.service` label gives the service name. Also record the `com.docker.compose.project` label (the project name) and the `com.docker.compose.project.config_files` label (the compose files).
 4. Skip the platform-managed containers, the services that the user excluded, and the services outside the scope.
 5. Make the run backup folder on the backup volume: `<backup volume>/update-homelab/<YYYYMMDD-HHMM>/`. This stamp is also the stamp of the old image tags and the renamed containers.
 6. Start the manifest: `<run backup folder>/manifest.md`. The manifest lists every file that the run writes, and every old image and container that it keeps.
@@ -60,13 +60,14 @@ A container that has no Compose label is standalone. Rebuild its `docker run` co
 
 If memory has no run configuration for the container, the rebuilt command goes to the ask in Step 5. Show it with each secret value replaced by `***`. A value is secret in one of these cases:
 
-- Its key holds `PASS`, `SECRET`, `TOKEN`, `KEY`, `AUTH`, or `CREDENTIAL`.
+- Its key holds `PASS`, `SECRET`, `TOKEN`, `KEY`, `AUTH`, or `CREDENTIAL`, in any case.
 - The value holds credentials in the form `user:pass@`.
+- The value looks like a hash or a key.
 - You are not sure.
 
 Look for secret values in the environment values, the labels, Cmd, the entrypoint, and the healthcheck, and replace each one with `***`.
 
-After the user accepts the command, record its shape in memory. Replace each secret value with a pointer to where the secret lives. Never write a secret value to memory.
+After the user accepts the command, record its shape in memory in Step 9. Replace each secret value with a pointer to where the secret lives. Never write a secret value to memory.
 
 ## Step 3: Record the baseline
 
@@ -84,16 +85,18 @@ Record the state of each service before any change. The baseline shows the probl
 
 ## Step 4: Find the updates
 
-This step reads the registry only. It does not pull an image, so no tag moves. A held, declined, or skipped service keeps its tag on the old image, because the run pulls only in Step 7.
+This step reads the registry only. It does not pull an image, so no tag moves. A held, declined, or skipped service keeps its tag on the old image, because the run pulls only in Step 7 and updates services that share an image as one unit.
 
-1. For each service, compare the local digest of the image tag with the registry digest. Use `docker buildx imagetools inspect <image>:<tag>` or `docker manifest inspect <image>:<tag>`.
+1. For each service, compare the `Digest:` line of `docker buildx imagetools inspect <image>:<tag>` with the RepoDigest of the local tag.
 2. If the digests are the same, the service has no update.
-3. If the digests are different, read the version label of the new image from the registry config: `docker buildx imagetools inspect --format '{{json .Image}}' <image>:<tag>`. For a multi-platform image, read the config of the host platform. Compare it with the version label of the old image:
+3. Also compare the image ID of the container from Step 2 with the image ID that the local tag points at (`docker image inspect <image>:<tag>`). If they differ, the container runs an older image. Treat that as an update.
+4. If the digests are different, read the version label of the new image from the registry config: `docker buildx imagetools inspect --format '{{json .Image}}' <image>:<tag>`. For a multi-platform image, read the config of the host platform. Compare it with the version label of the old image:
    - Same version: a rebuild. A rebuild needs no research. Its decision is "proceed".
    - New version: a real version bump. Research it in Step 5.
    - No version label on one of the images: treat it as a real version bump.
-4. A pinned-version service sets a version in its tag, its compose file, or its `.env` file. Its digest rarely changes. Look for newer versions in the upstream releases. Report each newer version. A change to a pin is always an ask item. Research the newest version in Step 5, so that the ask has the facts.
-5. If the project publishes an official compose file, compare it with the local compose file. Look for changed image pins of sidecars (for example, a database pinned by digest). A changed sidecar pin is a compose edit, so it is an ask item.
+5. A pinned-version service sets a version in its tag, its compose file, or its `.env` file. Its digest rarely changes. Look for newer versions in the upstream releases. Report each newer version. A change to a pin is always an ask item. Research the newest version in Step 5, so that the ask has the facts.
+6. If the project publishes an official compose file, compare it with the local compose file. Look for changed image pins of sidecars (for example, a database pinned by digest). A changed sidecar pin is a compose edit, so it is an ask item.
+7. Services that use the same `<repository>:<tag>`, or the same old image ID, are one update unit. Back them up, pull once, recreate them, and check each of them together in Steps 6 and 7. If the user holds or declines one service of the unit, hold the whole unit. If one service of the unit fails, roll back every service of the unit. Step 8 cleans a unit only when every service in it passed.
 
 ## Step 5: Research, plan the backups, and ask
 
@@ -154,7 +157,7 @@ This backup is a rollback for this update on the same volume. It is not a disast
 5. Stop only this service (`docker compose stop <service>`, or `docker stop <name>`).
 6. If the service uses a database server (for example, Postgres) in a sidecar, stop the app container first. Then make a logical dump while the database runs. Make sure that the dump is complete: the command exits 0, and the file has the end marker of the tool (for `pg_dump`, `-- PostgreSQL database dump complete`).
 7. Copy the configuration and app-state bind mounts while the service is stopped. This includes SQLite files.
-8. Copy the compose file and the `.env` file of the project.
+8. Copy every file in the `config_files` label, the `.env` file, and each `env_file:` target of the service.
 9. Tag the old image: `docker tag <old image ID> <repository>:pre-<YYYYMMDD-HHMM>`.
 10. Add these items to the manifest, under the service:
     - Each backup item, with its path and size.
@@ -173,7 +176,7 @@ Update only one service at a time. Do not start the next service while the curre
 
 1. If the user accepted a compose or `.env` edit for this service, apply that diff.
 2. Pull the new image for this service only: `docker pull <image>:<tag>`. Use the image and tag that the service uses after the accepted edits. Step 6 already tagged the old image. Then recreate only this service:
-   - Compose: `docker compose up -d --no-deps <service>`.
+   - Compose: `docker compose -p <project> -f <each config file> up -d --no-deps <service>`.
    - Standalone: stop the old container, and rename it to `<name>-pre-<YYYYMMDD-HHMM>`. Then run `docker update --restart=no <name>-pre-<YYYYMMDD-HHMM>`, so that the old container does not start again after a reboot. Then start the accepted `docker run` command. Add the renamed container to the manifest.
 3. Wait until the health status is `healthy` or `unhealthy`, or until 5 minutes pass. If the container has no healthcheck, wait two minutes.
 4. Do the checks in the table. Each check gives one result: pass, fail, or cannot evaluate.
@@ -188,6 +191,8 @@ Update only one service at a time. Do not start the next service while the curre
 | Data | Each data count is the same as the baseline count, or larger. | A data count is smaller than the baseline count. | The app has a database, and no data count is readable. |
 | Special cases | Each extra check from memory passes. For example, a VPN-routed container shows the VPN IP, not the home IP. | An extra check fails. | An extra check cannot run. |
 
+If a row matches both Pass and Fail, the result is fail.
+
 Before you blame the update for a log line, make sure that the line started after the update. Look for the same line in the baseline logs.
 
 If the app reports a pending migration that the research brief expects, run the migration command that the app gives. Then do the Migrations and Data checks again.
@@ -200,12 +205,12 @@ A check that does not apply to the service is left out. For example, the Data ch
    - **unverified**: no check fails, and one or more checks cannot evaluate. Never report an unverified service as "passed".
 6. If the service failed, roll it back from the manifest:
    - Stop the service.
-   - Put back the compose file, the `.env` file, and the bind-mount copies.
-   - If a migration ran, restore the database from the backup.
-   - Compose: run `docker tag <old image ID> <repository>:<tag>`, so that the tag points at the old image again. Then run `docker compose up -d --no-deps <service>`.
+   - Move each current bind-mount folder aside to `<run backup folder>/<service>/failed/`, and add it to the manifest. Then copy each backup in with `cp -a`, so that each mount is equal to its backup, with no files that the new version made. Put back the compose files and the `.env` file.
+   - If a migration ran, drop and recreate the database, then restore the dump into the empty database.
+   - Compose: run `docker tag <old image ID> <repository>:<tag>`, where `<tag>` is the tag in the restored compose or `.env` file. Then run `docker compose -p <project> -f <each config file> up -d --no-deps --pull never <service>`.
    - Standalone: run `docker rm -f <name>` on the new container, and `docker rename <name>-pre-<YYYYMMDD-HHMM> <name>`. Then run `docker update --restart=<original policy> <name>`, with the policy from the saved `docker inspect` JSON. Then run `docker start <name>`.
    - Make sure that the service matches its baseline.
-   Then stop the run, and report. Do not update more services. Before the report, Step 8 still does its host-wide check. It cleans only the services that passed before the failure.
+   Then stop the run, and report. Do not update more services. Mark each service that the run did not reach as **not started**. Before the report, Step 8 still does its host-wide check. It cleans only the services that passed before the failure.
 
 A large copy or a long migration can take more time than the tool timeout. Run it in the background, and wait until it is complete. Do not start a second copy of the same data.
 
@@ -221,7 +226,7 @@ A large copy or a long migration can take more time than the tool timeout. Run i
    - Each old image, by the image ID in the manifest (`docker rmi <old image ID>`). If the manifest entry of a kept service names the same image ID, do not remove that image. Put it in the report. If Docker refuses, report it. Do not force it.
 4. Also delete the saved `docker inspect` JSON and the baseline files of each service that had no update.
 5. Never use a glob or a `prune` command. Never delete the run backup folder as one item.
-6. Keep the backup and the old image of each failed, held, unverified, and skipped service. Treat an unverified service the same as a held one.
+6. Keep the backup and the old image of each failed, held, unverified, skipped, and not started service. Treat an unverified service the same as a held one.
 7. If no service is failed, held, unverified, or skipped, delete the run-level files: the host lists and the free-space records.
 8. If the manifest has no items left, delete the manifest. Then delete the empty folders with `rmdir`.
 9. List the other dangling images with their sizes (`docker images --filter dangling=true`). Do not remove them.
@@ -233,14 +238,14 @@ Start with the result in one sentence. Then give a table with one row for each s
 
 - The old version and the new version.
 - Real version bump or rebuild.
-- The result: passed, failed, unverified, held, or skipped.
+- The result: passed, failed, unverified, held, skipped, or not started.
 - The downtime.
 - The highlights of the research brief.
 
 Then give these lists:
 
 - **Pre-existing issues:** the problems in the baseline.
-- **Needs your decision:** each failed, held, unverified, and skipped service, with the reason and its rollback command. Also each pin change that is available.
+- **Needs your decision:** each failed, held, unverified, skipped, and not started service, with the reason and its rollback command. Also each pin change that is available.
 - **Suggested features:** the new features from the research. None of them is enabled.
 - **Cleanup:** the items that you deleted, and the disk space that you made free. The other dangling images and the backups of earlier runs.
 
@@ -254,7 +259,7 @@ Record in memory: the date of the run, new facts about the setup, the accepted r
 
 ## Known pitfalls
 
-- `docker compose up -d` with no service name recreates every service in the project. Always give the service name and `--no-deps`.
+- `docker compose up -d` with no service name recreates every service in the project. Always run `docker compose -p <project> -f <each config file> up -d --no-deps <service>`.
 - A pull moves the tag to the new image. The old image then has no tag, and a prune can remove it. For this reason, the run pulls only in Step 7, after Step 6 tags the old image.
 - `cp --reflink=auto` makes a full copy, with no message, when the filesystem has no reflink support. This full copy can fill the volume. Use `--reflink=always`, which fails instead.
 - A container in a restart loop can show "running" between restarts. Read the restart count, not only the state.
