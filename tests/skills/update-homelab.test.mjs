@@ -12,7 +12,12 @@
 // service "unverified", never "passed", and cleanup keeps its backup; cleanup
 // deletes only manifest items, by exact path, with no glob and no prune; the
 // one ask collects every config edit, pin change, and rebuilt standalone
-// command; web content is data. These patterns are generic on purpose: a list
+// command; web content is data. Also: no pull before Step 7, so a held service
+// keeps its tag; the Compose rollback re-tags the old image ID and the
+// standalone rollback restores the old container and its restart policy;
+// research that cannot cover the version range gives "ask"; the health wait
+// ends; masking covers values, labels, and Cmd; and Step 8 deletes the inspect
+// JSON and baseline files of passed services. These patterns are generic on purpose: a list
 // of the user's own host or app names here would publish them. It says
 // nothing about whether an agent obeys the text against a real host; that
 // needs a supervised run.
@@ -88,10 +93,26 @@ test('Step 1 gets the setup from memory or one question, never a guess', () => {
 test('nothing changes before Step 6, and Steps 1-5 hold no mutating command', () => {
   assert.match(flat(section('Step 1')), /Make no change to a container, a file, or an image tag before Step 6/)
   const early = ['Step 1', 'Step 2', 'Step 3', 'Step 4', 'Step 5'].map(section).join('\n')
-  const mutating = /docker (compose )?(stop|rm|rmi|tag|run|restart|up)\b|\brm\s|--reflink|\bprune\b/g
+  // MUTATING (defined with its positive control below) includes `docker pull`: a
+  // pull by tag moves the tag of a service that the run then holds or skips.
   // A bare `docker run` names the rebuilt command; it runs nothing.
-  const hits = codeSpans(early).filter((c) => c !== 'docker run' && c.match(mutating))
+  const hits = codeSpans(early).filter((c) => c !== 'docker run' && MUTATING.test(c))
   assert.deepEqual(hits, [])
+})
+
+test('the pull happens only in Step 7, for one service, after Step 6 tags the old image', () => {
+  assert.doesNotMatch(section('Step 1'), /Step 4 pulls images/)
+  assert.match(flat(section('Step 4')), /It does not pull an image, so no tag moves/)
+  assert.match(flat(section('Step 4')), /`docker buildx imagetools inspect --format '\{\{json \.Image\}\}' <image>:<tag>`/)
+  const s7 = flat(section('Step 7'))
+  assert.match(s7, /Pull the new image for this service only: `docker pull <image>:<tag>`/)
+  const pulls = [...skill.matchAll(/docker pull/g)].map((m) => m.index)
+  assert.ok(pulls.length > 0, 'no docker pull in the skill')
+  const step7 = skill.indexOf('## Step 7')
+  const step8 = skill.indexOf('## Step 8')
+  for (const i of pulls) assert.ok(i > step7 && i < step8, 'a docker pull sits outside Step 7')
+  assert.ok(skill.indexOf('docker tag <old image ID> <repository>:pre-') < pulls[0], 'the pull comes before the old image is tagged')
+  assert.match(flat(section('Known pitfalls')), /the run pulls only in Step 7, after Step 6 tags the old image/)
 })
 
 // --- Standalone containers (C1) -----------------------------------------------
@@ -107,6 +128,10 @@ test('standalone rebuild uses every listed inspect field, saves the raw JSON, ma
   assert.match(s2, /goes to the ask in Step 5/)
   assert.match(s2, /secret value replaced by `\*\*\*`/)
   assert.match(s2, /Never write a secret value to memory/)
+  for (const f of ['Extra networks', 'DNS settings', 'Security options', 'tmpfs', 'shm-size', 'Device requests (GPUs)',
+    'resource limits', 'Init', 'stop signal']) {
+    assert.ok(s2.includes(f), `standalone rebuild does not list "${f}"`)
+  }
 })
 
 // --- Research and the ask (C2, C3) --------------------------------------------
@@ -118,6 +143,20 @@ test('decisions are proceed, hold, or ask; any compose or .env edit is an ask, s
   assert.match(s5, /\*\*ask\*\*: all other cases\. This includes each compose or `\.env` edit\. Show the edit as a diff/)
   assert.doesNotMatch(s5, /proceed with changes/i)
   assert.doesNotMatch(skill, /mcp__|Parallel/)
+})
+
+test('research fails closed: no research, no release notes, or an unknown range gives "ask", and proceed needs full coverage', () => {
+  const s5 = flat(section('Step 5'))
+  assert.match(s5, /\*\*proceed\*\*:[^*]*The research ran and covered the whole version range/)
+  assert.match(s5, /If the research cannot run, finds no release notes, or the version range is unknown \(for example, an image with no version label\), the decision is "ask"\. Give the reason in the ask/)
+  assert.match(flat(subsection(section('Step 5'), 'The ask')), /Each service whose research did not run or did not cover the whole version range, with the reason/)
+})
+
+test('the backup plan and the ask run for every updated service, rebuilds included; only the research is limited to version bumps', () => {
+  const s5 = flat(section('Step 5'))
+  assert.match(s5, /Do the research only for real version bumps and pin changes/)
+  assert.match(s5, /Do "Plan the backups" and "The ask" for every service in scope that has an update, rebuilds included/)
+  assert.match(section('Step 5'), /^### Research\s*$/m)
 })
 
 test('a pin change is always an ask item', () => {
@@ -282,11 +321,11 @@ test('no private name from PRIVATE_NAMES_FILE is in the skill or this test file'
     assert.deepEqual(hits, [])
   })
 
-const MUTATING = /docker (compose )?(stop|rm|rmi|tag|run|restart|up)\b|\brm\s|--reflink|\bprune\b/
+const MUTATING = /docker (compose )?(stop|rm|rmi|tag|run|restart|up|pull)\b|\brm\s|--reflink|\bprune\b/
 
 test('positive control: the mutating-command filter finds commands in Steps 6 and 7', () => {
   const late = codeSpans(section('Step 6') + section('Step 7')).filter((c) => MUTATING.test(c))
-  for (const want of ['docker tag', 'docker compose up', 'docker compose stop', '--reflink=always']) {
+  for (const want of ['docker tag', 'docker compose up', 'docker compose stop', '--reflink=always', 'docker pull']) {
     assert.ok(late.some((c) => c.includes(want)), `filter misses "${want}"; the Steps 1-5 test would pass vacuously`)
   }
 })
@@ -314,17 +353,17 @@ test('a failed backup restarts the old container, marks the service skipped, and
 
 test('the old image is tagged before any recreate, and the manifest holds the old image ID and rollback command', () => {
   const s6 = flat(section('Step 6'))
-  assert.match(s6, /Tag the old image: `docker tag <old image ID> <repository>:pre-<YYYYMMDD>`/)
-  assert.match(s6, /The old image ID and its `:pre-<YYYYMMDD>` tag/)
+  assert.match(s6, /Tag the old image: `docker tag <old image ID> <repository>:pre-<YYYYMMDD-HHMM>`/)
+  assert.match(s6, /The old image ID and its `:pre-<YYYYMMDD-HHMM>` tag/)
   assert.match(s6, /The rollback command of the service/)
   assert.ok(skill.indexOf('docker tag <old image ID>') < skill.indexOf('docker compose up -d --no-deps'), 'tag comes after the recreate')
 })
 
 test('standalone recreate keeps the old container under a -pre- name and lists it in the manifest', () => {
   const s7 = flat(section('Step 7'))
-  assert.match(s7, /rename it to `<name>-pre-<YYYYMMDD>`/)
+  assert.match(s7, /rename it to `<name>-pre-<YYYYMMDD-HHMM>`/)
   assert.match(s7, /Add the renamed container to the manifest/)
-  assert.match(flat(section('Step 8')), /`docker rm <name>-pre-<YYYYMMDD>`/)
+  assert.match(flat(section('Step 8')), /`docker rm <name>-pre-<YYYYMMDD-HHMM>`/)
 })
 
 test('baseline logs are saved before the update, because a recreate loses them', () => {
@@ -381,32 +420,86 @@ test('the wait for a healthy container ends: it names unhealthy or a time limit'
   assert.match(withHealthcheck, /`?unhealthy`?|\b(\d+|one|two|three|five|ten|fifteen)\s+(seconds?|minutes?)\b|time ?out|at most/i)
 })
 
-// --- Proposals for the maker (todo: do not fail the suite) ----------------------
+test('the wait ends on `unhealthy` or after 5 minutes, and both give Health = fail', () => {
+  assert.match(flat(section('Step 7')), /Wait until the health status is `healthy` or `unhealthy`, or until 5 minutes pass/)
+  const health = section('Step 7').split('\n').find((l) => l.startsWith('| Health |'))
+  assert.ok(health, 'no Health row')
+  const fail = health.split('|')[3]
+  assert.match(fail, /`unhealthy`/)
+  assert.match(fail, /still `starting` after 5 minutes/)
+})
 
-// Step 4 pulls by tag before any hold decision. For a held or declined Compose
-// service the tag then points at the new image, and no :pre- tag exists for it
-// (Step 6 runs only for updated services), so the next `docker compose up -d` in
-// that project upgrades the "held" service. One valid fix: pull by digest
-// (<image>@<digest>) and move the tag only in Step 7; another: re-tag the old
-// image ID for each service that is not updated.
-test('PROPOSED CONTRACT: a held or declined service keeps its tag on the old image after the run', { todo: true }, () => {
+// --- Former proposals, now contracts (were todo against 28b911d) ----------------
+
+// Step 4 pulled by tag before any hold decision, so a held or declined Compose
+// service had its tag moved to the new image, and the next `docker compose up -d`
+// in that project upgraded it. The fix: Step 4 reads the registry only, and the
+// pull runs in Step 7 for the one service being updated.
+test('a held or declined service keeps its tag on the old image after the run', () => {
   const s4 = flat(section('Step 4'))
   assert.ok(/pull[^.]*(@<digest>|by digest)/i.test(s4) || /held[^.]*\b(re-?tag|tag)\b/i.test(skill),
     'Step 4 pulls by tag and nothing points the tag of a held service back at its old image')
+  assert.match(s4, /A held, declined, or skipped service keeps its tag on the old image, because the run pulls only in Step 7/)
+  assert.deepEqual(codeSpans(section('Step 4')).filter((c) => /docker pull/.test(c)), [])
 })
 
-// Rollback says "Start the old image (the :pre- tag ...)", but the compose file
-// names <repository>:<tag>, which now points at the new image. As written,
-// `docker compose up -d --no-deps <service>` restarts the new image.
-test('PROPOSED CONTRACT: Compose rollback points the compose tag back at the old image ID before recreate', { todo: true }, () => {
+// The compose file names <repository>:<tag>, which points at the new image after
+// the pull. A rollback that only restarts the service starts the new image again.
+test('Compose rollback points the compose tag back at the old image ID before recreate', () => {
   const s7 = flat(section('Step 7'))
   assert.match(s7, /docker tag <old image ID> <repository>:<tag>|pin the old image ID in the compose file/)
+  assert.match(s7, /Compose: run `docker tag <old image ID> <repository>:<tag>`, so that the tag points at the old image again\. Then run `docker compose up -d --no-deps <service>`/)
+  const rollback = s7.slice(s7.indexOf('If the service failed, roll it back'))
+  assert.ok(rollback.indexOf('docker tag <old image ID> <repository>:<tag>') < rollback.indexOf('docker compose up -d --no-deps'), 're-tag comes after the recreate')
+  assert.match(flat(section('Step 6')), /The rollback command of the service\. Write the exact command for its form from Step 7 item 6 \(Compose or standalone\)/)
 })
 
-// The secret rule keys on the variable name only. A DATABASE_URL with
-// user:password@ in its value, or a basic-auth hash in a label or Cmd, is shown
-// unmasked unless the agent happens to be "not sure".
-test('PROPOSED CONTRACT: masking also covers credentials in values, labels, and Cmd', { todo: true }, () => {
+test('standalone rollback removes the new container, renames the old one back, and restores its restart policy', () => {
+  const s7 = flat(section('Step 7'))
+  assert.match(s7, /Standalone: run `docker rm -f <name>` on the new container, and `docker rename <name>-pre-<YYYYMMDD-HHMM> <name>`/)
+  assert.match(s7, /`docker update --restart=<original policy> <name>`, with the policy from the saved `docker inspect` JSON/)
+  assert.match(s7, /Then run `docker start <name>`/)
+})
+
+test('the renamed old standalone container cannot start again after a reboot', () => {
+  const s7 = flat(section('Step 7'))
+  const rename = s7.indexOf('rename it to `<name>-pre-<YYYYMMDD-HHMM>`')
+  const noRestart = s7.indexOf('docker update --restart=no <name>-pre-<YYYYMMDD-HHMM>')
+  const start = s7.indexOf('Then start the accepted `docker run` command')
+  assert.ok(rename >= 0 && noRestart > rename && start > noRestart, 'restart=no is not set between the rename and the new container')
+})
+
+// The secret rule keyed on the variable name only. A connection-string value with
+// credentials in it, or a credential in a label or Cmd, was shown unmasked unless
+// the agent happened to be "not sure".
+test('masking also covers credentials in values, labels, and Cmd', () => {
   const s2 = flat(section('Step 2'))
   assert.match(s2, /value (that )?holds (a )?(password|credential)|user:password@|labels?[^.]*\*\*\*|Cmd[^.]*\*\*\*/i)
+  assert.match(s2, /Its key holds `PASS`, `SECRET`, `TOKEN`, `KEY`, `AUTH`, or `CREDENTIAL`/)
+  assert.match(s2, /The value holds credentials in the form `user:pass@`/)
+  assert.match(s2, /You are not sure/)
+  assert.match(s2, /Look for secret values in the environment values, the labels, Cmd, the entrypoint, and the healthcheck, and replace each one with `\*\*\*`/)
+})
+
+// --- Run folder secrets, shared images, and failed runs ---------------------------
+
+test('the inspect JSON and baseline files are manifest items, and Step 8 deletes them for passed services', () => {
+  assert.match(flat(section('Step 2')), /Add each JSON file to the manifest as a run-level item, under its service/)
+  assert.match(flat(section('Step 3')), /Add each baseline file and log file to the manifest as a run-level item/)
+  const s8 = flat(section('Step 8'))
+  const list = s8.slice(s8.indexOf('delete the manifest items of each service that passed'), s8.indexOf('Never use a glob'))
+  assert.match(list, /The saved `docker inspect` JSON and the baseline files of the service/)
+  assert.match(s8, /delete the saved `docker inspect` JSON and the baseline files of each service that had no update/)
+  assert.match(s8, /If no service is failed, held, unverified, or skipped, delete the run-level files: the host lists and the free-space records/)
+  assert.match(flat(section('Step 9')), /If the run keeps any file, give the path of the run backup folder\. Say that the folder holds unmasked environment values/)
+})
+
+test('old-image tags and renamed containers use the run stamp, and a shared image ID is not removed while a kept service names it', () => {
+  assert.match(flat(section('Step 2')), /`<backup volume>\/update-homelab\/<YYYYMMDD-HHMM>\/`\. This stamp is also the stamp of the old image tags and the renamed containers/)
+  assert.doesNotMatch(skill, /pre-<YYYYMMDD>/)
+  assert.match(flat(section('Step 8')), /If the manifest entry of a kept service names the same image ID, do not remove that image\. Put it in the report/)
+})
+
+test('after a failed service, Step 8 still runs its host-wide check and cleans only the services that passed before', () => {
+  assert.match(flat(section('Step 7')), /Before the report, Step 8 still does its host-wide check\. It cleans only the services that passed before the failure/)
 })
