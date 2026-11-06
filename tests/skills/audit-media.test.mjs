@@ -22,7 +22,7 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { readFileSync, mkdtempSync, writeFileSync, existsSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -126,7 +126,6 @@ test('no host, IP, tailnet name, URL, or API key is in the skill', () => {
   const leaks = [
     /\b\d{1,3}(\.\d{1,3}){3}\b/, // IPv4
     /\.ts\.net\b/i, // tailnet
-    /volcanic/i, // the NAS host name
     /https?:\/\//i, // any URL
     /\b[a-z0-9-]+\.(local|lan|home|internal)\b/i, // LAN host names
     /:\d{4,5}\b/, // host:port
@@ -134,6 +133,31 @@ test('no host, IP, tailnet name, URL, or API key is in the skill', () => {
   ]
   for (const re of leaks) assert.doesNotMatch(skill, re)
 })
+
+// Generic patterns cannot catch a bare host name, and listing it here would
+// publish it. This test reads host and tailnet names from a file outside the
+// repo, one per line ('#' starts a comment), and skips when no file is given.
+// List only host names: this skill names its apps on purpose.
+//   docker run --rm -v "$PWD":/w -w /w -v /path/to/hosts.txt:/hosts.txt:ro \
+//     -e PRIVATE_HOSTS_FILE=/hosts.txt node:latest node --test tests/skills/
+const hostsFile = process.env.PRIVATE_HOSTS_FILE
+test('no private host name from PRIVATE_HOSTS_FILE is in the skill or this test file',
+  { skip: hostsFile ? false : 'PRIVATE_HOSTS_FILE not set (see the comment above this test)' }, () => {
+    assert.ok(existsSync(hostsFile), `PRIVATE_HOSTS_FILE ${hostsFile} does not exist`)
+    const names = readFileSync(hostsFile, 'utf8').split('\n').map((l) => l.replace(/#.*/, '').trim()).filter(Boolean)
+    // Fail closed: an empty list proves nothing.
+    assert.ok(names.length > 0, 'PRIVATE_HOSTS_FILE holds no names')
+    const self = readFileSync(new URL(import.meta.url), 'utf8')
+    const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    const hits = []
+    for (const [where, text] of [['SKILL.md', skill], ['test file', self]]) {
+      for (const [i, n] of names.entries()) {
+        if (new RegExp(esc(n), 'i').test(text)) hits.push(`${where}: name #${i + 1}`)
+      }
+    }
+    // Report the line number in the hosts file, not the name, so logs stay clean.
+    assert.deepEqual(hits, [])
+  })
 
 test('Step 1 gets the setup from memory or one question, never a guess', () => {
   assert.match(section('The stack'), /host, the paths, the URLs, and the API keys are not in this skill/)
