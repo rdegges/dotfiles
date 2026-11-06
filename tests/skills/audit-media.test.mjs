@@ -9,8 +9,10 @@
 // server and a primary player, Infuse as a primary player, Seerr for requests, qBittorrent as the
 // download client, and Sonarr, Radarr, Prowlarr, Bazarr as the *arr apps), with
 // one row per app and no other server, player, request, or download app named;
-// it holds no host, IP, tailnet name, URL, or API key (this repo is public) and
-// sends the agent to memory or the user for them; it stays read-only before
+// it holds no IP, tailnet domain, URL, LAN host name, host:port, or API-key
+// shape (this repo is public), and, only when PRIVATE_HOSTS_FILE is set, none
+// of the host names listed in that file; it sends the agent to memory or the
+// user for them; it stays read-only before
 // Step 5; renames, deletes, remuxes, plugin and settings changes, and restarts
 // sit behind an ask; the track policy keeps one default audio, at most one
 // default subtitle, and no forced foreign subtitle; Step 6 re-checks every fix
@@ -22,7 +24,7 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { readFileSync, mkdtempSync, writeFileSync, existsSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -126,7 +128,6 @@ test('no host, IP, tailnet name, URL, or API key is in the skill', () => {
   const leaks = [
     /\b\d{1,3}(\.\d{1,3}){3}\b/, // IPv4
     /\.ts\.net\b/i, // tailnet
-    /volcanic/i, // the NAS host name
     /https?:\/\//i, // any URL
     /\b[a-z0-9-]+\.(local|lan|home|internal)\b/i, // LAN host names
     /:\d{4,5}\b/, // host:port
@@ -134,6 +135,72 @@ test('no host, IP, tailnet name, URL, or API key is in the skill', () => {
   ]
   for (const re of leaks) assert.doesNotMatch(skill, re)
 })
+
+// Generic patterns cannot catch a bare host name, and listing it here would
+// publish it. This test reads host and tailnet names from a file outside the
+// repo, one per line ('#' starts a comment), and skips when no file is given.
+// List only host names: this skill names its apps on purpose.
+//   docker run --rm -v "$PWD":/w -w /w -v /path/to/hosts.txt:/hosts.txt:ro \
+//     -e PRIVATE_HOSTS_FILE=/hosts.txt node:latest node --test tests/skills/
+const hostsFile = process.env.PRIVATE_HOSTS_FILE
+
+// Keep the 1-based file line with each name, so a hit points at the right line
+// even when comments or blank lines come before it.
+function parseHostNames(text) {
+  return text.split('\n')
+    .map((l, i) => ({ line: i + 1, name: l.replace(/#.*/, '').trim() }))
+    .filter((e) => e.name)
+}
+
+// Case-insensitive substring match, so a name inside a longer token
+// (name-nas, name.lan) still counts. A hit holds the source and line, never the name.
+function hostNameHits(entries, sources) {
+  const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const hits = []
+  for (const [where, text] of sources) {
+    for (const { line, name } of entries) {
+      if (new RegExp(esc(name), 'i').test(text)) hits.push(`${where}: hosts file line ${line}`)
+    }
+  }
+  return hits
+}
+
+test('positive control: the host-name check fires on a planted name, case-insensitive, inside a token', () => {
+  const entries = parseHostNames('examplehost-zz9\n')
+  assert.deepEqual(hostNameHits(entries, [['doc', 'ssh to EXAMPLEHOST-ZZ9-nas.lan now']]), ['doc: hosts file line 1'])
+  assert.deepEqual(hostNameHits(entries, [['doc', 'no such name here']]), [])
+})
+
+test('host-name check: comments, blank lines, CRLF, and inline comments are skipped, and hits name the real file line', () => {
+  const entries = parseHostNames('# header\r\n\r\n   \r\nexamplehost-zz9 # the box\r\n  # indented comment\r\nother-zz8\r\n')
+  assert.deepEqual(entries, [{ line: 4, name: 'examplehost-zz9' }, { line: 6, name: 'other-zz8' }])
+  assert.deepEqual(hostNameHits(entries, [['a', 'other-zz8'], ['b', 'examplehost-zz9']]),
+    ['a: hosts file line 6', 'b: hosts file line 4'])
+  assert.deepEqual(parseHostNames('# only a comment\n\n'), [])
+})
+
+test('host-name check: regex metacharacters in a name match only literally', () => {
+  const entries = parseHostNames('box.zz9\nnas(1)\n')
+  assert.deepEqual(hostNameHits(entries, [['doc', 'boxXzz9 and nas1']]), [])
+  assert.deepEqual(hostNameHits(entries, [['doc', 'box.zz9 and nas(1)']]), ['doc: hosts file line 1', 'doc: hosts file line 2'])
+})
+
+test('host-name check: a hit never carries the name it found', () => {
+  const hits = hostNameHits(parseHostNames('examplehost-zz9\n'), [['doc', 'examplehost-zz9']])
+  assert.equal(hits.length, 1)
+  for (const h of hits) assert.doesNotMatch(h, /examplehost/i)
+})
+
+test('no private host name from PRIVATE_HOSTS_FILE is in the skill or this test file',
+  { skip: hostsFile ? false : 'PRIVATE_HOSTS_FILE not set (see the comment above this test)' }, () => {
+    assert.ok(existsSync(hostsFile), `PRIVATE_HOSTS_FILE ${hostsFile} does not exist`)
+    const entries = parseHostNames(readFileSync(hostsFile, 'utf8'))
+    // Fail closed: an empty list proves nothing.
+    assert.ok(entries.length > 0, 'PRIVATE_HOSTS_FILE holds no names')
+    const self = readFileSync(new URL(import.meta.url), 'utf8')
+    // Report the line number in the hosts file, not the name, so logs stay clean.
+    assert.deepEqual(hostNameHits(entries, [['SKILL.md', skill], ['test file', self]]), [])
+  })
 
 test('Step 1 gets the setup from memory or one question, never a guess', () => {
   assert.match(section('The stack'), /host, the paths, the URLs, and the API keys are not in this skill/)
