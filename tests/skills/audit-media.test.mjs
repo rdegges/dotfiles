@@ -9,8 +9,10 @@
 // server and a primary player, Infuse as a primary player, Seerr for requests, qBittorrent as the
 // download client, and Sonarr, Radarr, Prowlarr, Bazarr as the *arr apps), with
 // one row per app and no other server, player, request, or download app named;
-// it holds no host, IP, tailnet name, URL, or API key (this repo is public) and
-// sends the agent to memory or the user for them; it stays read-only before
+// it holds no IP, tailnet domain, URL, LAN host name, host:port, or API-key
+// shape (this repo is public), and, only when PRIVATE_HOSTS_FILE is set, none
+// of the host names listed in that file; it sends the agent to memory or the
+// user for them; it stays read-only before
 // Step 5; renames, deletes, remuxes, plugin and settings changes, and restarts
 // sit behind an ask; the track policy keeps one default audio, at most one
 // default subtitle, and no forced foreign subtitle; Step 6 re-checks every fix
