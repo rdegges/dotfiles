@@ -19,7 +19,7 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
+import { readFileSync, existsSync } from 'node:fs'
 
 const skill = readFileSync(new URL('../../dot_claude/skills/update-homelab/SKILL.md', import.meta.url), 'utf8')
 
@@ -67,19 +67,9 @@ test('frontmatter: name is update-homelab, and the description gives the trigger
 
 // --- No machine facts in a public repo ----------------------------------------
 
-test('no IP, tailnet name, host:port, URL, NAS volume path, or API-key shape is in the skill', () => {
-  const leaks = {
-    IPv4: /\b\d{1,3}(\.\d{1,3}){3}\b/,
-    tailnet: /\.ts\.net\b/i,
-    'host:port': /[a-z0-9\]]:\d{2,5}\b/i,
-    URL: /\b[a-z][a-z0-9+.-]*:\/\//i,
-    'LAN host name': /\b[a-z0-9-]+\.(local|lan|home|internal)\b/i,
-    'NAS volume path': /\/volume\d+\//i,
-    'hex API key': /\b[a-f0-9]{32,}\b/i,
-    'prefixed token': /\b(sk-[A-Za-z0-9]{16,}|gh[pousr]_[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}|xox[abprs]-[A-Za-z0-9-]{10,})/,
-    'sha256 digest': /sha256:[a-f0-9]{12,}/i,
-  }
-  for (const [what, re] of Object.entries(leaks)) {
+test('no IP, MAC, tailnet name, host:port, URL, NAS volume, home path, user@host, or API-key shape is in the skill', () => {
+  // LEAKS is defined with its positive control further down.
+  for (const [what, re] of Object.entries(LEAKS)) {
     const m = skill.match(re)
     assert.equal(m, null, `${what} found: ${m && m[0]}`)
   }
@@ -221,4 +211,202 @@ test('the report gives rollback commands, says cleaned services cannot roll back
   assert.match(s9, /Cleaned services can no longer roll back/)
   assert.match(s9, /Do not put the manifest or a secret value in the report/)
   assert.match(s9, /never secret values/)
+})
+
+// --- Tester additions (acceptance gate, PR #69) --------------------------------
+//
+// Positive controls first: each detector above must fire on a planted sample, so
+// a typo in a regex or a broken helper cannot turn a safety test into a no-op.
+
+const LEAKS = {
+  IPv4: /\b\d{1,3}(\.\d{1,3}){3}\b/,
+  IPv6: /\b(?:[0-9a-f]{1,4}:){3,7}[0-9a-f]{1,4}\b|\b[0-9a-f]{1,4}::[0-9a-f]{1,4}\b/i,
+  'MAC address': /\b[0-9a-f]{2}(:[0-9a-f]{2}){5}\b/i,
+  tailnet: /\.ts\.net\b/i,
+  'host:port': /[a-z0-9\]]:\d{2,5}\b/i,
+  URL: /\b[a-z][a-z0-9+.-]*:\/\//i,
+  'LAN host name': /\b[a-z0-9-]+\.(local|lan|home|internal)\b/i,
+  'NAS volume path': /\/volume\d+\b/i,
+  'home directory': /\/(Users|home)\/[a-z0-9._-]+/i,
+  'user@host or email': /\b[a-z0-9._-]+@[a-z0-9-]+(\.[a-z0-9-]+)*\b/i,
+  'hex API key': /\b[a-f0-9]{32,}\b/i,
+  'prefixed token': /\b(sk-[A-Za-z0-9]{16,}|gh[pousr]_[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}|xox[abprs]-[A-Za-z0-9-]{10,})/,
+  'sha256 digest': /sha256:[a-f0-9]{12,}/i,
+}
+
+// Built from parts so this file holds no literal sample of any shape.
+const PLANTED = {
+  IPv4: ['10', '0', '0', '7'].join('.'),
+  IPv6: ['fd00', '0', '0', '1'].join(':'),
+  'MAC address': ['aa', 'bb', 'cc', 'dd', 'ee', 'ff'].join(':'),
+  tailnet: 'box' + '.example.ts' + '.net',
+  'host:port': 'box' + ':' + '4321',
+  URL: 'http' + '://box',
+  'LAN host name': 'box' + '.local',
+  'NAS volume path': '/' + 'volume1',
+  'home directory': '/' + 'home' + '/someone',
+  'user@host or email': 'admin' + '@' + 'box',
+  'hex API key': 'ab'.repeat(16),
+  'prefixed token': 'gh' + 'p_' + 'A'.repeat(24),
+  'sha256 digest': 'sha256' + ':' + 'ab'.repeat(8),
+}
+
+test('positive control: every leak detector fires on a planted sample', () => {
+  for (const [what, re] of Object.entries(LEAKS)) {
+    assert.ok(PLANTED[what], `no planted sample for ${what}`)
+    assert.match(`text ${PLANTED[what]} text`, re, `${what} detector does not fire`)
+  }
+})
+
+// Generic patterns cannot catch a real host or app name, and listing those names
+// here would publish them. This test reads them from a file outside the repo, one
+// per line ('#' starts a comment), and skips when no file is given:
+//   docker run --rm -v "$PWD":/w -w /w -v /path/to/names.txt:/names.txt:ro \
+//     -e PRIVATE_NAMES_FILE=/names.txt node:latest node --test tests/skills/
+const namesFile = process.env.PRIVATE_NAMES_FILE
+test('no private name from PRIVATE_NAMES_FILE is in the skill or this test file',
+  { skip: namesFile ? false : 'PRIVATE_NAMES_FILE not set (see the comment above this test)' }, () => {
+    assert.ok(existsSync(namesFile), `PRIVATE_NAMES_FILE ${namesFile} does not exist`)
+    const names = readFileSync(namesFile, 'utf8').split('\n').map((l) => l.replace(/#.*/, '').trim()).filter(Boolean)
+    // Fail closed: an empty list proves nothing.
+    assert.ok(names.length > 0, 'PRIVATE_NAMES_FILE holds no names')
+    const self = readFileSync(new URL(import.meta.url), 'utf8')
+    const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    const hits = []
+    for (const [where, text] of [['SKILL.md', skill], ['test file', self]]) {
+      for (const n of names) {
+        if (new RegExp(`(?<![a-z0-9])${esc(n)}(?![a-z0-9])`, 'i').test(text)) hits.push(`${where}: name #${names.indexOf(n) + 1}`)
+      }
+    }
+    // Report the line number in the names file, not the name, so CI logs stay clean.
+    assert.deepEqual(hits, [])
+  })
+
+const MUTATING = /docker (compose )?(stop|rm|rmi|tag|run|restart|up)\b|\brm\s|--reflink|\bprune\b/
+
+test('positive control: the mutating-command filter finds commands in Steps 6 and 7', () => {
+  const late = codeSpans(section('Step 6') + section('Step 7')).filter((c) => MUTATING.test(c))
+  for (const want of ['docker tag', 'docker compose up', 'docker compose stop', '--reflink=always']) {
+    assert.ok(late.some((c) => c.includes(want)), `filter misses "${want}"; the Steps 1-5 test would pass vacuously`)
+  }
+})
+
+test('positive control: the cleanup glob and delete detectors fire on planted commands', () => {
+  const glob = /[*?]|\[.*\]/
+  assert.match('rm /backup/update-homelab/*', glob)
+  assert.match('docker rmi img-pre-2026110?', glob)
+  assert.match('rm -rf /x', /rm -[a-z]*r|-f\b|--force/)
+  assert.match('docker rmi -f abc', /rm -[a-z]*r|-f\b|--force/)
+})
+
+test('cleanup has no case-variant recursive delete, find -delete, xargs, or command substitution', () => {
+  const raw = section('Step 8')
+  assert.doesNotMatch(raw, /\brm -[A-Za-z]*[rR]/, 'recursive rm')
+  assert.doesNotMatch(raw, /-delete\b|\bxargs\b|\$\(|`[^`]*\bfind\b/, 'bulk delete by find, xargs, or $(...)')
+  assert.match(flat(raw), /If Docker refuses, report it\. Do not force it/)
+})
+
+// --- Regression pins the existing tests did not reach -------------------------
+
+test('a failed backup restarts the old container, marks the service skipped, and moves on (no stop)', () => {
+  assert.match(flat(section('Step 6')), /If a backup step fails, start the old container again and make sure that it runs\. Mark the service "skipped", and go to the next service/)
+})
+
+test('the old image is tagged before any recreate, and the manifest holds the old image ID and rollback command', () => {
+  const s6 = flat(section('Step 6'))
+  assert.match(s6, /Tag the old image: `docker tag <old image ID> <repository>:pre-<YYYYMMDD>`/)
+  assert.match(s6, /The old image ID and its `:pre-<YYYYMMDD>` tag/)
+  assert.match(s6, /The rollback command of the service/)
+  assert.ok(skill.indexOf('docker tag <old image ID>') < skill.indexOf('docker compose up -d --no-deps'), 'tag comes after the recreate')
+})
+
+test('standalone recreate keeps the old container under a -pre- name and lists it in the manifest', () => {
+  const s7 = flat(section('Step 7'))
+  assert.match(s7, /rename it to `<name>-pre-<YYYYMMDD>`/)
+  assert.match(s7, /Add the renamed container to the manifest/)
+  assert.match(flat(section('Step 8')), /`docker rm <name>-pre-<YYYYMMDD>`/)
+})
+
+test('baseline logs are saved before the update, because a recreate loses them', () => {
+  const s3 = flat(section('Step 3'))
+  assert.match(s3, /`docker logs --since 24h`/)
+  assert.match(s3, /A recreated container loses the logs of the old container/)
+  assert.match(s3, /pre-existing issues/)
+})
+
+test('the ask lists held services with reasons, and a declined service is held and untouched', () => {
+  const ask = flat(subsection(section('Step 5'), 'The ask'))
+  assert.match(ask, /The held services, and the reason for each hold/)
+  assert.match(ask, /A service that the user does not accept is held\. Do not change it/)
+})
+
+test('a failed check makes the service failed; rollback restores files, database, old image, then checks the baseline', () => {
+  const s7 = flat(section('Step 7'))
+  assert.match(s7, /\*\*failed\*\*: one or more checks fail/)
+  assert.match(s7, /Put back the compose file, the `\.env` file, and the bind-mount copies/)
+  assert.match(s7, /If a migration ran, restore the database from the backup/)
+  assert.match(s7, /Make sure that the service matches its baseline/)
+})
+
+test('known pitfalls keep the four footguns this skill exists to avoid', () => {
+  const p = flat(section('Known pitfalls'))
+  assert.match(p, /`docker compose up -d` with no service name recreates every service/)
+  assert.match(p, /`cp --reflink=auto` makes a full copy, with no message/)
+  assert.match(p, /Read the restart count, not only the state/)
+  assert.match(p, /A pull moves the tag to the new image/)
+})
+
+// --- Defect proofs (fail against 28b911d) ---------------------------------------
+
+// Step 5 opens with "Do this step only for real version bumps and pin changes",
+// but "### Plan the backups" and "### The ask" sit inside Step 5. Read as
+// written, a run with only rebuilds (or nothing but a rebuilt standalone command
+// to accept) skips the backup plan and the one ask that Step 2 and Step 7 depend
+// on. Any fix passes: scope the sentence to the research, or move the
+// subsections out of Step 5.
+test('the "only for version bumps" scope of Step 5 does not also gate the backup plan and the ask', () => {
+  const s5 = section('Step 5')
+  const gated = /Do this step only for real version bumps/.test(s5)
+  assert.ok(!(gated && /^### The ask/m.test(s5)), 'Step 5 is limited to version bumps, but the ask that every rebuilt standalone command needs is inside it')
+  assert.ok(!(gated && /^### Plan the backups/m.test(s5)), 'Step 5 is limited to version bumps, but the backup plan that every updated service needs is inside it')
+})
+
+// "Wait until the health status is `healthy`" has no bound: a container that
+// goes `unhealthy` or stays `starting` never satisfies it. Any bound passes: a
+// time limit, or naming `unhealthy` as an end state.
+test('the wait for a healthy container ends: it names unhealthy or a time limit', () => {
+  const item = section('Step 7').match(/^3\. Wait until[^\n]*(\n(?!\d+\. )[^\n]*)*/m)
+  assert.ok(item, 'no Step 7 item 3 wait')
+  const withHealthcheck = item[0].split(/(?<=\.)\s+/).filter((s) => !/no healthcheck/.test(s)).join(' ')
+  assert.match(withHealthcheck, /`?unhealthy`?|\b(\d+|one|two|three|five|ten|fifteen)\s+(seconds?|minutes?)\b|time ?out|at most/i)
+})
+
+// --- Proposals for the maker (todo: do not fail the suite) ----------------------
+
+// Step 4 pulls by tag before any hold decision. For a held or declined Compose
+// service the tag then points at the new image, and no :pre- tag exists for it
+// (Step 6 runs only for updated services), so the next `docker compose up -d` in
+// that project upgrades the "held" service. One valid fix: pull by digest
+// (<image>@<digest>) and move the tag only in Step 7; another: re-tag the old
+// image ID for each service that is not updated.
+test('PROPOSED CONTRACT: a held or declined service keeps its tag on the old image after the run', { todo: true }, () => {
+  const s4 = flat(section('Step 4'))
+  assert.ok(/pull[^.]*(@<digest>|by digest)/i.test(s4) || /held[^.]*\b(re-?tag|tag)\b/i.test(skill),
+    'Step 4 pulls by tag and nothing points the tag of a held service back at its old image')
+})
+
+// Rollback says "Start the old image (the :pre- tag ...)", but the compose file
+// names <repository>:<tag>, which now points at the new image. As written,
+// `docker compose up -d --no-deps <service>` restarts the new image.
+test('PROPOSED CONTRACT: Compose rollback points the compose tag back at the old image ID before recreate', { todo: true }, () => {
+  const s7 = flat(section('Step 7'))
+  assert.match(s7, /docker tag <old image ID> <repository>:<tag>|pin the old image ID in the compose file/)
+})
+
+// The secret rule keys on the variable name only. A DATABASE_URL with
+// user:password@ in its value, or a basic-auth hash in a label or Cmd, is shown
+// unmasked unless the agent happens to be "not sure".
+test('PROPOSED CONTRACT: masking also covers credentials in values, labels, and Cmd', { todo: true }, () => {
+  const s2 = flat(section('Step 2'))
+  assert.match(s2, /value (that )?holds (a )?(password|credential)|user:password@|labels?[^.]*\*\*\*|Cmd[^.]*\*\*\*/i)
 })
