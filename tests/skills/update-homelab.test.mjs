@@ -503,3 +503,139 @@ test('old-image tags and renamed containers use the run stamp, and a shared imag
 test('after a failed service, Step 8 still runs its host-wide check and cleans only the services that passed before', () => {
   assert.match(flat(section('Step 7')), /Before the report, Step 8 still does its host-wide check\. It cleans only the services that passed before the failure/)
 })
+
+// --- Tester additions, round 2 (acceptance gate, PR #69 at 196da92) -------------
+
+// MUTATING misses the Docker verbs that change a container without stop/rm/run:
+// a `docker update --restart=no` or `docker rename` in Steps 1-5 passed the
+// "nothing changes before Step 6" test. This wider filter closes that gap and
+// keeps the read-only verbs (ps, inspect, logs, imagetools, manifest, du, df).
+const MUTATING_WIDE = /\bdocker (compose )?(stop|rm|rmi|tag|run|restart|up|down|pull|update|rename|start|kill|create|pause|commit|cp|load|import|push)\b|\b(rm|mv|cp|chmod|chown|rmdir|truncate)\s|\bsed -i\b|--reflink|\bprune\b/
+
+test('Steps 1-5 hold no mutating command, including docker update, rename, start, and kill', () => {
+  const early = ['Step 1', 'Step 2', 'Step 3', 'Step 4', 'Step 5'].map(section).join('\n')
+  const hits = codeSpans(early).filter((c) => c !== 'docker run' && MUTATING_WIDE.test(c))
+  assert.deepEqual(hits, [])
+})
+
+test('positive control: the wide filter finds the update, rename, start, and forced rm of Step 7, and passes the read-only verbs', () => {
+  const late = codeSpans(section('Step 7')).filter((c) => MUTATING_WIDE.test(c))
+  for (const want of ['docker update --restart=no', 'docker rename', 'docker start', 'docker rm -f']) {
+    assert.ok(late.some((c) => c.includes(want)), `wide filter misses "${want}"`)
+  }
+  for (const ro of ['docker ps', 'docker inspect', 'docker logs --since 24h', 'du -sh', 'df -h',
+    'docker buildx imagetools inspect <image>:<tag>', 'docker manifest inspect <image>:<tag>']) {
+    assert.ok(!MUTATING_WIDE.test(ro), `wide filter flags read-only "${ro}"`)
+  }
+})
+
+// Cross-references are load-bearing: Step 6 tells the agent to copy the
+// rollback command "from Step 7 item 6". A renumbered list would silently send
+// it to the wrong item.
+test('every "Step N" reference names a real step, and "Step 7 item 6" is the rollback item', () => {
+  const steps = new Set([...skill.matchAll(/^## Step (\d+):/gm)].map((m) => m[1]))
+  assert.deepEqual([...steps], ['1', '2', '3', '4', '5', '6', '7', '8', '9'])
+  for (const m of skill.matchAll(/\bStep (\d+)\b/g)) assert.ok(steps.has(m[1]), `reference to missing Step ${m[1]}`)
+  for (const m of skill.matchAll(/\bStep (\d+) item (\d+)\b/g)) {
+    const item = section(`Step ${m[1]}`).match(new RegExp(`^${m[2]}\\. [^\\n]*`, 'm'))
+    assert.ok(item, `Step ${m[1]} has no item ${m[2]}`)
+  }
+  // The reference that tells Step 6 where the rollback command comes from must
+  // land on the rollback item, whatever its number.
+  const ref = flat(section('Step 6')).match(/The rollback command of the service\.[^.]*from Step (\d+) item (\d+)/)
+  assert.ok(ref, 'Step 6 does not say which item holds the rollback command')
+  const target = section(`Step ${ref[1]}`).match(new RegExp(`^${ref[2]}\\. [^\\n]*`, 'm'))
+  assert.ok(target, `Step ${ref[1]} has no item ${ref[2]}`)
+  assert.match(target[0], /roll it back/)
+})
+
+// The pull uses the tag after the accepted edits, so the edit must come first.
+test('Step 7 applies the accepted edit before the pull, and the pull before the recreate', () => {
+  const s7 = flat(section('Step 7'))
+  const edit = s7.indexOf('apply that diff')
+  const pull = s7.indexOf('docker pull <image>:<tag>')
+  const up = s7.indexOf('Compose: `docker compose up -d --no-deps <service>`')
+  assert.ok(edit >= 0 && pull > edit && up > pull, `order is edit ${edit}, pull ${pull}, recreate ${up}`)
+})
+
+// The old image must not start on the new version's data: files and the
+// database go back before the re-tag and the recreate or start.
+test('rollback restores the files and the database before it starts the old image', () => {
+  const s7 = flat(section('Step 7'))
+  const rb = s7.slice(s7.indexOf('If the service failed, roll it back'))
+  const at = (s) => { const i = rb.indexOf(s); assert.ok(i >= 0, `rollback has no "${s}"`); return i }
+  const stop = at('Stop the service')
+  const files = at('Put back the compose file')
+  const db = at('restore the database from the backup')
+  const retag = at('docker tag <old image ID> <repository>:<tag>')
+  const up = at('docker compose up -d --no-deps <service>')
+  const rm = at('docker rm -f <name>')
+  const rename = at('docker rename <name>-pre-<YYYYMMDD-HHMM> <name>')
+  const policy = at('docker update --restart=<original policy> <name>')
+  const start = at('docker start <name>')
+  const check = at('Make sure that the service matches its baseline')
+  assert.ok(stop < files && files < db && db < retag && retag < up, 'Compose rollback order')
+  assert.ok(db < rm && rm < rename && rename < policy && policy < start, 'standalone rollback order')
+  assert.ok(start < check && up < check, 'baseline check comes before the starts')
+})
+
+// Step 6 stops the service before the copy and only then is the old image
+// tagged; the pull (Step 7) needs that tag in place. Also pin that the free
+// space is read again before the copy, not only in Step 5.
+test('Step 6 reads free space, stops, copies, then tags, in that order', () => {
+  const s6 = flat(section('Step 6'))
+  const free = s6.indexOf('Read the free space on the backup volume again')
+  const stop = s6.indexOf('Stop only this service')
+  const copy = s6.indexOf('Copy the configuration and app-state bind mounts while the service is stopped')
+  const tag = s6.indexOf('Tag the old image')
+  assert.ok(free >= 0 && stop > free && copy > stop && tag > copy, `order is free ${free}, stop ${stop}, copy ${copy}, tag ${tag}`)
+})
+
+// --- Proposals for the maker, round 2 (todo: do not fail the suite) ------------
+
+// Two services that use the same <image>:<tag> (an app and its worker, or two
+// projects on one image) share one local tag. The Step 7 pull for the first
+// moves the tag for both, so a held, declined, or skipped second service has
+// its tag on the new image, and the next `docker compose up -d` upgrades it.
+// That breaks the Step 4 promise "A held, declined, or skipped service keeps
+// its tag on the old image". Updating such services as one unit, or re-tagging
+// the old ID for the kept one, are both valid fixes. The same group also gets
+// version skew between the app and its worker when only one is recreated.
+test('PROPOSED CONTRACT: services that share one image tag are updated together or the kept one is re-tagged', { todo: true }, () => {
+  assert.match(flat(skill), /(share|same) (one |the )?(image|`<image>:<tag>`)[^.]*(together|one unit|re-?tag|keeps? its tag)/i)
+})
+
+// "Put back the bind-mount copies" does not say the restore replaces the
+// folder. Copying the backup over the live folder keeps files the new version
+// made: for SQLite, a -wal or -shm file next to the restored database is
+// replayed into it on the next open. The restore must make each mount equal to
+// its backup (for example, move the failed state aside into the run folder,
+// then copy the backup in).
+test('PROPOSED CONTRACT: rollback makes each bind mount equal to its backup, not the backup copied over the new files', { todo: true }, () => {
+  const s7 = flat(section('Step 7'))
+  assert.match(s7, /(move|rename) the (current|failed|new)[^.]*aside|replace[^.]*(mount|folder)|equal to (its|the) backup|files that the new version (made|created)/i)
+})
+
+// Step 4 compares the local digest of the tag with the registry. If the tag
+// was already pulled before the run (a manual `docker compose pull`), the two
+// match and the run reports "no update", while the container still runs the
+// older image ID from Step 2.
+test('PROPOSED CONTRACT: Step 4 also flags a container whose image ID differs from the image its tag points at', { todo: true }, () => {
+  assert.match(flat(section('Step 4')), /image ID of the container[^.]*(differ|not the same)|container runs an older image/i)
+})
+
+// After a pin change, the Compose rollback "docker tag <old image ID>
+// <repository>:<tag>" does not say which tag. Re-tagging the new pin's tag
+// (for example :1.3) at the old image makes a local tag lie about its version.
+// The tag must be the one in the restored compose or .env file.
+test('PROPOSED CONTRACT: the Compose rollback re-tags the tag of the restored compose file, not the new pin', { todo: true }, () => {
+  assert.match(flat(section('Step 7')), /<tag>[^.]*(restored|old|original) (compose|`\.env`|pin|tag)/i)
+})
+
+// When the run stops on a failed service, the services not yet reached have no
+// result: the Step 9 list is passed, failed, unverified, held, or skipped, and
+// "skipped" already means a failed backup. Every service in scope needs one
+// result in the report.
+test('PROPOSED CONTRACT: services not reached after a stop get their own result in the report', { todo: true }, () => {
+  assert.match(flat(skill), /not (yet )?(reached|started|updated)[^.]*(result|report)|\*\*not started\*\*/i)
+})
