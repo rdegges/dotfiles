@@ -141,22 +141,63 @@ test('no host, IP, tailnet name, URL, or API key is in the skill', () => {
 //   docker run --rm -v "$PWD":/w -w /w -v /path/to/hosts.txt:/hosts.txt:ro \
 //     -e PRIVATE_HOSTS_FILE=/hosts.txt node:latest node --test tests/skills/
 const hostsFile = process.env.PRIVATE_HOSTS_FILE
+
+// Keep the 1-based file line with each name, so a hit points at the right line
+// even when comments or blank lines come before it.
+function parseHostNames(text) {
+  return text.split('\n')
+    .map((l, i) => ({ line: i + 1, name: l.replace(/#.*/, '').trim() }))
+    .filter((e) => e.name)
+}
+
+// Case-insensitive substring match, so a name inside a longer token
+// (name-nas, name.lan) still counts. A hit holds the source and line, never the name.
+function hostNameHits(entries, sources) {
+  const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const hits = []
+  for (const [where, text] of sources) {
+    for (const { line, name } of entries) {
+      if (new RegExp(esc(name), 'i').test(text)) hits.push(`${where}: hosts file line ${line}`)
+    }
+  }
+  return hits
+}
+
+test('positive control: the host-name check fires on a planted name, case-insensitive, inside a token', () => {
+  const entries = parseHostNames('examplehost-zz9\n')
+  assert.deepEqual(hostNameHits(entries, [['doc', 'ssh to EXAMPLEHOST-ZZ9-nas.lan now']]), ['doc: hosts file line 1'])
+  assert.deepEqual(hostNameHits(entries, [['doc', 'no such name here']]), [])
+})
+
+test('host-name check: comments, blank lines, CRLF, and inline comments are skipped, and hits name the real file line', () => {
+  const entries = parseHostNames('# header\r\n\r\n   \r\nexamplehost-zz9 # the box\r\n  # indented comment\r\nother-zz8\r\n')
+  assert.deepEqual(entries, [{ line: 4, name: 'examplehost-zz9' }, { line: 6, name: 'other-zz8' }])
+  assert.deepEqual(hostNameHits(entries, [['a', 'other-zz8'], ['b', 'examplehost-zz9']]),
+    ['a: hosts file line 6', 'b: hosts file line 4'])
+  assert.deepEqual(parseHostNames('# only a comment\n\n'), [])
+})
+
+test('host-name check: regex metacharacters in a name match only literally', () => {
+  const entries = parseHostNames('box.zz9\nnas(1)\n')
+  assert.deepEqual(hostNameHits(entries, [['doc', 'boxXzz9 and nas1']]), [])
+  assert.deepEqual(hostNameHits(entries, [['doc', 'box.zz9 and nas(1)']]), ['doc: hosts file line 1', 'doc: hosts file line 2'])
+})
+
+test('host-name check: a hit never carries the name it found', () => {
+  const hits = hostNameHits(parseHostNames('examplehost-zz9\n'), [['doc', 'examplehost-zz9']])
+  assert.equal(hits.length, 1)
+  for (const h of hits) assert.doesNotMatch(h, /examplehost/i)
+})
+
 test('no private host name from PRIVATE_HOSTS_FILE is in the skill or this test file',
   { skip: hostsFile ? false : 'PRIVATE_HOSTS_FILE not set (see the comment above this test)' }, () => {
     assert.ok(existsSync(hostsFile), `PRIVATE_HOSTS_FILE ${hostsFile} does not exist`)
-    const names = readFileSync(hostsFile, 'utf8').split('\n').map((l) => l.replace(/#.*/, '').trim()).filter(Boolean)
+    const entries = parseHostNames(readFileSync(hostsFile, 'utf8'))
     // Fail closed: an empty list proves nothing.
-    assert.ok(names.length > 0, 'PRIVATE_HOSTS_FILE holds no names')
+    assert.ok(entries.length > 0, 'PRIVATE_HOSTS_FILE holds no names')
     const self = readFileSync(new URL(import.meta.url), 'utf8')
-    const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-    const hits = []
-    for (const [where, text] of [['SKILL.md', skill], ['test file', self]]) {
-      for (const [i, n] of names.entries()) {
-        if (new RegExp(esc(n), 'i').test(text)) hits.push(`${where}: name #${i + 1}`)
-      }
-    }
     // Report the line number in the hosts file, not the name, so logs stay clean.
-    assert.deepEqual(hits, [])
+    assert.deepEqual(hostNameHits(entries, [['SKILL.md', skill], ['test file', self]]), [])
   })
 
 test('Step 1 gets the setup from memory or one question, never a guess', () => {
