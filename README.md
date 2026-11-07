@@ -245,12 +245,13 @@ The only per-machine step is `cf auth login`. `cf` keeps its own credentials, ou
   signed with my API key (higher rate limits; calls spend the free $5/month
   credit). `run_onchange_after_setup-parallel-mcp.sh.tmpl` reads the key once
   from `op://Private/Parallel/credential` into `~/.config/parallel/api-key`
-  (mode 0600), then registers the server with `claude mcp add --scope user` and
-  `opencode mcp add --global`, because chezmoi does not own those tools' config
-  files. The Codex entry is in `dot_codex/config.toml.tmpl`. Claude Code and
-  Codex read the key from `PARALLEL_API_KEY`, which `dot_zshenv` exports from
-  that file. opencode reads the file directly (`{file:...}`), so the desktop
-  app works too. No config stores the key. The only per-machine step: before
+  (mode 0600), then registers the server with `claude mcp add-json --scope user`
+  and `opencode mcp add --global`, because chezmoi does not own those tools'
+  config files. The Codex entry is in `dot_codex/config.toml.tmpl`. Claude Code
+  gets a `headersHelper` that reads the key file each time it connects, so the
+  Claude desktop app works without a shell. opencode reads the file through
+  `{file:...}`. Only Codex reads `PARALLEL_API_KEY`, which `dot_zshenv` exports
+  from that file. No config stores the key. The only per-machine step: before
   the first apply, sign in to `op` and make sure that the `Private` vault has an
   API Credential item named `Parallel` with the key in its `credential` field.
   Until then every apply fails, and the hourly job shows `chezmoi.FAILED` in
