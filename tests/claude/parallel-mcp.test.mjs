@@ -120,7 +120,8 @@ const OLD_ENTRY = JSON.stringify({ type: 'http', url: URL_, headers: { Authoriza
 // Local- and project-scope entries do not affect either call, so the stub
 // does not model them.
 // STUB_<NAME>_RC forces a failure exit for any call to that CLI;
-// STUB_CLAUDE_REMOVE_RC fails only `claude mcp remove`, leaving the entry.
+// STUB_CLAUDE_REMOVE_RC fails only `claude mcp remove`, leaving the entry;
+// STUB_CLAUDE_ADD_RC fails only `claude mcp add-json`.
 const STUB = `#!/bin/bash
 name="\${0##*/}"
 echo "$name $*" >> "$CALLS"
@@ -132,6 +133,7 @@ case "$name $1 $2" in
     if [ ! -f "$STATE" ]; then echo "No MCP server named \\"$5\\" in user scope" >&2; exit 1; fi
     rm -f "$STATE" ;;
   "claude mcp add-json")
+    if [ -n "\${STUB_CLAUDE_ADD_RC:-}" ]; then echo "add-json broke" >&2; exit "$STUB_CLAUDE_ADD_RC"; fi
     if [ -f "$STATE" ]; then echo "MCP server $5 already exists in user config" >&2; exit 1; fi
     printf '%s' "$6" > "$STATE"
     echo "Added http MCP server $5 to user config" ;;
@@ -413,6 +415,85 @@ test('second run after a fresh first run: no op call, user entry replaced with t
     assert.equal(sb.entry(), before)
     assert.doesNotMatch(r.stderr, /already exists/)
   }))
+
+// The remove succeeds and only the add fails: the run must still fail loudly
+// with the add's own error, and opencode must still be tried.
+test('claude remove succeeds but add-json fails: exit non-zero with the add error, opencode still tried', () =>
+  withSandbox({}, (sb) => {
+    sb.setEntry(OLD_ENTRY)
+    const r = sb.run({ STUB_CLAUDE_ADD_RC: '7' })
+    assert.notEqual(r.status, 0, r.stdout + r.stderr)
+    assert.match(r.stderr, /add-json broke/)
+    assert.deepEqual(sb.calls(), [CLAUDE_REMOVE, CLAUDE_ADD, OPENCODE_ADD])
+  }))
+
+// Claude Code 2.1.319 (checked in Docker against search.parallel.ai) sends no
+// Authorization header, and so connects anonymously with "Connected", when the
+// helper's stdout is not valid JSON or its Bearer token is blank. The helper
+// guards a missing or empty file with a sentinel; these are key files that
+// pass `[ -s ]` (so the script never re-fetches them) but still break it: a
+// CRLF line ending puts a raw CR (invalid in a JSON string) in the output, and
+// a whitespace-only file gives a blank token. Invariant, whatever the fix:
+// stdout parses, and the token is non-blank with no whitespace or control
+// characters, so Parallel gets a credential it can reject with a 401.
+for (const shell of ['sh', 'bash']) {
+  for (const [why, content] of [
+    ['CRLF line ending', `${KEY}\r\n`],
+    ['whitespace-only', '   \n'],
+    ['newlines only', '\n\n'],
+  ]) {
+    test(`headersHelper under ${shell}, key file ${why}: valid JSON with a non-blank Bearer token (never anonymous)`, () =>
+      withSandbox({}, (sb) => {
+        assert.equal(sb.run().status, 0)
+        const helper = stored(sb).headersHelper
+        writeFileSync(sb.keyPath, content)
+        mkdirSync(join(sb.home, '.claude'), { recursive: true })
+        const r = spawnSync(shell, ['-c', helper], { encoding: 'utf8', cwd: join(sb.home, '.claude'), env: { HOME: sb.home, PATH: '/usr/bin:/bin' } })
+        assert.ifError(r.error)
+        assert.equal(r.status, 0, r.stderr)
+        let out
+        assert.doesNotThrow(() => (out = JSON.parse(r.stdout)), `helper stdout is not JSON: ${JSON.stringify(r.stdout)}`)
+        assert.match(out.Authorization, /^Bearer [^\s\x00-\x1f]+$/, JSON.stringify(out))
+      }))
+  }
+}
+
+// Parallel keys are [A-Za-z0-9_-] today, so this is a proposal, not a defect:
+// a key file with a JSON-special character (" or \) also makes the helper
+// print invalid JSON, which connects anonymously.
+test('PROPOSED CONTRACT: headersHelper output stays valid JSON for a key file with " or \\', { todo: true }, () =>
+  withSandbox({}, (sb) => {
+    assert.equal(sb.run().status, 0)
+    const helper = stored(sb).headersHelper
+    writeFileSync(sb.keyPath, 'pk_"q\\\n')
+    const out = runHelper(helper, sb.home, 'sh')
+    assert.match(out.Authorization, /^Bearer \S+$/)
+  }))
+
+// `cat` fails on a directory even as root (the image runs tests as root, so a
+// mode-000 file would still be readable): the helper must still exit 0 and
+// send the sentinel, never a blank token.
+for (const shell of ['sh', 'bash']) {
+  test(`headersHelper under ${shell}, key path is unreadable (a directory): prints the sentinel, exit 0`, () =>
+    withSandbox({}, (sb) => {
+      assert.equal(sb.run().status, 0)
+      const helper = stored(sb).headersHelper
+      rmSync(sb.keyPath)
+      mkdirSync(sb.keyPath)
+      assert.deepEqual(runHelper(helper, sb.home, shell), { Authorization: `Bearer ${SENTINEL}` })
+    }))
+
+  // The helper reads ~/..., so a HOME with a space must not split the path.
+  test(`headersHelper under ${shell}, HOME contains a space: still reads the key file`, () =>
+    withSandbox({}, (sb) => {
+      assert.equal(sb.run().status, 0)
+      const helper = stored(sb).headersHelper
+      const spaced = join(sb.home, 'with space')
+      mkdirSync(join(spaced, '.config/parallel'), { recursive: true })
+      writeFileSync(join(spaced, '.config/parallel/api-key'), `${KEY}\n`)
+      assert.deepEqual(runHelper(helper, spaced, shell), { Authorization: `Bearer ${KEY}` })
+    }))
+}
 
 // A real `chezmoi apply` over a source tree with the real template and a
 // stand-in for run_once_install-claude-code that drops the stub at
