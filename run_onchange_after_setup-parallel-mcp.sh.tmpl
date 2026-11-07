@@ -16,9 +16,11 @@
 # reached Parallel as literal text and got a 401). opencode does it through
 # {file:...}.
 #
-# A helper that fails or sends an empty token makes Claude Code connect to
-# Parallel anonymously with no warning, so a missing or empty key file sends a
-# sentinel token instead: that fails with a visible 401.
+# A helper that prints invalid JSON or a blank token makes Claude Code connect
+# to Parallel anonymously with no warning. So the helper keeps only
+# [A-Za-z0-9_-] from the key file (a CR or a quote would break the JSON), and
+# a missing, empty, or whitespace-only file sends a sentinel token instead:
+# that fails with a visible 401.
 #
 # This is an `after_` script so it runs after run_once_install-claude-code.
 set -uo pipefail
@@ -35,6 +37,8 @@ if [ ! -s "$KEY_FILE" ]; then
     echo "parallel-mcp: could not read $KEY_REF; sign in to 1Password (op), then re-run chezmoi apply" >&2
     exit 1
   }
+  # Same allowlist as the helper, so a whitespace-only value counts as empty.
+  key="$(printf '%s' "$key" | tr -cd 'A-Za-z0-9_-')"
   [ -n "$key" ] || {
     echo "parallel-mcp: $KEY_REF is empty; put the key in the item's credential field, then re-run chezmoi apply" >&2
     exit 1
@@ -53,7 +57,7 @@ else
   # Quoted heredoc: Claude Code must store the helper command, not the key.
   # No static `headers`: the helper must be the only Authorization source.
   json="$(cat <<'EOF'
-{"type":"http","url":"https://search.parallel.ai/mcp","headersHelper":"k=$(cat ~/.config/parallel/api-key 2>/dev/null); printf '{\"Authorization\":\"Bearer %s\"}' \"${k:-missing-parallel-key-file}\""}
+{"type":"http","url":"https://search.parallel.ai/mcp","headersHelper":"k=$(cat ~/.config/parallel/api-key 2>/dev/null | tr -cd 'A-Za-z0-9_-'); printf '{\"Authorization\":\"Bearer %s\"}' \"${k:-missing-parallel-key-file}\""}
 EOF
 )"
   # `mcp get` cannot show a headersHelper, so always replace the user-scope

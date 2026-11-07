@@ -427,9 +427,10 @@ test('claude remove succeeds but add-json fails: exit non-zero with the add erro
     assert.deepEqual(sb.calls(), [CLAUDE_REMOVE, CLAUDE_ADD, OPENCODE_ADD])
   }))
 
-// Claude Code 2.1.319 (checked in Docker against search.parallel.ai) sends no
-// Authorization header, and so connects anonymously with "Connected", when the
-// helper's stdout is not valid JSON or its Bearer token is blank. The helper
+// Claude Code 2.1.319 (checked in Docker against search.parallel.ai) connects
+// anonymously with "Connected" when the helper's stdout is not valid JSON (it
+// sends no Authorization header) or its Bearer token is blank (it sends a bare
+// `Authorization: Bearer`). The helper
 // guards a missing or empty file with a sentinel; these are key files that
 // pass `[ -s ]` (so the script never re-fetches them) but still break it: a
 // CRLF line ending puts a raw CR (invalid in a JSON string) in the output, and
@@ -458,16 +459,16 @@ for (const shell of ['sh', 'bash']) {
   }
 }
 
-// Parallel keys are [A-Za-z0-9_-] today, so this is a proposal, not a defect:
-// a key file with a JSON-special character (" or \) also makes the helper
-// print invalid JSON, which connects anonymously.
-test('PROPOSED CONTRACT: headersHelper output stays valid JSON for a key file with " or \\', { todo: true }, () =>
+// A key file with a JSON-special character (" or \) would make the helper
+// print invalid JSON, which connects anonymously. The helper keeps only
+// [A-Za-z0-9_-] (Parallel's key alphabet), so the output stays valid JSON.
+test('headersHelper output stays valid JSON for a key file with " or \\', () =>
   withSandbox({}, (sb) => {
     assert.equal(sb.run().status, 0)
     const helper = stored(sb).headersHelper
     writeFileSync(sb.keyPath, 'pk_"q\\\n')
     const out = runHelper(helper, sb.home, 'sh')
-    assert.match(out.Authorization, /^Bearer \S+$/)
+    assert.match(out.Authorization, /^Bearer [A-Za-z0-9_-]+$/)
   }))
 
 // `cat` fails on a directory even as root (the image runs tests as root, so a
