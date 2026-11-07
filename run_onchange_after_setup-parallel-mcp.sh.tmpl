@@ -7,12 +7,18 @@
 # writes), so this drives each CLI instead. Codex's entry is in
 # dot_codex/config.toml.tmpl, because chezmoi owns that file.
 #
-# The key comes from 1Password once per machine, into a 0600 file that
-# dot_zshenv exports as PARALLEL_API_KEY. It is read here, not with a
-# onepasswordRead template, because the hourly `chezmoi update` job cannot
-# approve a Touch ID prompt. Neither config stores the key itself: Claude Code
-# expands ${PARALLEL_API_KEY} from its environment, and opencode reads the file
-# through {file:...}, so the desktop app gets it without a shell.
+# The key comes from 1Password once per machine, into a 0600 file. It is read
+# here, not with a onepasswordRead template, because the hourly `chezmoi
+# update` job cannot approve a Touch ID prompt. Neither config stores the key
+# itself: both read the file each time they connect. Claude Code does it
+# through a headersHelper, because the desktop app is started by launchd and
+# never sees PARALLEL_API_KEY from dot_zshenv (a ${PARALLEL_API_KEY} header
+# reached Parallel as literal text and got a 401). opencode does it through
+# {file:...}.
+#
+# A helper that fails or sends an empty token makes Claude Code connect to
+# Parallel anonymously with no warning, so a missing or empty key file sends a
+# sentinel token instead: that fails with a visible 401.
 #
 # This is an `after_` script so it runs after run_once_install-claude-code.
 set -uo pipefail
@@ -44,33 +50,22 @@ if [ ! -x "$CLAUDE" ]; then
   echo "parallel-mcp: $CLAUDE not found; install Claude Code, then re-run chezmoi apply" >&2
   status=1
 else
-  # Single quotes: Claude Code must store the ${...} reference, not the key.
-  header='Authorization: Bearer ${PARALLEL_API_KEY}'
-  current="$("$CLAUDE" mcp get parallel 2>/dev/null)"
-  if printf '%s\n' "$current" | grep -qxF "  URL: $URL" &&
-    printf '%s\n' "$current" | grep -qxF "    $header"; then
-    echo "parallel-mcp: claude: already registered"
+  # Quoted heredoc: Claude Code must store the helper command, not the key.
+  # No static `headers`: the helper must be the only Authorization source.
+  json="$(cat <<'EOF'
+{"type":"http","url":"https://search.parallel.ai/mcp","headersHelper":"k=$(cat ~/.config/parallel/api-key 2>/dev/null); printf '{\"Authorization\":\"Bearer %s\"}' \"${k:-missing-parallel-key-file}\""}
+EOF
+)"
+  # `mcp get` cannot show a headersHelper, so always replace the user-scope
+  # entry. `remove --scope user` reaches it even behind a local or project
+  # entry, which belong to a project and stay. If the remove fails for a real
+  # reason, add-json fails with "already exists", so this still fails closed.
+  "$CLAUDE" mcp remove --scope user parallel >/dev/null 2>&1
+  if out="$("$CLAUDE" mcp add-json --scope user parallel "$json" 2>&1)"; then
+    printf '%s\n' "$out"
   else
-    # A user-scope entry with another URL or header is stale; replace it.
-    # Entries in other scopes belong to a project, so leave them alone.
-    if printf '%s\n' "$current" | grep -qF "Scope: User config"; then
-      "$CLAUDE" mcp remove --scope user parallel || status=1
-    fi
-    if [ "$status" -eq 0 ]; then
-      # `mcp get` shows a local or project entry first, so a user entry can
-      # still exist behind it. Replace that one and try again.
-      add=(mcp add --scope user --transport http parallel "$URL" --header "$header")
-      if ! out="$("$CLAUDE" "${add[@]}" 2>&1)"; then
-        printf '%s\n' "$out" >&2
-        if printf '%s\n' "$out" | grep -qF "already exists in user config"; then
-          { "$CLAUDE" mcp remove --scope user parallel && "$CLAUDE" "${add[@]}"; } || status=1
-        else
-          status=1
-        fi
-      else
-        printf '%s\n' "$out"
-      fi
-    fi
+    printf '%s\n' "$out" >&2
+    status=1
   fi
 fi
 

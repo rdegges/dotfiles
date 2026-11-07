@@ -12,18 +12,22 @@
 // rendered script, run by bash against stub `op`, `claude`, and `opencode`
 // CLIs in a throwaway HOME, fetches the key from 1Password only when the key
 // file is missing and writes it 0600, stops before any registration when `op`
-// fails, passes the ${PARALLEL_API_KEY} / {file:...} references (never the
-// key) to each CLI with the exact arguments, skips the Claude add when URL and
-// header already match, replaces a stale user-scope Claude entry, and exits
-// non-zero when either CLI is missing or fails, while still trying the other.
-// dot_zshenv exports the file as PARALLEL_API_KEY and is silent without it
-// (under bash always, under zsh when zsh is installed). A real `chezmoi apply`
-// runs the script after run_once_install-claude-code and not again while it is
-// unchanged. The claude stub models user vs local scope the way Claude Code
-// 2.1.302 does; the `mcp get` fixture is verbatim from it. It says nothing
-// about the Parallel server, and the stubs only stand in for the real CLIs
-// (Claude Code 2.1.302, Homebrew opencode 2.0.32, and Codex 0.163.0 were run
-// against these arguments and the rendered config in Docker by the tester).
+// fails, always replaces the user-scope Claude entry with exactly
+// {type, url, headersHelper} (no static headers), passes the {file:...}
+// reference to opencode, never puts the key in a CLI argument or stdout, and
+// exits non-zero when either CLI is missing or fails, while still trying the
+// other. The stored headersHelper, run by sh and bash with no
+// PARALLEL_API_KEY (as the launchd-started desktop app runs it), prints the
+// Authorization header from the key file, and a sentinel token when the file
+// is missing or empty (an empty token would connect anonymously).
+// dot_zshenv exports the file as PARALLEL_API_KEY for Codex and is silent
+// without it (under bash always, under zsh when zsh is installed). A real
+// `chezmoi apply` runs the script after run_once_install-claude-code and not
+// again while it is unchanged. It says nothing about the Parallel server, and
+// the stubs only stand in for the real CLIs (Claude Code 2.1.319 was checked
+// in Docker: add-json stores the helper verbatim, `mcp get` does not show it,
+// add-json on an existing user entry fails with "already exists in user
+// config", and a failed or empty-token helper connects anonymously).
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -35,8 +39,13 @@ import { join } from 'node:path'
 const SOURCE = new URL('../../', import.meta.url).pathname
 const TEMPLATE = 'run_onchange_after_setup-parallel-mcp.sh.tmpl'
 const URL_ = 'https://search.parallel.ai/mcp'
-const HEADER = 'Authorization: Bearer ${PARALLEL_API_KEY}'
-const CLAUDE_ADD = `claude mcp add --scope user --transport http parallel ${URL_} --header ${HEADER}`
+const CLAUDE_REMOVE = 'claude mcp remove --scope user parallel'
+const ADD_JSON = 'claude mcp add-json --scope user parallel '
+// The logged add-json line with its JSON argument folded, so call lists stay
+// readable; the JSON itself is checked through the stored entry.
+const CLAUDE_ADD = `${ADD_JSON}<json>`
+const foldAdd = (line) => (line.startsWith(ADD_JSON) ? CLAUDE_ADD : line)
+const SENTINEL = 'missing-parallel-key-file'
 const OPENCODE_ADD = `opencode mcp add --global --url ${URL_} --header Authorization=Bearer {file:~/.config/parallel/api-key} parallel`
 const KEY = 'pk_test_secret'
 const OP_READ = 'op read op://Private/Parallel/credential'
@@ -101,35 +110,31 @@ const SCRIPT_TEXT = (() => {
   }
 })()
 
-const USER = 'User config (available in all your projects)'
-const LOCAL = 'Local config (private to you in this project)'
-const entry = (scope, url, header = HEADER) =>
-  `parallel:\n  Scope: ${scope}\n  Status: ✔ Connected\n  Type: http\n  URL: ${url}\n  Headers:\n    ${header}\n\n`
+// Any earlier user-scope entry: the old ${PARALLEL_API_KEY} header form.
+const OLD_ENTRY = JSON.stringify({ type: 'http', url: URL_, headers: { Authorization: 'Bearer ${PARALLEL_API_KEY}' } })
 
 // One stub, named claude, opencode, or op: it logs "<name> <args>" to $CALLS.
-// It models the two scopes the way the real CLI (2.1.302, checked in Docker)
-// does: $STATE is the user-scope entry, $SHADOW a local- or project-scope one
-// for the cwd. `get` prints the shadow when there is one, else the user entry;
-// `add --scope user` fails when a user entry exists (even a hidden one);
-// `remove --scope user` fails when there is none. The add and remove error
-// messages are the real ones.
-// STUB_<NAME>_RC forces a failure exit for any non-get call to that CLI.
+// $STATE holds the user-scope entry's JSON. As in the real CLI (2.1.319,
+// checked in Docker), `add-json --scope user` fails when a user entry exists
+// and `remove --scope user` fails when there is none, with the real messages.
+// Local- and project-scope entries do not affect either call, so the stub
+// does not model them.
+// STUB_<NAME>_RC forces a failure exit for any call to that CLI;
+// STUB_CLAUDE_REMOVE_RC fails only `claude mcp remove`, leaving the entry.
 const STUB = `#!/bin/bash
 name="\${0##*/}"
 echo "$name $*" >> "$CALLS"
 rc_var="STUB_\${name^^}_RC"
-if [ -n "\${!rc_var:-}" ] && [ "$2" != "get" ]; then echo "$name broke" >&2; exit "\${!rc_var}"; fi
+if [ -n "\${!rc_var:-}" ]; then echo "$name broke" >&2; exit "\${!rc_var}"; fi
 case "$name $1 $2" in
-  "claude mcp get")
-    if [ -f "$SHADOW" ]; then cat "$SHADOW"; exit 0; fi
-    if [ -f "$STATE" ]; then cat "$STATE"; exit 0; fi
-    echo "No MCP server named \\"$3\\"." >&2; exit 1 ;;
   "claude mcp remove")
+    if [ -n "\${STUB_CLAUDE_REMOVE_RC:-}" ]; then echo "remove broke" >&2; exit "$STUB_CLAUDE_REMOVE_RC"; fi
     if [ ! -f "$STATE" ]; then echo "No MCP server named \\"$5\\" in user scope" >&2; exit 1; fi
     rm -f "$STATE" ;;
-  "claude mcp add")
-    if [ -f "$STATE" ]; then echo "MCP server $7 already exists in user config" >&2; exit 1; fi
-    printf 'parallel:\\n  Scope: ${USER}\\n  Type: http\\n  URL: %s\\n  Headers:\\n    %s\\n\\n' "$8" "\${10}" > "$STATE" ;;
+  "claude mcp add-json")
+    if [ -f "$STATE" ]; then echo "MCP server $5 already exists in user config" >&2; exit 1; fi
+    printf '%s' "$6" > "$STATE"
+    echo "Added http MCP server $5 to user config" ;;
   "op read op://Private/Parallel/credential") printf '%s\\n' "${KEY}" ;;
   "opencode mcp add") pwd > "$OPENCODE_CWD" ;;
   *) echo "unexpected: $name $*" >&2; exit 99 ;;
@@ -159,24 +164,24 @@ function sandbox({ claude = true, opencode = true, op = true, keyFile = true } =
   }
   const calls = join(base, 'calls')
   const state = join(base, 'state')
-  const shadow = join(base, 'shadow')
   const ocwd = join(base, 'opencode-cwd')
   writeFileSync(calls, '')
+  const rawCalls = () => readFileSync(calls, 'utf8').split('\n').filter(Boolean)
   return {
     home,
     keyPath,
-    // A user-scope entry goes to $STATE; any other scope shadows it in `get`.
-    setEntry: (text) => writeFileSync(text.includes(`Scope: ${USER}`) ? state : shadow, text),
-    // The user-scope entry, the one the script owns.
+    setEntry: (json) => writeFileSync(state, json),
+    // The user-scope entry, the one the script owns, as stored text.
     entry: () => (existsSync(state) ? readFileSync(state, 'utf8') : null),
     opencodeCwd: () => readFileSync(ocwd, 'utf8').trim(),
-    calls: () => readFileSync(calls, 'utf8').split('\n').filter(Boolean),
+    rawCalls,
+    calls: () => rawCalls().map(foldAdd),
     // cwd is a project dir so the test sees the script move to $HOME for opencode.
     run: (env = {}) =>
       spawnSync('bash', [script], {
         encoding: 'utf8',
         cwd: join(home, 'project'),
-        env: { HOME: home, PATH: `${pathBin}:/usr/bin:/bin`, CALLS: calls, STATE: state, SHADOW: shadow, OPENCODE_CWD: ocwd, ...env },
+        env: { HOME: home, PATH: `${pathBin}:/usr/bin:/bin`, CALLS: calls, STATE: state, OPENCODE_CWD: ocwd, ...env },
       }),
     cleanup: () => rmSync(base, { recursive: true, force: true }),
   }
@@ -191,46 +196,73 @@ function withSandbox(opts, fn) {
   }
 }
 
+// The user-scope entry the script stored, parsed.
+const stored = (sb) => {
+  assert.ok(sb.entry(), 'no user-scope claude entry')
+  return JSON.parse(sb.entry())
+}
+
+// Run a stored headersHelper the way the launchd-started desktop app does: in
+// a shell, cwd ~/.claude, with no PARALLEL_API_KEY in the environment.
+function runHelper(helper, home, shell) {
+  mkdirSync(join(home, '.claude'), { recursive: true })
+  const r = spawnSync(shell, ['-c', helper], { encoding: 'utf8', cwd: join(home, '.claude'), env: { HOME: home, PATH: '/usr/bin:/bin' } })
+  assert.ifError(r.error)
+  assert.equal(r.status, 0, r.stderr)
+  return JSON.parse(r.stdout)
+}
+
 test('fresh machine: adds to claude at user scope and to opencode globally from $HOME, exit 0', () =>
   withSandbox({}, (sb) => {
     const r = sb.run()
     assert.equal(r.status, 0, r.stdout + r.stderr)
-    assert.deepEqual(sb.calls(), ['claude mcp get parallel', CLAUDE_ADD, OPENCODE_ADD])
+    assert.deepEqual(sb.calls(), [CLAUDE_REMOVE, CLAUDE_ADD, OPENCODE_ADD])
     assert.equal(sb.opencodeCwd(), sb.home)
+    // The remove of a missing entry is expected; its error must not leak.
+    assert.doesNotMatch(r.stderr, /No MCP server named/)
   }))
 
-test('claude already registered: no claude add, opencode still runs, exit 0', () =>
+test('stored claude entry is exactly {type, url, headersHelper}: no static headers', () =>
   withSandbox({}, (sb) => {
-    sb.setEntry(entry(USER, URL_))
-    const r = sb.run()
-    assert.equal(r.status, 0, r.stdout + r.stderr)
-    assert.deepEqual(sb.calls(), ['claude mcp get parallel', OPENCODE_ADD])
-    assert.match(r.stdout, /^parallel-mcp: claude: already registered$/m)
+    assert.equal(sb.run().status, 0)
+    const e = stored(sb)
+    assert.deepEqual(Object.keys(e).sort(), ['headersHelper', 'type', 'url'])
+    assert.equal(e.type, 'http')
+    assert.equal(e.url, URL_)
+    assert.equal(typeof e.headersHelper, 'string')
   }))
 
-test('stale user-scope claude entry: removed at user scope, then added', () =>
-  withSandbox({}, (sb) => {
-    sb.setEntry(entry(USER, `${URL_}/old`))
-    const r = sb.run()
-    assert.equal(r.status, 0, r.stdout + r.stderr)
-    assert.deepEqual(sb.calls(), ['claude mcp get parallel', 'claude mcp remove --scope user parallel', CLAUDE_ADD, OPENCODE_ADD])
-    assert.ok(sb.entry().includes(`URL: ${URL_}\n`))
-    assert.ok(sb.entry().includes(`    ${HEADER}\n`), sb.entry())
-  }))
+for (const shell of ['sh', 'bash']) {
+  for (const [why, content, token] of [
+    ['key file present', `${KEY}\n`, KEY],
+    ['key file missing', null, SENTINEL],
+    ['key file empty', '', SENTINEL],
+  ]) {
+    test(`headersHelper under ${shell}, ${why}: prints Authorization: Bearer ${token === KEY ? '<key>' : 'the sentinel'}`, () =>
+      withSandbox({}, (sb) => {
+        assert.equal(sb.run().status, 0)
+        const helper = stored(sb).headersHelper
+        if (content === null) rmSync(sb.keyPath)
+        else writeFileSync(sb.keyPath, content)
+        assert.deepEqual(runHelper(helper, sb.home, shell), { Authorization: `Bearer ${token}` })
+      }))
+  }
+}
 
-test('stale header on a user-scope claude entry (keyless): removed, then added with the key header', () =>
+test('existing user-scope claude entry (old ${PARALLEL_API_KEY} header): replaced by the helper entry', () =>
   withSandbox({}, (sb) => {
-    sb.setEntry(entry(USER, URL_).replace(/  Headers:\n.*\n/, ''))
+    sb.setEntry(OLD_ENTRY)
     const r = sb.run()
     assert.equal(r.status, 0, r.stdout + r.stderr)
-    assert.deepEqual(sb.calls(), ['claude mcp get parallel', 'claude mcp remove --scope user parallel', CLAUDE_ADD, OPENCODE_ADD])
+    assert.deepEqual(sb.calls(), [CLAUDE_REMOVE, CLAUDE_ADD, OPENCODE_ADD])
+    assert.deepEqual(Object.keys(stored(sb)).sort(), ['headersHelper', 'type', 'url'])
   }))
 
 test('no key file: reads it from 1Password first, writes it 0600, then registers', () =>
   withSandbox({ keyFile: false }, (sb) => {
     const r = sb.run()
     assert.equal(r.status, 0, r.stdout + r.stderr)
-    assert.deepEqual(sb.calls(), [OP_READ, 'claude mcp get parallel', CLAUDE_ADD, OPENCODE_ADD])
+    assert.deepEqual(sb.calls(), [OP_READ, CLAUDE_REMOVE, CLAUDE_ADD, OPENCODE_ADD])
     assert.equal(readFileSync(sb.keyPath, 'utf8'), `${KEY}\n`)
     assert.equal(statSync(sb.keyPath).mode & 0o777, 0o600)
   }))
@@ -252,20 +284,13 @@ for (const [why, opts, env] of [['op fails', { keyFile: false }, { STUB_OP_RC: '
     }))
 }
 
-test('the key itself never reaches a CLI argument or stdout', () =>
+test('the key itself never reaches a CLI argument, the stored entry, or stdout', () =>
   withSandbox({ keyFile: false }, (sb) => {
     const r = sb.run()
     assert.equal(r.status, 0, r.stdout + r.stderr)
-    assert.ok(!sb.calls().some((c) => c.includes(KEY) && !c.startsWith('op ')))
+    assert.ok(!sb.rawCalls().some((c) => c.includes(KEY) && !c.startsWith('op ')))
+    assert.ok(!sb.entry().includes(KEY), sb.entry())
     assert.ok(!(r.stdout + r.stderr).includes(KEY))
-  }))
-
-test('local-scope claude entry with another URL: left alone, user scope added', () =>
-  withSandbox({}, (sb) => {
-    sb.setEntry(entry(LOCAL, 'https://old.example.com/mcp'))
-    const r = sb.run()
-    assert.equal(r.status, 0, r.stdout + r.stderr)
-    assert.deepEqual(sb.calls(), ['claude mcp get parallel', CLAUDE_ADD, OPENCODE_ADD])
   }))
 
 test('no claude: exit 1 with a fix hint, opencode still registered', () =>
@@ -281,24 +306,27 @@ test('no opencode: exit 1 with a fix hint, claude still registered', () =>
     const r = sb.run()
     assert.equal(r.status, 1, r.stdout + r.stderr)
     assert.match(r.stderr, /parallel-mcp: opencode not found on PATH/)
-    assert.deepEqual(sb.calls(), ['claude mcp get parallel', CLAUDE_ADD])
+    assert.deepEqual(sb.calls(), [CLAUDE_REMOVE, CLAUDE_ADD])
   }))
 
 for (const [cli, env] of [['claude', { STUB_CLAUDE_RC: '4' }], ['opencode', { STUB_OPENCODE_RC: '5' }]]) {
-  test(`${cli} add fails: exit non-zero, the other CLI is still tried`, () =>
+  test(`${cli} fails: exit non-zero with its error on stderr, the other CLI is still tried`, () =>
     withSandbox({}, (sb) => {
       const r = sb.run(env)
       assert.notEqual(r.status, 0, r.stdout + r.stderr)
-      assert.deepEqual(sb.calls(), ['claude mcp get parallel', CLAUDE_ADD, OPENCODE_ADD])
+      assert.match(r.stderr, new RegExp(`${cli} broke`))
+      assert.deepEqual(sb.calls(), [CLAUDE_REMOVE, CLAUDE_ADD, OPENCODE_ADD])
     }))
 }
 
-test('claude remove fails: no claude add, exit non-zero, opencode still tried', () =>
+test('claude remove fails and leaves the old entry: add-json fails, exit non-zero, old entry kept, opencode still tried', () =>
   withSandbox({}, (sb) => {
-    sb.setEntry(entry(USER, 'https://old.example.com/mcp'))
-    const r = sb.run({ STUB_CLAUDE_RC: '3' })
+    sb.setEntry(OLD_ENTRY)
+    const r = sb.run({ STUB_CLAUDE_REMOVE_RC: '3' })
     assert.notEqual(r.status, 0, r.stdout + r.stderr)
-    assert.deepEqual(sb.calls(), ['claude mcp get parallel', 'claude mcp remove --scope user parallel', OPENCODE_ADD])
+    assert.match(r.stderr, /already exists in user config/)
+    assert.deepEqual(sb.calls(), [CLAUDE_REMOVE, CLAUDE_ADD, OPENCODE_ADD])
+    assert.equal(sb.entry(), OLD_ENTRY)
   }))
 
 // --- dot_zshenv: the PARALLEL_API_KEY export ----------------------------------
@@ -327,63 +355,19 @@ for (const present of [true, false]) {
   })
 }
 
-// --- tester additions: real-CLI output, scope shadowing, key-file edge cases --
-
-// Verbatim `claude mcp get parallel` from Claude Code 2.1.302 in a throwaway
-// HOME (PARALLEL_API_KEY unset, so the health check failed): it adds Status and
-// Issue lines and a trailing hint the hand-written entry() above does not have.
-const REAL_GET = `parallel:
-  Scope: ${USER}
-  Status: ✘ Failed to connect
-  Issue: Server rejected the configured Authorization header (HTTP 401). Check that the token is valid for this MCP endpoint — OAuth fallback is disabled when headers.Authorization is set. Error detail: {"code":16,"message":"Invalid API key (C.1)"}
-  Type: http
-  URL: ${URL_}
-  Headers:
-    ${HEADER}
-
-To remove this server, run: claude mcp remove parallel -s user
-`
-
-test('real claude 2.1.302 `mcp get` output for a correct entry counts as already registered', () =>
-  withSandbox({}, (sb) => {
-    sb.setEntry(REAL_GET)
-    const r = sb.run()
-    assert.equal(r.status, 0, r.stdout + r.stderr)
-    assert.deepEqual(sb.calls(), ['claude mcp get parallel', OPENCODE_ADD])
-  }))
-
-// Checked with the real CLI (2.1.302, Docker, throwaway HOME): with a
-// local-scope `parallel` for the cwd (chezmoi runs scripts from $HOME), `get`
-// shows only the local entry, so the script never sees the user entry. It then
-// runs `add --scope user`, which fails with "already exists in user config".
-// The invariants: a correct user entry must not fail every apply, and a stale
-// one must not stay stale.
-test('local-scope entry shadows a correct user-scope entry: exit 0, user entry unchanged', () =>
-  withSandbox({}, (sb) => {
-    sb.setEntry(entry(USER, URL_))
-    sb.setEntry(entry(LOCAL, 'https://old.example.com/mcp'))
-    const r = sb.run()
-    assert.equal(r.status, 0, r.stdout + r.stderr)
-    assert.ok(sb.entry().includes(`URL: ${URL_}\n`) && sb.entry().includes(`    ${HEADER}\n`), sb.entry())
-  }))
-
-test('local-scope entry shadows a stale user-scope entry: the user entry ends up correct', () =>
-  withSandbox({}, (sb) => {
-    sb.setEntry(entry(USER, 'https://old.example.com/mcp'))
-    sb.setEntry(entry(LOCAL, 'https://old.example.com/mcp'))
-    sb.run()
-    assert.ok(sb.entry().includes(`URL: ${URL_}\n`) && sb.entry().includes(`    ${HEADER}\n`), sb.entry())
-  }))
+// --- tester additions: key-file edge cases ------------------------------------
 
 // chezmoi apply inherits the shell's environment, and after the first run
-// dot_zshenv exports the key: the header must still go to the CLI unexpanded.
-test('PARALLEL_API_KEY set in the environment: claude still gets the literal ${PARALLEL_API_KEY} reference', () =>
+// dot_zshenv exports the key: neither the key nor a ${PARALLEL_API_KEY}
+// reference may reach the claude entry.
+test('PARALLEL_API_KEY set in the environment: claude entry has neither the key nor ${PARALLEL_API_KEY}', () =>
   withSandbox({}, (sb) => {
     const r = sb.run({ PARALLEL_API_KEY: KEY })
     assert.equal(r.status, 0, r.stdout + r.stderr)
-    assert.deepEqual(sb.calls(), ['claude mcp get parallel', CLAUDE_ADD, OPENCODE_ADD])
-    assert.ok(!sb.calls().some((c) => c.includes(KEY)), JSON.stringify(sb.calls()))
+    assert.deepEqual(sb.calls(), [CLAUDE_REMOVE, CLAUDE_ADD, OPENCODE_ADD])
+    assert.ok(!sb.rawCalls().some((c) => c.includes(KEY)), JSON.stringify(sb.rawCalls()))
     assert.ok(!sb.entry().includes(KEY), sb.entry())
+    assert.ok(!sb.entry().includes('${PARALLEL_API_KEY}'), sb.entry())
   }))
 
 test('empty key file left with mode 0644: after the run the key is not group/world-readable', () =>
@@ -418,13 +402,16 @@ test('key dir cannot be created (~/.config/parallel is a file): exit 1, op and C
     assert.deepEqual(sb.calls(), [])
   }))
 
-test('second run after a fresh first run: no op call, no claude add, exit 0', () =>
+test('second run after a fresh first run: no op call, user entry replaced with the same content, exit 0', () =>
   withSandbox({ keyFile: false }, (sb) => {
     assert.equal(sb.run().status, 0)
     const first = sb.calls().length
+    const before = sb.entry()
     const r = sb.run()
     assert.equal(r.status, 0, r.stdout + r.stderr)
-    assert.deepEqual(sb.calls().slice(first), ['claude mcp get parallel', OPENCODE_ADD])
+    assert.deepEqual(sb.calls().slice(first), [CLAUDE_REMOVE, CLAUDE_ADD, OPENCODE_ADD])
+    assert.equal(sb.entry(), before)
+    assert.doesNotMatch(r.stderr, /already exists/)
   }))
 
 // A real `chezmoi apply` over a source tree with the real template and a
@@ -453,7 +440,7 @@ test('chezmoi apply: runs after install-claude-code, writes the key 0600, and do
     writeFileSync(calls, '')
     const env = {
       PATH: `${pathBin}:${process.env.PATH}`, HOME: home, CALLS: calls,
-      STATE: join(base, 'state'), SHADOW: join(base, 'shadow'), OPENCODE_CWD: join(base, 'ocwd'),
+      STATE: join(base, 'state'), OPENCODE_CWD: join(base, 'ocwd'),
     }
     const apply = () =>
       spawnSync(
@@ -461,11 +448,11 @@ test('chezmoi apply: runs after install-claude-code, writes the key 0600, and do
         ['--source', src, '--destination', home, '--override-data', JSON.stringify({ work: false, chezmoi: { os: 'darwin' } }), '--no-tty', 'apply', '--force'],
         { encoding: 'utf8', env },
       )
-    const read = () => readFileSync(calls, 'utf8').split('\n').filter(Boolean)
+    const read = () => readFileSync(calls, 'utf8').split('\n').filter(Boolean).map(foldAdd)
     const r1 = apply()
     assert.ifError(r1.error)
     assert.equal(r1.status, 0, `apply 1 exited ${r1.status}: ${r1.stdout}${r1.stderr}`)
-    assert.deepEqual(read(), [OP_READ, 'claude mcp get parallel', CLAUDE_ADD, OPENCODE_ADD])
+    assert.deepEqual(read(), [OP_READ, CLAUDE_REMOVE, CLAUDE_ADD, OPENCODE_ADD])
     const keyPath = join(home, '.config/parallel/api-key')
     assert.equal(readFileSync(keyPath, 'utf8'), `${KEY}\n`)
     assert.equal(statSync(keyPath).mode & 0o777, 0o600)
