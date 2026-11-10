@@ -255,3 +255,45 @@ test('settings.json has no top-level defaultMode (the CLI reads only permissions
     `permissions.defaultMode is bypassPermissions, but claude started without the flag printed no "${RM_GUARD_NOTICE}" notice`,
   )
 })
+
+// Moving defaultMode under permissions made the user settings put every session
+// in bypass mode. The unattended vault profile (`claude --settings
+// vault-agent-settings.json`) layers on top of those user settings, so its own
+// permissions.defaultMode "default" must still win, or the waiver would reach
+// scheduled runs. The control is the same run without --settings.
+const VAULT_PROFILE = join(SOURCE, 'dot_claude/vault-agent-settings.json')
+
+test(`the vault profile over the repo's settings.json is not in bypass mode, so ${RM_GUARD_KEY} does not reach it`, () => {
+  const control = runClaude({ userSettings: SETTINGS, zshenv: ZSHENV })
+  assert.ok(
+    control.includes(RM_GUARD_NOTICE),
+    `probe cannot evaluate: without --settings the CLI printed no "${RM_GUARD_NOTICE}" notice`,
+  )
+  const actual = runClaude({ args: ['--settings', VAULT_PROFILE], userSettings: SETTINGS, zshenv: ZSHENV })
+  // The CLI prints one of these two messages only in bypass mode, so neither
+  // means the vault profile's defaultMode won. INERT alone would mean bypass
+  // mode with the waiver switched off by the deny rules: still a regression.
+  for (const msg of [RM_GUARD_NOTICE, RM_GUARD_INERT]) {
+    assert.ok(
+      !actual.includes(msg),
+      `claude --settings vault-agent-settings.json printed "${msg}", so it runs in bypass mode: the user settings' permissions.defaultMode overrides the vault profile's`,
+    )
+  }
+})
+
+// The README says the vault profile keeps the guard even in bypass mode,
+// because its deny rules switch the waiver off (CLI 2.1.322: any deny rule
+// does, Bash or Edit as well as Read). Pin that claim: the vault profile
+// started with the cc alias's flag still keeps the guard.
+test(`the vault profile switches ${RM_GUARD_KEY} off even with --dangerously-skip-permissions`, () => {
+  const actual = runClaude({
+    args: ['--dangerously-skip-permissions', '--settings', VAULT_PROFILE],
+    userSettings: SETTINGS,
+    zshenv: ZSHENV,
+  })
+  assert.ok(
+    actual.includes(RM_GUARD_INERT),
+    `the vault profile in bypass mode did not print "${RM_GUARD_INERT}": its deny rules no longer switch the waiver off, so the README's claim is false`,
+  )
+  assert.ok(!actual.includes(RM_GUARD_NOTICE), `the vault profile in bypass mode printed "${RM_GUARD_NOTICE}"`)
+})
