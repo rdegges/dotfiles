@@ -148,9 +148,9 @@ test('the real CLI honors every env key settings.json sets (none is environment-
 test(`dot_zshenv exports ${RM_GUARD_KEY} and the CLI started from zsh acknowledges it`, () => {
   const live = ZSHENV.split('\n').filter((l) => l.includes(RM_GUARD_KEY) && !l.trimStart().startsWith('#'))
   assert.deepEqual(live, [EXPORT_LINE], `dot_zshenv must have exactly one live line: ${EXPORT_LINE}`)
-  // The cc alias starts bypass mode with a flag, so both runs pass it. (The
-  // repo's settings.json sets defaultMode at the top level, which the CLI
-  // ignores; see the defaultMode test below.)
+  // Empty user settings, so the flag (as the cc alias passes it) is what
+  // turns bypass mode on in both runs. The defaultMode test below covers
+  // plain `claude` with the repo's settings.json.
   const args = ['--dangerously-skip-permissions']
   const control = runClaude({ args, userSettings: {}, zshenv: ZSHENV.replace(EXPORT_LINE, '') })
   assert.ok(
@@ -240,9 +240,9 @@ test(`with the repo's settings.json, the CLI in bypass mode keeps ${RM_GUARD_KEY
 })
 
 // dot_zshenv and the README say bypass mode comes from settings.json
-// defaultMode. The CLI reads that setting only as permissions.defaultMode; a
-// top-level defaultMode is dropped without a warning, so plain `claude` does
-// not start in bypass mode and only `cc` gets the waiver.
+// permissions.defaultMode. The CLI reads the setting only there; a top-level
+// defaultMode is dropped without a warning, which once left plain `claude` out
+// of bypass mode so that only `cc` got the waiver.
 test('settings.json has no top-level defaultMode (the CLI reads only permissions.defaultMode)', () => {
   assert.ok(
     !('defaultMode' in SETTINGS),

@@ -20,7 +20,7 @@ export OP_BIOMETRIC_UNLOCK_ENABLED=true
 # Claude Code reads the file itself: GUI apps never source this file.
 [ -r "$HOME/.config/parallel/api-key" ] && export PARALLEL_API_KEY="$(<"$HOME/.config/parallel/api-key")"
 
-# Bypass mode (settings.json defaultMode) still blocks a few destructive
+# Bypass mode (settings.json permissions.defaultMode) still blocks a few destructive
 # commands such as `rm -rf ~`. This lifts that last block on every box, by
 # choice. It must live here: Claude Code reads it only from the environment it
 # starts in and ignores it in any settings file. GUI apps never source this
