@@ -280,7 +280,7 @@ the mode only under `permissions`; a top-level `defaultMode` is ignored.)
 Bypass mode still blocks a few destructive commands such as `rm -rf ~`; this
 lifts that block on every box, by choice. Claude Code reads the key only from
 the environment it starts in (it ignores it in any settings file), so it covers
-`claude` started from a terminal or SSH, not the desktop app. Some permission
-rules, such as a `Read` deny rule, switch the waiver off for the session; the
-stricter `vault-agent-settings.json` profile keeps the guard that way. Remove
-the export to get the guard back.
+`claude` started from a terminal or SSH, not the desktop app. Any permissions
+`deny` rule (Bash, Edit or Read, as of Claude Code 2.1.322) switches the waiver
+off for the session; the stricter `vault-agent-settings.json` profile keeps the
+guard that way. Remove the export to get the guard back.

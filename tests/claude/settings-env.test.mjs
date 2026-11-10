@@ -31,6 +31,12 @@
 //   reads only permissions.defaultMode); if permissions.defaultMode is
 //   bypassPermissions, the CLI started from zsh with that settings file alone
 //   (no flag) acknowledges the waiver.
+// - with the repo's settings.json as user settings, `--settings
+//   vault-agent-settings.json` is not in bypass mode: it prints neither the
+//   "is set" notice nor the "has no effect" message, and a control run without
+//   --settings prints the notice.
+// - the vault profile with --dangerously-skip-permissions prints the "has no
+//   effect" message, not the notice (its deny rules switch the waiver off).
 // It says nothing about the desktop app (it never sources dot_zshenv), about
 // a real rm tool call, or about managed settings on the work Mac.
 
