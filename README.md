@@ -271,3 +271,8 @@ Shell aliases (see `dot_oh-my-zsh/custom/aliases.zsh.tmpl`): `cc` (claude with
 permissions bypassed), `cx` (codex with approvals/sandbox bypassed), `agentp`
 (herdr on the personal server), and `agentw` (herdr on the work server, defined
 only when `work = true`).
+
+`dot_claude/settings.json` sets `CLAUDE_CODE_EVEN_MORE_DANGEROUSLY_SKIP_PERMISSIONS=1`
+in its `env` block. Bypass mode still blocks a few destructive commands such as
+`rm -rf ~`; this setting lifts that block on every box, by choice. Delete the
+`env` entry to get the guard back.
