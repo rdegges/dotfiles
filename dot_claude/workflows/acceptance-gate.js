@@ -52,13 +52,17 @@ async function checked(name, ok, prompt, opts, rerunNote = '') {
   throw new Error(`${name} returned no valid report twice; the gate has no verdict`)
 }
 const isReport = (r) => typeof r === 'string' && r.trim() !== ''
+// The harness puts `[harness: ...]` notice lines (for example, when a report
+// mentions bypass mode) above an agent's text. They are not the agent's
+// report, so the format checks look past them.
+const reportBody = (r) => r.replace(/^(?:\s*\[harness: [^\n]*\][ \t]*(?:\n|$))+/, '')
 
 // Sequential by doctrine: the tester modifies test files, so its output is part
 // of the tree the red-team reviews, and the BDFL judges the final state.
 phase('Test')
 const testerReport = await checked(
   'tester',
-  (r) => isReport(r) && /^TESTS: (PASS|FAIL)\b/.test(r.trimStart()),
+  (r) => isReport(r) && /^TESTS: (PASS|FAIL)\b/.test(reportBody(r).trimStart()),
   `Repo: ${A.repo}. The change under test: ${A.change}. Run your full process per your definition.${A.runNotes ? ` Notes: ${A.runNotes}` : ''}`,
   { agentType: 'tester', label: 'tester' },
   // A cut-off tester may already have written test files.
@@ -68,7 +72,7 @@ const testerReport = await checked(
 phase('Review')
 const redTeamReport = await checked(
   'red-team',
-  (r) => isReport(r) && /^(?:[-*]\s*)?\**Verdict\b/.test(r.trimStart()),
+  (r) => isReport(r) && /^(?:[-*]\s*)?\**Verdict\b/.test(reportBody(r).trimStart()),
   `Repo: ${A.repo}.
 
 The spec (the original request/plan):
