@@ -21,6 +21,16 @@
 //   must not print it, so the notice is caused by dot_zshenv.
 // - no other zsh startup file in the repo sets or unsets the key, and
 //   settings.json env does not set it (one source).
+// - the cc alias passes the flag the probe uses, and an interactive login zsh
+//   with the repo's .zprofile and .zshrc still exports the key.
+// - with the repo's real settings.json as user settings, the CLI in bypass mode
+//   says the waiver is set, not that it "has no effect in this session" (some
+//   permission rules, such as a Read deny rule, switch it off; a control with
+//   one must draw that message).
+// - settings.json has no top-level defaultMode, which the CLI never reads (it
+//   reads only permissions.defaultMode); if permissions.defaultMode is
+//   bypassPermissions, the CLI started from zsh with that settings file alone
+//   (no flag) acknowledges the waiver.
 // It says nothing about the desktop app (it never sources dot_zshenv), about
 // a real rm tool call, or about managed settings on the work Mac.
 
@@ -38,6 +48,7 @@ const CONTROL = 'CLAUDE_CODE_MANAGED_SETTINGS_PATH'
 const REFUSED = 'no settings file can set this key'
 const RM_GUARD_KEY = 'CLAUDE_CODE_EVEN_MORE_DANGEROUSLY_SKIP_PERMISSIONS'
 const RM_GUARD_NOTICE = `${RM_GUARD_KEY} is set, so dangerous rm commands`
+const RM_GUARD_INERT = `${RM_GUARD_KEY} has no effect in this session`
 const ZSHENV = readFileSync(join(SOURCE, 'dot_zshenv'), 'utf8')
 const EXPORT_LINE = `export ${RM_GUARD_KEY}=1`
 
@@ -137,8 +148,9 @@ test('the real CLI honors every env key settings.json sets (none is environment-
 test(`dot_zshenv exports ${RM_GUARD_KEY} and the CLI started from zsh acknowledges it`, () => {
   const live = ZSHENV.split('\n').filter((l) => l.includes(RM_GUARD_KEY) && !l.trimStart().startsWith('#'))
   assert.deepEqual(live, [EXPORT_LINE], `dot_zshenv must have exactly one live line: ${EXPORT_LINE}`)
-  // The cc alias starts bypass mode with a flag; -p does not show the notice
-  // for defaultMode alone, so both runs pass the flag.
+  // The cc alias starts bypass mode with a flag, so both runs pass it. (The
+  // repo's settings.json sets defaultMode at the top level, which the CLI
+  // ignores; see the defaultMode test below.)
   const args = ['--dangerously-skip-permissions']
   const control = runClaude({ args, userSettings: {}, zshenv: ZSHENV.replace(EXPORT_LINE, '') })
   assert.ok(
@@ -166,4 +178,80 @@ test(`${RM_GUARD_KEY} has one source: dot_zshenv`, () => {
       .filter((l) => l.includes(RM_GUARD_KEY) && !l.trimStart().startsWith('#'))
     assert.deepEqual(hits, [], `${f} also sets or unsets ${RM_GUARD_KEY}`)
   }
+})
+
+// The probe above passes --dangerously-skip-permissions because that is how the
+// cc alias starts claude. Pin the alias so the probe cannot drift from it.
+test('the cc alias starts claude with --dangerously-skip-permissions, as the probe does', () => {
+  const aliases = readFileSync(join(SOURCE, 'dot_oh-my-zsh/custom/aliases.zsh.tmpl'), 'utf8')
+  const cc = aliases.split('\n').filter((l) => /^\s*alias cc=/.test(l))
+  assert.equal(cc.length, 1, `expected one cc alias, found: ${cc.join(' | ')}`)
+  const words = cc[0].replace(/^\s*alias cc=["']?/, '').replace(/["']\s*$/, '').split(/\s+/)
+  assert.equal(words[0], 'claude', cc[0])
+  assert.ok(words.includes('--dangerously-skip-permissions'), cc[0])
+})
+
+// The one-source test greps for the key by name, so a pattern unset (for
+// example `unset -m 'CLAUDE_*'`) in .zprofile or .zshrc would slip past it.
+// Run the real files the way a terminal does (login + interactive) and check
+// the key still reaches a child process. Oh My Zsh, brew, and starship are not
+// installed here, so those lines fail; the ZSH sentinel proves .zshrc ran.
+test(`an interactive login zsh with the repo's .zprofile and .zshrc still exports ${RM_GUARD_KEY}`, () => {
+  const hasZsh = spawnSync('sh', ['-c', 'command -v zsh'], { encoding: 'utf8' }).status === 0
+  assert.ok(hasZsh, 'zsh not installed (see the run command at the top)')
+  const home = mkdtempSync(join(tmpdir(), 'settings-env-zsh-'))
+  try {
+    writeFileSync(join(home, '.zshenv'), ZSHENV)
+    writeFileSync(join(home, '.zprofile'), readFileSync(join(SOURCE, 'dot_zprofile'), 'utf8'))
+    writeFileSync(join(home, '.zshrc'), readFileSync(join(SOURCE, 'dot_zshrc'), 'utf8'))
+    const r = spawnSync('zsh', ['-l', '-i', '-c', `print -r -- "ZSH=$ZSH"; printenv ${RM_GUARD_KEY}`], {
+      encoding: 'utf8',
+      input: '',
+      timeout: 30_000,
+      env: { PATH: '/usr/bin:/bin', HOME: home, ZDOTDIR: home, TERM: 'dumb' },
+    })
+    assert.ifError(r.error)
+    const out = r.stdout.split('\n')
+    assert.ok(out.includes(`ZSH=${join(home, '.oh-my-zsh')}`), `.zshrc did not run: ${r.stdout}${r.stderr}`)
+    assert.ok(out.includes('1'), `${RM_GUARD_KEY} did not survive .zprofile and .zshrc: ${r.stdout}${r.stderr}`)
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+})
+
+// The CLI drops the waiver for the whole session when some permission rules
+// are present (a Read deny rule, for example), and says so. The probe above
+// runs with empty user settings, so a rule added to settings.json later would
+// switch the waiver off with every other test still green.
+test(`with the repo's settings.json, the CLI in bypass mode keeps ${RM_GUARD_KEY} in effect`, () => {
+  const args = ['--dangerously-skip-permissions']
+  const control = runClaude({
+    args,
+    userSettings: { ...SETTINGS, permissions: { ...SETTINGS.permissions, deny: ['Read(./settings-env-control)'] } },
+    zshenv: ZSHENV,
+  })
+  assert.ok(
+    control.includes(RM_GUARD_INERT),
+    `probe cannot evaluate: a Read deny rule did not draw "${RM_GUARD_INERT}"; the CLI's rule check or its wording changed`,
+  )
+  const actual = runClaude({ args, userSettings: SETTINGS, zshenv: ZSHENV })
+  assert.ok(!actual.includes(RM_GUARD_INERT), `dot_claude/settings.json switches the waiver off: the CLI printed "${RM_GUARD_INERT}"`)
+  assert.ok(actual.includes(RM_GUARD_NOTICE), `the CLI with dot_claude/settings.json printed no "${RM_GUARD_NOTICE}" notice`)
+})
+
+// dot_zshenv and the README say bypass mode comes from settings.json
+// defaultMode. The CLI reads that setting only as permissions.defaultMode; a
+// top-level defaultMode is dropped without a warning, so plain `claude` does
+// not start in bypass mode and only `cc` gets the waiver.
+test('settings.json has no top-level defaultMode (the CLI reads only permissions.defaultMode)', () => {
+  assert.ok(
+    !('defaultMode' in SETTINGS),
+    `dot_claude/settings.json sets defaultMode=${JSON.stringify(SETTINGS.defaultMode)} at the top level, where the CLI ignores it; move it under permissions or delete it`,
+  )
+  if (SETTINGS.permissions?.defaultMode !== 'bypassPermissions') return
+  const actual = runClaude({ userSettings: SETTINGS, zshenv: ZSHENV })
+  assert.ok(
+    actual.includes(RM_GUARD_NOTICE),
+    `permissions.defaultMode is bypassPermissions, but claude started without the flag printed no "${RM_GUARD_NOTICE}" notice`,
+  )
 })
