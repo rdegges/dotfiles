@@ -272,7 +272,9 @@ permissions bypassed), `cx` (codex with approvals/sandbox bypassed), `agentp`
 (herdr on the personal server), and `agentw` (herdr on the work server, defined
 only when `work = true`).
 
-`dot_claude/settings.json` sets `CLAUDE_CODE_EVEN_MORE_DANGEROUSLY_SKIP_PERMISSIONS=1`
-in its `env` block. Bypass mode still blocks a few destructive commands such as
-`rm -rf ~`; this setting lifts that block on every box, by choice. Delete the
-`env` entry to get the guard back.
+`dot_zshenv` exports `CLAUDE_CODE_EVEN_MORE_DANGEROUSLY_SKIP_PERMISSIONS=1`.
+Bypass mode still blocks a few destructive commands such as `rm -rf ~`; this
+lifts that block on every box, by choice. Claude Code reads the key only from
+the environment it starts in (it ignores it in any settings file), so it covers
+`claude` started from a terminal or SSH, not the desktop app. Remove the export
+to get the guard back.

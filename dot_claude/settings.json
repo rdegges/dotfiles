@@ -55,9 +55,6 @@
   "agentPushNotifEnabled": true,
   "voiceEnabled": true,
   "defaultMode": "bypassPermissions",
-  "env": {
-    "CLAUDE_CODE_EVEN_MORE_DANGEROUSLY_SKIP_PERMISSIONS": "1"
-  },
   "autoMode": {
     "allow": [
       "$defaults",
