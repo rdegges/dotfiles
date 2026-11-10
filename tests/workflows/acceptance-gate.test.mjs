@@ -183,6 +183,8 @@ const TESTER_VALID = [
   // The real shape seen in two failed gate runs: a harness notice, a blank line, then the report.
   ['after a harness notice line', `${HARNESS}\n\nTESTS: FAIL — 1034/1035 pass — canary`],
   ['after two harness notice lines', `${HARNESS}\n${HARNESS}\nTESTS: PASS — canary`],
+  ['after blank and indented lines around harness notices', ` \n\t${HARNESS}\n   ${HARNESS} \t\n\nTESTS: PASS — canary`],
+  ['after a harness notice with a ] inside it', '[harness: matched [a] and [b] patterns]\nTESTS: PASS — canary'],
 ]
 for (const [name, report] of TESTER_VALID) {
   test(`acceptance-gate: tester report accepted without rerun: ${name}`, async () => {
@@ -210,6 +212,11 @@ const TESTER_INVALID = [
   ['a harness notice, then no status line', `${HARNESS}\nRunning the baseline suite now...`],
   ['status line after other text, then a harness notice', `Summary first.\n${HARNESS}\nTESTS: PASS — canary`],
   ['a harness-like line without the closing bracket', '[harness: notice with no end\nTESTS: PASS — canary'],
+  // Only harness notices are skipped: any other bracketed line is report text.
+  ['a non-harness bracketed line before the status line', '[note: canary]\nTESTS: PASS — canary'],
+  ['a harness notice after a non-harness bracketed line', `[note: canary]\n${HARNESS}\nTESTS: PASS — canary`],
+  // A notice is one line: the skip must not run on to a later ] and eat report text.
+  ['a harness notice, then a text line ending in ]', `${HARNESS}\nSummary first [see below]\nTESTS: PASS — canary`],
 ]
 for (const [name, bad] of TESTER_INVALID) {
   test(`acceptance-gate: tester ${name} reruns the tester once, logs it, and the valid rerun goes on`, async () => {
@@ -221,6 +228,53 @@ for (const [name, bad] of TESTER_INVALID) {
     assert.ok(logs(calls).some((m) => m.startsWith('tester:') && /rerunning once/.test(m)), 'rerun must be logged')
   })
 }
+
+test('acceptance-gate: a harness-prefixed tester report reaches bdfl and the result unchanged, notice included', async () => {
+  const report = `${HARNESS}\n\n${TESTER_OK}`
+  const { calls, result, error } = await run({ tester: [report] })
+  assert.equal(error, undefined, error && error.message)
+  assert.equal(result.testerReport, report)
+  assert.ok(promptOf(calls, 'bdfl').includes(report), 'bdfl must see the report as the harness delivered it')
+  assert.ok(!promptOf(calls, 'red-team').includes(TESTER_OK), 'red-team must stay blind to the tester report')
+})
+
+test('acceptance-gate: a harness-prefixed tester report is accepted on the rerun', async () => {
+  const report = `${HARNESS}\n${TESTER_OK}`
+  const { result, error, labels } = await run({ tester: [null, report] })
+  assert.equal(error, undefined, error && error.message)
+  assert.deepEqual(labels, ['tester', 'tester', 'red-team', 'bdfl'])
+  assert.deepEqual(result.reruns, ['tester'])
+  assert.equal(result.testerReport, report)
+})
+
+test('acceptance-gate: harness notices alone, twice, stop the gate with no verdict', async () => {
+  const { error, labels } = await run({ tester: [`${HARNESS}\n`, `${HARNESS}\n${HARNESS}`] })
+  assert.ok(error, 'expected the script to throw')
+  assert.match(error.message, /^tester returned no valid report twice/)
+  assert.deepEqual(labels, ['tester', 'tester'])
+})
+
+// The notice stripper runs on untrusted agent output; it must stay linear.
+// The size is picked so a linear check takes about 1 ms and a quadratic one
+// (for example, the same regex with the m flag) takes several seconds and
+// fails the bound, instead of hanging the suite.
+test('acceptance-gate: the format checks stay fast on large adversarial reports', async () => {
+  const n = 60_000
+  const hostile = [
+    '[harness: ' + '] '.repeat(n) + 'x',
+    '[harness: a]\n'.repeat(n / 10) + 'x',
+    ' \n\t'.repeat(n) + 'x',
+    '[harness: ' + '[harness: ]'.repeat(n / 10) + 'x',
+  ]
+  for (const bad of hostile) {
+    const t = performance.now()
+    const { error, labels } = await run({ tester: [bad, bad] })
+    const ms = performance.now() - t
+    assert.ok(error, 'a hostile non-report must not pass the check')
+    assert.deepEqual(labels, ['tester', 'tester'])
+    assert.ok(ms < 2000, `check took ${ms.toFixed(0)} ms`)
+  }
+})
 
 test('acceptance-gate: the tester rerun adds the cut-off note to the same prompt, with the same opts', async () => {
   const { calls } = await run({ tester: [null, TESTER_OK] })
@@ -259,10 +313,12 @@ test('acceptance-gate: tester invalid twice stops with no verdict and never reac
 
 for (const good of ['- **Verdict** — ship.', '**Verdict:** ship.', 'Verdict: ship.', `${HARNESS}\n\n**Verdict:** ship.`]) {
   test(`acceptance-gate: red-team report accepted without rerun: ${good}`, async () => {
-    const { result, error, labels } = await run({ 'red-team': [good] })
+    const { calls, result, error, labels } = await run({ 'red-team': [good] })
     assert.equal(error, undefined, error && error.message)
     assert.deepEqual(labels, ['tester', 'red-team', 'bdfl'])
     assert.deepEqual(result.reruns, [])
+    assert.equal(result.redTeamReport, good)
+    assert.ok(promptOf(calls, 'bdfl').includes(good), 'bdfl must see the red-team report unchanged')
   })
 }
 
@@ -273,6 +329,9 @@ for (const [name, bad] of [
   ['whitespace only', '\n  \n'],
   ['a non-string object', { report: 'x' }],
   ['only a harness notice', `${HARNESS}\n`],
+  ['a harness notice, then preamble', `${HARNESS}\nLet me read the diff first.\n**Verdict:** ship.`],
+  ['preamble, then a harness notice and the verdict', `Let me read the diff first.\n${HARNESS}\n**Verdict:** ship.`],
+  ['a non-harness bracketed line before the verdict', '[note: canary]\n**Verdict:** ship.'],
 ]) {
   test(`acceptance-gate: red-team ${name} reruns red-team once and the rerun report reaches bdfl`, async () => {
     const { calls, result, error, labels } = await run({ 'red-team': [bad, REDTEAM_OK] })
