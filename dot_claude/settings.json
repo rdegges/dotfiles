@@ -1,5 +1,6 @@
 {
   "permissions": {
+    "defaultMode": "bypassPermissions",
     "allow": [
       "Edit(//Users/rdegges/Vault/Personal/**)",
       "mcp__claude-in-chrome__javascript_tool"
@@ -54,7 +55,6 @@
   "inputNeededNotifEnabled": true,
   "agentPushNotifEnabled": true,
   "voiceEnabled": true,
-  "defaultMode": "bypassPermissions",
   "autoMode": {
     "allow": [
       "$defaults",

@@ -19,3 +19,13 @@ export OP_BIOMETRIC_UNLOCK_ENABLED=true
 # 1Password by run_onchange_after_setup-parallel-mcp.sh.tmpl (personal machines).
 # Claude Code reads the file itself: GUI apps never source this file.
 [ -r "$HOME/.config/parallel/api-key" ] && export PARALLEL_API_KEY="$(<"$HOME/.config/parallel/api-key")"
+
+# Bypass mode (settings.json permissions.defaultMode) still blocks a few destructive
+# commands such as `rm -rf ~`. This lifts that last block on every box, by
+# choice. It must live here: Claude Code reads it only from the environment it
+# starts in and ignores it in any settings file. GUI apps never source this
+# file, so the desktop app keeps the guard. settings.json permissions.defaultMode
+# starts every session in bypass mode. Any permissions deny rule switches the
+# waiver off for that session; that is how vault-agent-settings.json keeps the
+# guard. Remove this line to get the guard back.
+export CLAUDE_CODE_EVEN_MORE_DANGEROUSLY_SKIP_PERMISSIONS=1
