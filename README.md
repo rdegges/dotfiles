@@ -276,6 +276,10 @@ only when `work = true`).
 so every `claude` session starts in bypass mode, not only `cc`. (The CLI reads
 the mode only under `permissions`; a top-level `defaultMode` is ignored.)
 
+It also sets `remoteControlAtStartup` to `true`, so every session starts the
+Remote Control bridge and I can drive it from my claude.ai account. The
+unattended `vault-agent-settings.json` profile sets it to `true` too, by choice.
+
 `dot_zshenv` exports `CLAUDE_CODE_EVEN_MORE_DANGEROUSLY_SKIP_PERMISSIONS=1`.
 Bypass mode still blocks a few destructive commands such as `rm -rf ~`; this
 lifts that block on every box, by choice. Claude Code reads the key only from
