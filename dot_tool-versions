@@ -1,5 +1,5 @@
 python 3.14.6t
-nodejs 26.4.0
+nodejs 26.13.0
 golang 1.26.4
 pipx 1.15.0
 uv 0.11.26
