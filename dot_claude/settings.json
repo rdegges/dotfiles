@@ -54,6 +54,7 @@
   "skipDangerousModePermissionPrompt": true,
   "inputNeededNotifEnabled": true,
   "agentPushNotifEnabled": true,
+  "remoteControlAtStartup": true,
   "voiceEnabled": true,
   "autoMode": {
     "allow": [
