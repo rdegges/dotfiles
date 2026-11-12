@@ -517,6 +517,79 @@ test('a backslash in the state file is written back literally to the state file 
     assert.equal(readFileSync(sb.statefile, 'utf8'), 'NeedsLogin unsent 2026\\c-01\\n02\n')
   }))
 
+// The recovery-mail-failed marker (ok()) carries the key and first-seen time
+// read from the state file; it is the other marker writer.
+test('a backslash in the state file keeps the recovery-mail-failed marker one whole line, and the state as it was', () =>
+  withSandbox({ backend: 'Running' }, (sb) => {
+    mkdirSync(sb.logs, { recursive: true })
+    writeFileSync(sb.statefile, 'Need\\csLogin unsent 2026\\c-01\\n02\n')
+    const r = sb.run({ STUB_MAIL_RC: '1' })
+    assert.equal(r.status, 1, r.stdout + r.stderr)
+    const m = readFileSync(sb.marker, 'utf8')
+    assert.equal(m.split('\n').length, 2, `marker is not one line: ${JSON.stringify(m)}`)
+    assert.ok(
+      m.includes('(an outage was never reported: Need\\csLogin, first seen 2026\\c-01\\n02, and the mail about it did not send), but the recovery mail failed; the next run tries again (see ~/.cron/logs/tailscale-watchdog.log)\n'),
+      JSON.stringify(m),
+    )
+    assert.equal(readFileSync(sb.statefile, 'utf8'), 'Need\\csLogin unsent 2026\\c-01\\n02\n')
+  }))
+
+// The log (stdout, overwritten each run) is the only place the reason and the
+// mail subject are seen without opening the marker or the mail.
+test('the log lines keep a `\\c` or `\\n` in the reason and the mail subject literally', () =>
+  withSandbox({ backend: 'Stopped' }, (sb) => {
+    writeFileSync(sb.cliPath, rawUpErrCli())
+    writeFileSync(join(sb.bin, 'hostname'), "#!/bin/sh\nprintf '%s\\n' 'host\\cX\\nY'\n")
+    const r = sb.run({ STUB_UP_RC: '1', STUB_UP_ERR: 'a\\nb \\c rest' })
+    assert.equal(r.status, 1, r.stdout + r.stderr)
+    const lines = r.stdout.split('\n')
+    assert.ok(lines.some((l) => l.startsWith('tailscale-watchdog: FAILED: ') && l.endsWith('): a\\nb \\c rest')), JSON.stringify(r.stdout))
+    assert.ok(lines.includes('tailscale-watchdog: mailed: Tailscale is down on host\\cX\\nY: up-failed'), JSON.stringify(r.stdout))
+  }))
+
+test('an unsent alert whose first-seen time holds a backslash is recorded as mailed with that time unchanged', () =>
+  withSandbox({ backend: 'NeedsLogin' }, (sb) => {
+    mkdirSync(sb.logs, { recursive: true })
+    writeFileSync(sb.statefile, 'NeedsLogin unsent 2026\\c-01\\n02\n')
+    assertFailed(sb, sb.run(), /NeedsLogin/)
+    assert.equal(sb.mails().length, 1)
+    assert.equal(readFileSync(sb.statefile, 'utf8'), 'NeedsLogin mailed 2026\\c-01\\n02\n')
+  }))
+
+test('the "mail failed" log line keeps a `\\c` in himalaya\'s error literally', () =>
+  withSandbox({ backend: 'NeedsLogin' }, (sb) => {
+    const stub = STUBS.himalaya.replace('echo "cannot send message: smtp connection refused" >&2', 'printf \'%s\\n\' \'smtp: bad \\c reply \\n here\' >&2')
+    assert.notEqual(stub, STUBS.himalaya, 'stub patch did not apply')
+    writeFileSync(join(sb.bin, 'himalaya'), stub)
+    const r = sb.run({ STUB_MAIL_RC: '1' })
+    assertFailed(sb, r, /the alert mail failed too/)
+    assert.ok(r.stdout.split('\n').includes('tailscale-watchdog: mail failed: smtp: bad \\c reply \\n here'), JSON.stringify(r.stdout))
+  }))
+
+// macOS /bin/sh is bash 3.2 built strict-POSIX, so xpg_echo is on and its echo
+// expands backslashes like dash's. Debian's `bash --posix` leaves xpg_echo off,
+// so the other [bash --posix] tests do not exercise macOS echo; -O xpg_echo does.
+const XPG = { shell: ['bash', '--posix', '-O', 'xpg_echo'] }
+test('[bash --posix xpg_echo] a `\\n` or `\\c` in the `up` error keeps the marker one whole line', { skip: spawnSync('sh', ['-c', 'command -v bash']).status === 0 ? false : 'bash not installed' }, () =>
+  withSandbox({ backend: 'Stopped' }, (sb) => {
+    // The emulation itself: with xpg_echo, bash's echo expands \c like macOS sh.
+    assert.equal(spawnSync('bash', ['--posix', '-O', 'xpg_echo', '-c', 'echo "a\\cb"'], { encoding: 'utf8' }).stdout, 'a')
+    writeFileSync(sb.cliPath, rawUpErrCli())
+    const r = sb.run({ STUB_UP_RC: '1', STUB_UP_ERR: 'parse error: "a\\nb" then \\c the rest' }, XPG)
+    const m = assertFailed(sb, r, /`tailscale up` failed/)
+    assert.ok(m.includes('"a\\nb" then \\c the rest (see '), JSON.stringify(m))
+  }))
+
+test('[bash --posix xpg_echo] a backslash in the state file is written back literally to the state file and the marker', { skip: spawnSync('sh', ['-c', 'command -v bash']).status === 0 ? false : 'bash not installed' }, () =>
+  withSandbox({ backend: 'NeedsLogin' }, (sb) => {
+    mkdirSync(sb.logs, { recursive: true })
+    writeFileSync(sb.statefile, 'NeedsLogin unsent 2026\\c-01\\n02\n')
+    const r = sb.run({ STUB_MAIL_RC: '1' }, XPG)
+    const m = assertFailed(sb, r, /the alert mail failed too/)
+    assert.ok(m.includes('(down since 2026\\c-01\\n02, not reported yet; the next run tries again) (see '), JSON.stringify(m))
+    assert.equal(readFileSync(sb.statefile, 'utf8'), 'NeedsLogin unsent 2026\\c-01\\n02\n')
+  }))
+
 // macOS /bin/sh is bash 3.2 in POSIX mode; the rest of this file runs under dash.
 test('[bash --posix] down then recovered: both mails arrive whole on stdin, marker cleared', { skip: spawnSync('sh', ['-c', 'command -v bash']).status === 0 ? false : 'bash not installed' }, () =>
   withSandbox({ backend: 'NeedsLogin' }, (sb) => {
