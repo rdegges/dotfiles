@@ -13,8 +13,10 @@
 //
 // What a pass proves, with stub claude, scutil, plutil (reads the JSON file and
 // the dotted key path like the real one), himalaya (like 1.2.0: the message on
-// stdin, a panic on an empty stdin), launchctl, and find, under Debian sh and
-// bash, started the way the plist starts it (`exec ... >> log 2>&1`):
+// stdin, a panic on an empty stdin), launchctl, and find, with the wrapper itself run by
+// Debian sh (dash) and by bash --posix (and by a bash 3.2 `sh`, as macOS
+// /bin/sh, when CRC_MACOS_SH names one), started the way the plist starts it
+// (`exec ... >> log 2>&1`):
 // - the wrapper starts claude in ~/Code with exactly
 //   `remote-control --name <LocalHostName> --spawn same-dir --permission-mode
 //   bypassPermissions`, and that mode equals permissions.defaultMode in
@@ -22,13 +24,15 @@
 // - each preflight fails closed with a marker and never starts claude: claude
 //   not on PATH, LocalHostName empty, failing, or not a plain name, ~/Code
 //   missing, and ~/Code not trusted, absent, or unreadable in ~/.claude.json
-//   (also when only ~ is trusted);
+//   (also when only ~ is trusted), and a HOME with a dot (no plutil call);
 // - a TERM goes on to claude, and the wrapper then exits 0 and writes no
 //   marker; claude still running after the settle time clears the marker and
 //   touches .ok; any other exit writes the marker with claude's exit code and
 //   the last 20 log lines (cleaned by `lines` from dot_cron/lib/text.sh: each
 //   one printable ASCII, at most 300 bytes, no color-code fragments) and exits
-//   with that code;
+//   with that code, also when claude dies after the settle time in the same
+//   run (one ok, then the down mail; .ok stays); the dot_zshrc banner prints
+//   that marker whole;
 // - with lib/text.sh missing or not parsing, the wrapper writes the marker
 //   ("cannot load"), exits 1, and never starts claude or mails; a lib cut short
 //   after oneline (no lines) still leaves the failure reason in the marker;
@@ -43,18 +47,19 @@
 //   file in the ~/Code transcript folder (named by Claude Code 2.1.322's rule)
 //   changed in 20 minutes, defers with exit 1 and a marker when one did, when
 //   find fails, or when the folder name cannot be derived, skips a disabled
-//   service with exit 0, and never restarts from inside the service; under a
+//   service with exit 0, fails with a marker when a bootout leaves it
+//   loaded for 10s, and never restarts from inside the service; under a
 //   real `chezmoi apply`, a deferred restart runs again on the next apply.
 // What a pass does not prove: that the real server registers with claude.ai
 // under that name, the real trust prompt or ~/.claude.json format beyond
 // hasTrustDialogAccepted, real launchd KeepAlive and throttle timing, that the
-// server reconnects after sleep or wake, real plutil or scutil output, macOS
-// /bin/sh (bash 3.2 in POSIX mode), or real mail delivery. Those are the
-// rollout checks on each Mac.
+// server reconnects after sleep or wake, real plutil or scutil output, Apple's own
+// /bin/sh build (CRC_MACOS_SH is a Linux build of bash 3.2.57), or real mail
+// delivery. Those are the rollout checks on each Mac.
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync, writeFileSync, mkdirSync, mkdtempSync, existsSync, chmodSync, rmSync, readdirSync, cpSync, appendFileSync, utimesSync, statSync } from 'node:fs'
+import { readFileSync, writeFileSync, mkdirSync, mkdtempSync, existsSync, chmodSync, rmSync, readdirSync, cpSync, appendFileSync, utimesSync, statSync, realpathSync } from 'node:fs'
 import { spawn, spawnSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -89,20 +94,23 @@ const renderWrapper = (homelab) => execTemplate(read(WRAPPER), { data: { ...DARW
 
 // --- Stubs -------------------------------------------------------------------------
 
-// claude: records its cwd, its pid, its argv (one per line, written last), and
-// the signals it gets.
-// STUB_CLAUDE=run stays up until TERM; STUB_CLAUDE=exit prints STUB_CLAUDE_LINES
-// numbered lines and then exits with STUB_CLAUDE_RC.
+// claude: records its cwd, its pid, the binary of its parent (the shell that
+// runs the wrapper; Linux /proc only), its argv (one per line, written last),
+// and the signals it gets.
+// STUB_CLAUDE=run stays up until TERM, or until $STATE/die exists, then exits
+// STUB_DIE_RC (a crash after the settle time); STUB_CLAUDE=exit prints
+// STUB_CLAUDE_LINES numbered lines and then exits with STUB_CLAUDE_RC.
 const CLAUDE =
   '#!/bin/sh\n' +
   'pwd > "$STATE/claude.cwd"\n' +
   'echo $$ > "$STATE/claude.pid"\n' +
+  'readlink "/proc/$PPID/exe" > "$STATE/claude.parent" 2>/dev/null || :\n' +
   'printf "%s\\n" "$@" > "$STATE/claude.args.tmp"; mv "$STATE/claude.args.tmp" "$STATE/claude.args"\n' +
   'case "${STUB_CLAUDE:-run}" in\n' +
   'run)\n' +
   '  trap \'echo TERM >> "$STATE/claude.signals"; exit 0\' TERM\n' +
   '  echo "stub claude: Remote Control ready"\n' +
-  '  while :; do sleep 0.1; done ;;\n' +
+  '  while :; do [ -e "$STATE/die" ] && { echo "stub claude: connection lost"; exit "${STUB_DIE_RC:-4}"; }; sleep 0.1; done ;;\n' +
   'exit)\n' +
   '  i=1; while [ "$i" -le "${STUB_CLAUDE_LINES:-3}" ]; do echo "stub claude line $i"; i=$((i + 1)); done\n' +
   '  [ -z "${STUB_CLAUDE_TEXT:-}" ] || printf "%s\\n" "$STUB_CLAUDE_TEXT"\n' +
@@ -152,11 +160,31 @@ const STUBS = {
     'n=$(ls "$STATE" | grep -c "^mail\\.")\nmv "$STATE/stdin.tmp" "$STATE/mail.$((n + 1))"\n',
 }
 
+// The shells that run the wrapper itself. The plist's `exec "$0"` goes through
+// the #!/bin/sh line, so a shell named only as the outer `-c` shell never runs
+// the wrapper: each variant here execs the wrapper with that shell. 'sh' is the
+// plist's own path (Debian /bin/sh, dash). 'macos-sh' is a bash 3.2 binary
+// started under the name sh (POSIX mode), as macOS /bin/sh is; it runs only
+// when CRC_MACOS_SH names one (a symlink called sh), and skips otherwise. To
+// build one in the Docker run: apt-get install bison, then bash-3.2.57 from
+// ftp.gnu.org with CC="gcc -std=gnu89 -fpermissive -Wno-error
+// -Wno-implicit-function-declaration -Wno-int-conversion
+// -Wno-incompatible-pointer-types -Wno-implicit-int -Wno-return-mismatch".
+const MACOS_SH = process.env.CRC_MACOS_SH
+const WRAPPER_SHELLS = {
+  sh: null,
+  'bash --posix': ['bash', '--posix'],
+  'macos-sh': MACOS_SH ? [MACOS_SH] : null,
+}
+const shellSkip = (shell) => (shell === 'macos-sh' && !(MACOS_SH && existsSync(MACOS_SH)) ? 'CRC_MACOS_SH does not name a bash 3.2 `sh` (see WRAPPER_SHELLS)' : false)
+// The binary that must be the wrapper's process for that variant.
+const shellBinary = (shell) => realpathSync(shell === 'sh' ? '/bin/sh' : shell === 'macos-sh' ? MACOS_SH : spawnSync('sh', ['-c', 'command -v bash'], { encoding: 'utf8' }).stdout.trim())
+
 // lib: 'ok' (the real lib/text.sh next to the wrapper, as chezmoi deploys it),
 // 'missing', 'syntax', or 'no-lines' (the real lib cut short before lines).
-function wrapperSandbox({ homelab = false, trusted = { Code: true }, code = true, stubs = Object.keys(STUBS), lib = 'ok' } = {}) {
+function wrapperSandbox({ homelab = false, trusted = { Code: true }, code = true, stubs = Object.keys(STUBS), lib = 'ok', homeName = 'home dir' } = {}) {
   const base = mkdtempSync(join(tmpdir(), 'crc-'))
-  const home = join(base, 'home dir')
+  const home = join(base, homeName)
   const bin = join(base, 'bin')
   const state = join(base, 'state')
   for (const d of [home, bin, state]) mkdirSync(d)
@@ -184,6 +212,9 @@ function wrapperSandbox({ homelab = false, trusted = { Code: true }, code = true
   const env = (extra) => ({ HOME: home, PATH: `${bin}:${SYS_PATH}`, CALLS: calls, STATE: state, CLAUDE_REMOTE_CONTROL_SETTLE: '30', ...extra })
   // The plist's command: the wrapper becomes this process and appends to its log.
   const argv = ['-c', 'exec "$0" >> "$HOME/.cron/logs/claude-remote-control.log" 2>&1', script]
+  // Another shell variant: the same redirect, with the wrapper run by that shell.
+  const argvFor = (shell) =>
+    WRAPPER_SHELLS[shell] ? ['-c', 'exec "$@" "$0" >> "$HOME/.cron/logs/claude-remote-control.log" 2>&1', script, ...WRAPPER_SHELLS[shell]] : argv
   const started = []
   return {
     base,
@@ -199,6 +230,12 @@ function wrapperSandbox({ homelab = false, trusted = { Code: true }, code = true
     logText: () => (existsSync(log) ? readFileSync(log, 'utf8') : ''),
     claudeArgs: () => (existsSync(join(state, 'claude.args')) ? readFileSync(join(state, 'claude.args'), 'utf8').split('\n').slice(0, -1) : null),
     claudeSignals: () => (existsSync(join(state, 'claude.signals')) ? readFileSync(join(state, 'claude.signals'), 'utf8') : ''),
+    // The variant really ran the wrapper: claude's parent is that shell's binary
+    // (checked where /proc exists, as in the Docker run).
+    assertShell(shell) {
+      if (!existsSync('/proc/self/exe')) return
+      assert.equal(readFileSync(join(state, 'claude.parent'), 'utf8').trim(), shellBinary(shell), `the wrapper did not run under ${shell}`)
+    },
     mails: () =>
       readdirSync(state)
         .filter((f) => f.startsWith('mail.'))
@@ -207,13 +244,13 @@ function wrapperSandbox({ homelab = false, trusted = { Code: true }, code = true
     resetClaude: () => ['claude.args', 'claude.cwd', 'claude.pid', 'claude.signals'].forEach((f) => rmSync(join(state, f), { force: true })),
     // A run that ends by itself (preflight failure, claude exits).
     run(extra = {}, shell = 'sh') {
-      const r = spawnSync(shell, argv, { encoding: 'utf8', env: env(extra), timeout: 60000 })
+      const r = spawnSync('sh', argvFor(shell), { encoding: 'utf8', env: env(extra), timeout: 60000 })
       assert.ifError(r.error)
       return r
     },
     // A run that stays up: returns the child and a promise of its exit.
     start(extra = {}, shell = 'sh') {
-      const child = spawn(shell, argv, { env: env(extra), stdio: 'ignore' })
+      const child = spawn('sh', argvFor(shell), { env: env(extra), stdio: 'ignore' })
       started.push(child)
       const exit = new Promise((resolve) => child.on('exit', (code, signal) => resolve({ code, signal })))
       return { child, exit }
@@ -286,13 +323,14 @@ test('wrapper: renders mail=1 only for homelab true; both renders parse under sh
   }
 })
 
-for (const shell of ['sh', 'bash']) {
-  test(`wrapper (${shell}): preflight passes; claude runs in ~/Code with the exact argv; a TERM stops it, exit 0, no marker, no mail`, () =>
+for (const shell of Object.keys(WRAPPER_SHELLS)) {
+  test(`wrapper (${shell}): preflight passes; claude runs in ~/Code with the exact argv; a TERM stops it, exit 0, no marker, no mail`, { skip: shellSkip(shell) }, () =>
     withWrapper({ homelab: true }, async (sb) => {
       const { child, exit } = sb.start({}, shell)
       await until(() => sb.claudeArgs() && /Remote Control ready/.test(sb.logText()), 'claude to start')
       assert.deepEqual(sb.claudeArgs(), WANT_ARGS)
       assert.equal(readFileSync(join(sb.state, 'claude.cwd'), 'utf8').trim(), join(sb.home, 'Code'))
+      sb.assertShell(shell)
       child.kill('SIGTERM')
       const { code, signal } = await exited(exit)
       assert.equal(signal, null)
@@ -342,8 +380,8 @@ test('wrapper: a marker from an earlier failure stays while the server has run f
 
 // --- An exit nobody asked for -------------------------------------------------------------
 
-for (const shell of ['sh', 'bash']) {
-  test(`wrapper (${shell}): claude exits 3 by itself: marker with the exit code and the last 20 log lines, exit 3`, () =>
+for (const shell of Object.keys(WRAPPER_SHELLS)) {
+  test(`wrapper (${shell}): claude exits 3 by itself: marker with the exit code and the last 20 log lines, exit 3`, { skip: shellSkip(shell) }, () =>
     withWrapper({}, async (sb) => {
       const r = sb.run({ STUB_CLAUDE: 'exit', STUB_CLAUDE_RC: '3', STUB_CLAUDE_LINES: '25' }, shell)
       const m = assertFailed(sb, r, /claude remote-control exited \(exit 3\)/, 3)
@@ -351,19 +389,47 @@ for (const shell of ['sh', 'bash']) {
       assert.equal(lines.length, 21, m)
       assert.deepEqual(lines.slice(-5), [21, 22, 23, 24, 25].map((i) => `  | stub claude line ${i}`))
       assert.ok(!lines.includes('  | stub claude line 5'), 'more than the last 20 lines')
+      sb.assertShell(shell)
       assert.equal(existsSync(sb.stamp), false)
     }))
 }
 
-test('wrapper: claude killed by a signal (exit 137) is a failure with that code', () =>
-  withWrapper({}, async (sb) => {
-    const { exit } = sb.start()
-    await until(() => sb.claudeArgs(), 'claude to start')
-    process.kill(Number(readFileSync(join(sb.state, 'claude.pid'), 'utf8')), 'SIGKILL')
-    const { code } = await exited(exit)
-    assert.equal(code, 137, sb.logText())
-    assert.match(readFileSync(sb.marker, 'utf8'), /claude remote-control exited \(exit 137\)/)
-  }))
+for (const shell of Object.keys(WRAPPER_SHELLS)) {
+  test(`wrapper (${shell}): claude killed by a signal (exit 137) is a failure with that code`, { skip: shellSkip(shell) }, () =>
+    withWrapper({}, async (sb) => {
+      const { exit } = sb.start({}, shell)
+      await until(() => sb.claudeArgs(), 'claude to start')
+      sb.assertShell(shell)
+      process.kill(Number(readFileSync(join(sb.state, 'claude.pid'), 'utf8')), 'SIGKILL')
+      const { code } = await exited(exit)
+      assert.equal(code, 137, sb.logText())
+      assert.match(readFileSync(sb.marker, 'utf8'), /claude remote-control exited \(exit 137\)/)
+    }))
+
+  // The supervisor's one path where the USR1 timer cuts a wait short and the
+  // loop must go back to waiting on a live claude, then still catch its exit.
+  test(`wrapper (${shell}, homelab): healthy once, then claude dies by itself in the same run: exactly one ok, down mail, marker with its last lines, .ok kept, exit 4`, { skip: shellSkip(shell) }, () =>
+    withWrapper({ homelab: true }, async (sb) => {
+      const { exit } = sb.start({ CLAUDE_REMOTE_CONTROL_SETTLE: '1' }, shell)
+      await until(() => existsSync(sb.stamp), '.ok')
+      sb.assertShell(shell)
+      assert.equal(readFileSync(sb.statefile, 'utf8'), 'up\n')
+      await sleep(1500)
+      assert.equal(sb.logText().match(/claude-remote-control: ok: running for 1s/g).length, 1, sb.logText())
+      writeFileSync(join(sb.state, 'die'), '')
+      const { code, signal } = await exited(exit)
+      assert.equal(signal, null)
+      assert.equal(code, 4, sb.logText())
+      const m = readFileSync(sb.marker, 'utf8')
+      assert.match(m.split('\n')[0], MARKER_LINE)
+      assert.match(m.split('\n')[0], /claude remote-control exited \(exit 4\)/)
+      assert.match(m, /^ {2}\| stub claude: connection lost$/m)
+      assert.ok(existsSync(sb.stamp), '.ok is the last healthy time; a later crash does not remove it')
+      assert.deepEqual(sb.mails().map(subject), ['Claude Remote Control is down on testhost'])
+      assert.equal(readFileSync(sb.statefile, 'utf8'), 'down\n')
+      assert.equal(sb.claudeSignals(), '', 'the wrapper signalled claude')
+    }))
+}
 
 test('wrapper: claude exits 0 by itself: still a failure (launchd starts it again), exit 0', () =>
   withWrapper({}, async (sb) => {
@@ -382,9 +448,9 @@ test('wrapper: log lines with escape sequences, CR, and non-ASCII reach the mark
     assert.ok(lines.every((l) => l.length <= 304), 'a line is over 300 bytes after the prefix')
   }))
 
-for (const shell of ['sh', 'bash']) {
+for (const shell of Object.keys(WRAPPER_SHELLS)) {
   for (const lib of ['missing', 'syntax']) {
-    test(`wrapper (${shell}): a ${lib} lib/text.sh writes the marker ("cannot load"), exits 1, never starts claude, never mails`, () =>
+    test(`wrapper (${shell}): a ${lib} lib/text.sh writes the marker ("cannot load"), exits 1, never starts claude, never mails`, { skip: shellSkip(shell) }, () =>
       withWrapper({ homelab: true, lib }, async (sb) => {
         const r = sb.run({}, shell)
         assert.equal(r.status, 1, sb.logText())
@@ -395,6 +461,21 @@ for (const shell of ['sh', 'bash']) {
       }))
   }
 }
+
+// The first multi-line marker: every line must reach a new shell, cleaned.
+const hasZsh = spawnSync('sh', ['-c', 'command -v zsh']).status === 0
+test('wrapper: the multi-line marker shows whole in the dot_zshrc banner, first line prefixed, no control characters', { skip: hasZsh ? false : 'zsh not installed (see the run command at the top)' }, () =>
+  withWrapper({}, async (sb) => {
+    sb.run({ STUB_CLAUDE: 'exit', STUB_CLAUDE_RC: '3', STUB_CLAUDE_TEXT: '\x1b[31mlast\x1b[0m words' })
+    const m = readFileSync(sb.marker, 'utf8')
+    const line = read('dot_zshrc')
+      .split('\n')
+      .find((l) => l.includes('.FAILED') && !l.trimStart().startsWith('#'))
+    const r = spawnSync('zsh', ['-f', '-c', line], { encoding: 'utf8', env: { HOME: sb.home, PATH: SYS_PATH } })
+    assert.equal(r.status, 0, r.stderr)
+    assert.equal(r.stdout, `\x1b[31mcron: ${m.trimEnd()}\x1b[0m\n`)
+    assert.match(r.stdout, /\n {2}\| last words\x1b\[0m\n$/)
+  }))
 
 test('wrapper: a lib cut short before lines still leaves the failure reason in the marker', () =>
   withWrapper({ lib: 'no-lines' }, async (sb) => {
@@ -424,6 +505,12 @@ test('preflight: LocalHostName empty, failing, or not a plain host name (ASCII-o
 test('preflight: ~/Code missing', () =>
   withWrapper({ code: false }, async (sb) =>
     assertPreflight(sb, sb.run(), /\/Code is missing: create it, then run `claude` in ~\/Code once and accept the trust prompt/)))
+
+test('preflight: a HOME with a dot cannot be checked (plutil splits the key path at dots): fails closed, plutil never runs', () =>
+  withWrapper({ homeName: 'r.degges' }, async (sb) => {
+    assertPreflight(sb, sb.run(), /cannot check the trust of .*\/r\.degges\/Code: the path has a dot/)
+    assert.deepEqual(sb.calls().filter((c) => c.startsWith('plutil')), [])
+  }))
 
 const TRUST = /run `claude` in ~\/Code once and accept the trust prompt, or the trust check cannot read ~\/\.claude\.json \(plutil: /
 for (const [name, trusted] of [
@@ -618,7 +705,8 @@ test('gate: every machine config has `work` (asked with promptBoolOnce), so a mi
 // --- Restart script ---------------------------------------------------------------------------
 
 // launchctl: $STATE/loaded/<label> is load state; `print gui/<uid>` lists it. STUB_DISABLED / STUB_ENABLED
-// fill print-disabled; STUB_PRINT_DISABLED_FAIL and STUB_BOOTSTRAP_FAIL fail.
+// fill print-disabled; STUB_PRINT_DISABLED_FAIL and STUB_BOOTSTRAP_FAIL fail. STUB_BOOTOUT_STUCK: bootout
+// succeeds but the label stays loaded.
 const LAUNCHCTL =
   '#!/bin/sh\n' +
   'echo "$*" >> "$CALLS"\n' +
@@ -634,7 +722,7 @@ const LAUNCHCTL =
   '  for d in ${STUB_ENABLED:-}; do printf "\\t\\t\\"%s\\" => enabled\\n" "$d"; done\n' +
   '  for d in ${STUB_DISABLED:-}; do printf "\\t\\t\\"%s\\" => disabled\\n" "$d"; done\n' +
   '  printf "\\t}\\n"; exit 0 ;;\n' +
-  'bootout) l=${2#"$dom"/}; [ -e "$STATE/loaded/$l" ] || exit 3; rm -f "$STATE/loaded/$l"; exit 0 ;;\n' +
+  'bootout) l=${2#"$dom"/}; [ -e "$STATE/loaded/$l" ] || exit 3; [ -n "${STUB_BOOTOUT_STUCK:-}" ] && exit 0; rm -f "$STATE/loaded/$l"; exit 0 ;;\n' +
   'bootstrap)\n' +
   '  [ "$2" = "$dom" ] || exit 64\n' +
   '  l=$(basename "$3" .plist); [ -f "$3" ] || exit 5\n' +
@@ -803,6 +891,19 @@ test('restart: a failed bootstrap: exit 1 and a marker', () =>
     const r = sb.run({ STUB_BOOTSTRAP_FAIL: '1' })
     assert.equal(r.status, 1, r.stdout + r.stderr)
     assert.match(readFileSync(sb.marker, 'utf8'), /restart failed, launchctl bootstrap gui\/\d+ com\.rdegges\.claude-remote-control failed/)
+  }))
+
+test('restart: a bootout that leaves the service loaded: no bootstrap after 10s, exit 1, a marker', () =>
+  withRestart({}, (sb) => {
+    const t0 = Date.now()
+    const r = sb.run({ STUB_BOOTOUT_STUCK: '1' })
+    assert.equal(r.status, 1, r.stdout + r.stderr)
+    // The deadline is bash $SECONDS + 10, in whole seconds: 9 to 10s of polling.
+    assert.ok(Date.now() - t0 >= 8000, `gave up after ${Date.now() - t0}ms, not about 10s`)
+    assert.ok(!sb.launchctl().includes('bootstrap'), sb.launchctl().join(' '))
+    assert.ok(sb.loaded())
+    assert.match(r.stderr, /ERROR: com\.rdegges\.claude-remote-control still loaded 10s after bootout/)
+    assert.match(readFileSync(sb.marker, 'utf8'), /^\d{4}-\d{2}-\d{2} \d{2}:\d{2} claude-remote-control: restart failed, com\.rdegges\.claude-remote-control still loaded 10s after bootout \(retries on the next apply\)\n$/)
   }))
 
 test('restart: busy, then idle: deferred, then restarted, and the marker cleared (A->B)', () =>
