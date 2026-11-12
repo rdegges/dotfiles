@@ -85,6 +85,10 @@ host=$(hostname -s 2>/dev/null) || host="this Mac"
 TO=$(command -v gtimeout || command -v timeout || true)
 run() { s=$1; shift; if [ -n "$TO" ]; then "$TO" -k 5 "$s" "$@"; else "$@"; fi; }
 
+# Untrusted text (CLI output, the state file, error text) is written with
+# printf '%s\n', never echo: dash and macOS /bin/sh expand backslash escapes in
+# echo, so a \n split the marker and a \c cut it short.
+#
 # One line, at most 300 characters, for the marker, the mail, and the state.
 # Printable ASCII only, before the cut: under launchd there is no LANG, so cut
 # counts bytes and could split a multi-byte character into invalid UTF-8.
@@ -97,17 +101,17 @@ send_mail() { # send_mail <subject> <body>
     # `himalaya message send "$msg" < /dev/null` panicked on the empty input
     # (exit 101, "index out of bounds" in mail-parser) and sent nothing.
     if out=$(printf '%s' "$msg" | run 60 himalaya message send -a "$account" 2>&1); then
-        echo "tailscale-watchdog: mailed: $1"
+        printf '%s\n' "tailscale-watchdog: mailed: $1"
         return 0
     fi
-    echo "tailscale-watchdog: mail failed: $(oneline "$out")"
+    printf '%s\n' "tailscale-watchdog: mail failed: $(oneline "$out")"
     return 1
 }
 
 # fail <key> <reason>: write the marker, mail unless this key was already
 # mailed, record the key as mailed or unsent, exit 1.
 fail() {
-    echo "tailscale-watchdog: FAILED: $2"
+    printf '%s\n' "tailscale-watchdog: FAILED: $2"
     note=
     if [ "$pkey" != "$1" ] || [ "$pstatus" != mailed ]; then
         earlier=
@@ -121,13 +125,13 @@ Reason: $2
 Down since: $since_txt$earlier
 
 The watchdog mails again only when this changes. The reason stays in ~/.cron/logs/tailscale-watchdog.FAILED until a run finds Tailscale Running."; then
-            echo "$1 mailed $since" > "$statefile"
+            printf '%s\n' "$1 mailed $since" > "$statefile"
         else
-            echo "$1 unsent $since" > "$statefile"
+            printf '%s\n' "$1 unsent $since" > "$statefile"
             note="; the alert mail failed too (down since $since_txt, not reported yet; the next run tries again)"
         fi
     fi
-    echo "$(date '+%F %R') tailscale-watchdog: $2$note (see ~/.cron/logs/tailscale-watchdog.log)" > "$marker"
+    printf '%s\n' "$(date '+%F %R') tailscale-watchdog: $2$note (see ~/.cron/logs/tailscale-watchdog.log)" > "$marker"
     exit 1
 }
 
@@ -148,8 +152,8 @@ What happened: $what."; then
             # The user must still hear about this: an outage already in the
             # state file stays as it is, and a fix with no earlier outage is
             # recorded as an unsent outage, so the next run mails again.
-            if [ -z "$pkey" ] || [ "$pkey" = Running ]; then echo "$2 unsent $now" > "$statefile"; fi
-            echo "$(date '+%F %R') tailscale-watchdog: Tailscale is Running again ($what), but the recovery mail failed; the next run tries again (see ~/.cron/logs/tailscale-watchdog.log)" > "$marker"
+            if [ -z "$pkey" ] || [ "$pkey" = Running ]; then printf '%s\n' "$2 unsent $now" > "$statefile"; fi
+            printf '%s\n' "$(date '+%F %R') tailscale-watchdog: Tailscale is Running again ($what), but the recovery mail failed; the next run tries again (see ~/.cron/logs/tailscale-watchdog.log)" > "$marker"
             exit 1
         fi
     fi
@@ -209,7 +213,7 @@ if [ "$prc" -eq 1 ]; then
         io.tailscale.ipn.macos | io.tailscale.ipn.macsys) ;;
         *) fail app-not-running "Tailscale app is not running, and $app has no known bundle id ($id); not started" ;;
     esac
-    echo "tailscale-watchdog: app not running; starting $id"
+    printf '%s\n' "tailscale-watchdog: app not running; starting $id"
     out=$(run 30 open -g -b "$id" < /dev/null 2>&1) || fail app-not-running "Tailscale app is not running, and \`open -g -b $id\` failed: $(oneline "$out")"
     deadline=$(($(date +%s) + wait))
     until pgrep -fx "$app/Contents/MacOS/Tailscale" > /dev/null 2>&1; do
