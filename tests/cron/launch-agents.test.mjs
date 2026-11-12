@@ -1393,22 +1393,38 @@ for (const [answer, want] of [['true', 'true'], ['false', 'false']]) {
 
 // macOS ships these only in /usr/sbin or /sbin, and launchd's default PATH has
 // neither. Before /usr/sbin:/sbin joined the shared PATH, the Remote Control
-// wrapper could not run scutil (it failed every start) and app-update could not
-// run ioreg (every night counted as busy). This ties each tool a job calls bare
-// to a directory on the rendered PATH. It proves the PATH covers the tools
-// listed here; it does not find a new sbin tool that is not on the list.
+// wrapper could not run scutil (it failed every start); app-update and
+// wait-for-network append /usr/sbin:/sbin themselves. This ties each tool a job
+// calls bare (in a dot_cron script, its lib, or an agent's inline command) to a
+// directory on the rendered PATH. It proves the PATH covers the tools listed
+// here; it does not find a new sbin tool that is not on the list.
+// Checked on macOS 27 with `env -i PATH=<plist PATH> /bin/sh -c 'command -v <tool>'`.
 const SBIN_TOOLS = { ioreg: '/usr/sbin', sysctl: '/usr/sbin', scutil: '/usr/sbin', lsof: '/usr/sbin', networksetup: '/usr/sbin', pmset: '/usr/bin', route: '/sbin', ifconfig: '/sbin', ping: '/sbin' }
+// A bare call: the tool name as a whole shell word, also inside $(...), `...`,
+// or quotes, and at the end of a line. Not a path (/usr/sbin/ioreg) or a longer word.
+const callsBare = (line, tool) => new RegExp(`(^|[\\s(|;&$\`"'])${tool}($|[\\s)|;&\`"'])`).test(line)
+
+test('agents: the sbin-tool scan sees a bare call in every shell position, and not a path or a longer word', () => {
+  for (const line of ['ioreg -c X', 'x=$(ioreg)', 'x=`ioreg`', 'run 30 ioreg -d 4', 'a | ioreg', 'ioreg', '"ioreg" -l', 'x=$(ioreg|head)'])
+    assert.ok(callsBare(line, 'ioreg'), line)
+  for (const line of ['/usr/sbin/ioreg -c X', 'ioregistry -c X', 'myioreg -c', 'ioreg_x=1'])
+    assert.equal(callsBare(line, 'ioreg'), false, line)
+})
+
 test('agents: every macOS sbin tool a cron job calls is in a directory on the plist PATH', () => {
   const home = mkdtempSync(join(tmpdir(), 'launch-agents-'))
   try {
     const dirs = agentPath(home).split(':')
-    const cron = join(SOURCE, 'dot_cron')
+    const files = []
+    for (const f of readdirSync(join(SOURCE, 'dot_cron'))) if (f.startsWith('executable_')) files.push(join('dot_cron', f))
+    for (const f of readdirSync(join(SOURCE, 'dot_cron/lib'))) files.push(join('dot_cron/lib', f))
+    // Inline commands launchd runs with this PATH (docker-prune, brew, ...).
+    for (const f of readdirSync(join(SOURCE, AGENTS_DIR))) files.push(join(AGENTS_DIR, f))
     const used = new Set()
-    for (const f of readdirSync(cron)) {
-      if (!f.startsWith('executable_')) continue
-      for (const line of readFileSync(join(cron, f), 'utf8').split('\n')) {
+    for (const f of files) {
+      for (const line of read(f).split('\n')) {
         if (line.trimStart().startsWith('#')) continue
-        for (const tool of Object.keys(SBIN_TOOLS)) if (new RegExp(`(^|[\\s(|;&$])${tool}\\s`).test(line)) used.add(tool)
+        for (const tool of Object.keys(SBIN_TOOLS)) if (callsBare(line, tool)) used.add(tool)
       }
     }
     // The jobs this was found in still use these; if not, update the list.
