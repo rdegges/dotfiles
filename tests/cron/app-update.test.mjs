@@ -71,6 +71,9 @@ const read = (p) => readFileSync(new URL(p, ROOT), 'utf8')
 const SCRIPT = new URL('dot_cron/executable_app-update.sh', ROOT).pathname
 const RUN_SCRIPT = 'run_onchange_after_configure-homelab-updaters.sh.tmpl'
 const SYS_PATH = '/usr/bin:/bin'
+// macOS runs the job with /bin/bash 3.2. TEST_BASH=/path/to/bash-3.2 runs this
+// file under that bash instead of the bash on PATH (as launch-agents.test.mjs).
+const BASH = process.env.TEST_BASH || 'bash'
 const which = (t) => {
   const r = spawnSync('sh', ['-c', `command -v ${t}`], { encoding: 'utf8' })
   assert.equal(r.status, 0, `${t} not found`)
@@ -342,7 +345,7 @@ function sandbox({ installed = Object.keys(APPS) } = {}) {
     pidOf: (k) => Number(readFileSync(join(state, 'apps', APPS[k].id), 'utf8')),
     run(env = {}, { hour = '03', weekday = 3 } = {}) {
       const t0 = Date.now()
-      const r = spawnSync('bash', [SCRIPT], {
+      const r = spawnSync(BASH, [SCRIPT], {
         encoding: 'utf8',
         // Built from scratch so the host's APP_UPDATE_* never leak in.
         env: {
@@ -1126,7 +1129,7 @@ test('mail: account icloud, From and To r@rdegges.com, the whole message on stdi
 test('mail: the caller\'s stdin never reaches himalaya', () =>
   withSandbox({}, (sb) => {
     sb.start('chrome', 'chrome:157.0.8103.40')
-    const r = spawnSync('bash', [SCRIPT], {
+    const r = spawnSync(BASH, [SCRIPT], {
       encoding: 'utf8',
       input: 'From: attacker@example.com\nSubject: CALLER STDIN\n\nleaked\n',
       env: { HOME: sb.home, PATH: `${sb.bin}:${SYS_PATH}`, CALLS: join(sb.base, 'calls'), STATE: join(sb.base, 'state'), REAL: join(sb.base, 'real'), APP_UPDATE_APPS: sb.apps, APP_UPDATE_WAIT: '3', WAIT_FOR_NETWORK: join(sb.bin, 'net'), STUB_NOW: `03 3 ${TODAY}` },
@@ -1226,7 +1229,7 @@ const CODE = read('dot_cron/executable_app-update.sh').split('\n').filter((l) =>
 
 test('script: bash shebang, parses under bash -n', () => {
   assert.match(read('dot_cron/executable_app-update.sh'), /^#!\/bin\/bash\n/)
-  const r = spawnSync('bash', ['-n', SCRIPT], { encoding: 'utf8' })
+  const r = spawnSync(BASH, ['-n', SCRIPT], { encoding: 'utf8' })
   assert.equal(r.status, 0, r.stderr)
 })
 
@@ -1303,7 +1306,7 @@ function runScriptSandbox() {
     home,
     marker: join(home, '.cron/logs/homelab-updaters.FAILED'),
     calls: () => readFileSync(calls, 'utf8').split('\n').filter(Boolean),
-    run: (env = {}) => spawnSync('bash', [script], { encoding: 'utf8', env: { HOME: home, PATH: `${bin}:${SYS_PATH}`, CALLS: calls, STATE: state, ...env } }),
+    run: (env = {}) => spawnSync(BASH, [script], { encoding: 'utf8', env: { HOME: home, PATH: `${bin}:${SYS_PATH}`, CALLS: calls, STATE: state, ...env } }),
     cleanup: () => rmSync(base, { recursive: true, force: true }),
   }
 }
@@ -1359,3 +1362,260 @@ test('run script: a write that seems to work but does not read back is caught', 
     sb.cleanup()
   }
 })
+
+// --- Tester pass: probe failures, real process shapes, a full night ---------------------
+//
+// Extra stubs for the cases below, written into one sandbox only. `ps` passes
+// through to the real ps, except that STUB_PS_FAIL names one exact argument
+// list that fails, STUB_PS_GHOST names a PID that `ps -o stat= -p` reports as
+// running though no such process exists, and STUB_PS_EXTRA adds lines (with
+// @CLAUDE@ for Claude Desktop's PID) to the `ps -A -o pid= -o ppid= -o comm=`
+// listing, in the macOS shape: comm is the full executable path, with spaces.
+// `find` fails for the one start path STUB_FIND_FAIL (root in Docker reads
+// every directory, so a chmod cannot make it fail).
+const REAL_PS = which('ps')
+const REAL_FIND = which('find')
+const PS_STUB =
+  '#!/bin/sh\n' +
+  'if [ -n "${STUB_PS_FAIL:-}" ] && [ "$*" = "$STUB_PS_FAIL" ]; then echo "ps: sysctl: Operation not permitted" >&2; exit 1; fi\n' +
+  'if [ -n "${STUB_PS_GHOST:-}" ] && [ "$*" = "-o stat= -p $STUB_PS_GHOST" ]; then echo S; exit 0; fi\n' +
+  `${REAL_PS} "$@"; rc=$?\n` +
+  'if [ -n "${STUB_PS_EXTRA:-}" ] && [ "$*" = "-A -o pid= -o ppid= -o comm=" ]; then\n' +
+  '  c=$(cat "$STATE/apps/com.anthropic.claudefordesktop"); printf "%s\\n" "$STUB_PS_EXTRA" | sed "s/@CLAUDE@/$c/g"\n' +
+  'fi\nexit $rc\n'
+const FIND_STUB =
+  '#!/bin/sh\n' +
+  'if [ -n "${STUB_FIND_FAIL:-}" ] && [ "$1" = "$STUB_FIND_FAIL" ]; then echo "find: \'$1\': Permission denied" >&2; exit 1; fi\n' +
+  `exec ${REAL_FIND} "$@"\n`
+function addStub(sb, name, body) {
+  writeFileSync(join(sb.bin, name), body)
+  chmodSync(join(sb.bin, name), 0o755)
+}
+
+test('full night: every relaunchable app staged, Chrome staged, Downie newer, Docker due: each app handled once, in order, one mail', () =>
+  withSandbox({}, (sb) => {
+    const { server, hold } = sb.herdrCore()
+    sb.claudeFiles()
+    sb.start('herdr')
+    sb.stage('herdr')
+    for (const [k, v] of [['t3', '0.1.8'], ['fastmail', '1.9.1'], ['onepassword', '8.12.46'], ['claude', '5.1232.0']]) {
+      sb.start(k)
+      sb.stage(k, v)
+      sb.shipit(k, 1)
+    }
+    sb.start('chrome', 'chrome:157.0.8103.40')
+    sb.feed('downie', appcast('4.13.4'))
+    writeFileSync(join(sb.base, 'state/update/com.docker.docker'), '4.99.0')
+    const r = sb.run({}, { weekday: 0 })
+    assert.equal(r.status, 0, r.stdout + r.stderr)
+    const exe = (k) => join(sb.apps, APPS[k].bundle, 'Contents/MacOS', APPS[k].exe)
+    // Shared globals ($pid, $plist, $id, $out) must not leak from one app to the next.
+    assert.deepEqual(sb.signals(), ['herdr', 't3', 'fastmail', 'onepassword', 'claude'].map((k) => `TERM ${exe(k)}`))
+    assert.deepEqual(opens(sb), ['dev.herdr.app', 'com.t3tools.t3code', 'com.fastmail.mac.Fastmail', 'com.1password.1password', 'com.anthropic.claudefordesktop'])
+    assert.deepEqual(sb.early(), [])
+    assert.ok(alive(server) && alive(hold), 'herdr-core was touched')
+    const m = sb.mails()
+    assert.equal(m.length, 1)
+    assert.equal(subject(m[0]), 'App updates on testhost')
+    const body = m[0].split('\n\n').slice(1).join('\n\n')
+    assert.match(body, new RegExp([
+      '^App update pass on testhost, [^\\n]*\\.',
+      '',
+      'Updated or relaunched:',
+      '- Herdr updated and relaunched, 0\\.1\\.13 -> 0\\.1\\.15',
+      '- T3 Code updated and relaunched, 0\\.1\\.7 -> 0\\.1\\.8',
+      '- Fastmail updated and relaunched, 1\\.9\\.0 -> 1\\.9\\.1',
+      '- 1Password updated and relaunched, 8\\.12\\.44 -> 8\\.12\\.46; now locked[^\\n]*',
+      '- Claude Desktop updated and relaunched, 5\\.1231\\.0 -> 5\\.1232\\.0',
+      '- Docker Desktop updated, 4\\.98\\.0 -> 4\\.99\\.0',
+      '',
+      'Relaunch by hand:',
+      '- Chrome: update staged \\(running 157\\.0\\.8103\\.40, installed 157\\.0\\.8103\\.52\\)[^\\n]*',
+      '- Downie: update available \\(4\\.13\\.3 -> 4\\.13\\.4\\); relaunch by hand',
+      '',
+      'Warnings:',
+      '- Ghostty: could not check \\(no SUFeedURL in its Info\\.plist\\)',
+      '',
+      'Log: ~/\\.cron/logs/app-update\\.log$',
+    ].join('\\n')), JSON.stringify(m[0]))
+    assert.equal(existsSync(sb.marker), false)
+    assert.ok(stampIsToday(sb))
+    assert.ok(statSync(sb.dstamp).mtimeMs > Date.now() - 60000)
+    assertForbiddenUnused(sb)
+  }))
+
+test('Claude Desktop: a claude grandchild with the measured macOS shape (Claude -> Helpers/disclaimer -> .../Application Support/Claude/claude-code/<v>/claude.app/.../claude): skipped, session active', () =>
+  withSandbox({}, (sb) => {
+    addStub(sb, 'ps', PS_STUB)
+    sb.claudeFiles()
+    sb.start('claude')
+    sb.stage('claude', '5.1232.0')
+    sb.shipit('claude', 1)
+    const r = sb.run({
+      STUB_PS_EXTRA: [
+        '900001 @CLAUDE@ /Applications/Claude.app/Contents/Helpers/disclaimer',
+        `900002 900001 ${sb.home}/Library/Application Support/Claude/claude-code/2.1.321/ddbdf2b334e1/claude.app/Contents/MacOS/claude`,
+      ].join('\n'),
+    })
+    assert.equal(r.status, 0, r.stdout + r.stderr)
+    assert.deepEqual(sb.signals(), [])
+    assert.deepEqual(called(sb, 'open'), [])
+    assert.match(sb.mails()[0], /- Claude Desktop: update staged; skipped: session active \(a claude process \(PID 900002\) runs under Claude\.app\); relaunch by hand\n/)
+  }))
+
+test('Claude Desktop: helpers with spaces in their paths, a claude-code process, and a claude outside its tree do not count as a session', () =>
+  withSandbox({}, (sb) => {
+    addStub(sb, 'ps', PS_STUB)
+    sb.claudeFiles()
+    sb.start('claude')
+    sb.stage('claude', '5.1232.0')
+    sb.shipit('claude', 1)
+    const r = sb.run({
+      STUB_PS_EXTRA: [
+        '900001 @CLAUDE@ /Applications/Claude.app/Contents/Frameworks/Claude Helper (Renderer).app/Contents/MacOS/Claude Helper (Renderer)',
+        '900003 @CLAUDE@ /Applications/Claude.app/Contents/Resources/claude-code',
+        '900004 1 /Users/x/.local/share/claude/versions/2.1.321/claude',
+      ].join('\n'),
+    })
+    assert.equal(r.status, 0, r.stdout + r.stderr)
+    assert.match(r.stdout, /changed: Claude Desktop updated and relaunched, 5\.1231\.0 -> 5\.1232\.0/)
+  }))
+
+for (const [name, setup, args, re] of [
+  ['Herdr: ps cannot list the herdr-core processes', (sb) => { sb.herdrCore(); sb.start('herdr'); sb.stage('herdr') }, '-A -o pid= -o args=',
+    /- Herdr: update staged; not relaunched: ps cannot list the herdr-core processes; relaunch by hand\n/],
+  ['Claude Desktop: ps cannot list the process tree', (sb) => { sb.claudeFiles(); sb.start('claude'); sb.stage('claude', '5.1232.0'); sb.shipit('claude', 1) }, '-A -o pid= -o ppid= -o comm=',
+    /- Claude Desktop: update staged; not relaunched: ps failed: ps: sysctl: Operation not permitted; relaunch by hand\n/],
+]) {
+  test(`cannot evaluate: ${name}: not relaunched, nothing signalled, reported for a relaunch by hand`, () =>
+    withSandbox({}, (sb) => {
+      addStub(sb, 'ps', PS_STUB)
+      setup(sb)
+      const r = sb.run({ STUB_PS_FAIL: args })
+      assert.equal(r.status, 0, r.stdout + r.stderr)
+      assert.deepEqual(sb.signals(), [])
+      assert.deepEqual(called(sb, 'open'), [])
+      assert.match(sb.mails()[0], /\nRelaunch by hand:\n/)
+      assert.match(sb.mails()[0], re)
+    }))
+}
+
+test('cannot evaluate: ps cannot list ShipIt after the quit: counts as still running, FAILED after the wait, never opened', () =>
+  withSandbox({}, (sb) => {
+    addStub(sb, 'ps', PS_STUB)
+    sb.start('t3')
+    sb.stage('t3', '0.1.8')
+    sb.shipit('t3', 1)
+    const r = sb.run({ STUB_PS_FAIL: '-A -o args=' })
+    assert.equal(r.status, 1, r.stdout + r.stderr)
+    assert.deepEqual(called(sb, 'open'), [])
+    assertMarker(sb, /T3 Code: quit, but ShipIt did not finish within 3s/)
+  }))
+
+test('cannot evaluate: Chrome with ps failing is "could not check" (a warning), and Chrome is never signalled', () =>
+  withSandbox({}, (sb) => {
+    addStub(sb, 'ps', PS_STUB)
+    sb.start('chrome', 'chrome:157.0.8103.40')
+    const r = sb.run({ STUB_PS_FAIL: '-A -o ppid= -o args=' })
+    assert.equal(r.status, 0, r.stdout + r.stderr)
+    assert.match(r.stdout, /warning: Chrome: could not check \(ps failed\)/)
+    assert.deepEqual(sb.signals(), [])
+    assert.deepEqual(sb.mails(), [])
+  }))
+
+test('quit: kill -TERM fails (the PID is gone between lookup and signal): FAILED, never opened', () =>
+  withSandbox({}, (sb) => {
+    addStub(sb, 'ps', PS_STUB)
+    sb.stage('t3', '0.1.8')
+    // lsappinfo names a PID that no longer exists; ps still lists it as running.
+    writeFileSync(join(sb.base, 'state/apps/com.t3tools.t3code'), '999999')
+    const r = sb.run({ STUB_PS_GHOST: '999999' })
+    assert.equal(r.status, 1, r.stdout + r.stderr)
+    assertMarker(sb, /T3 Code: kill -TERM 999999 failed; not relaunched/)
+    assert.deepEqual(called(sb, 'open'), [])
+  }))
+
+test('busy: find cannot read ~/.claude/projects: counts as busy, so the run skips', () =>
+  withSandbox({}, (sb) => {
+    addStub(sb, 'find', FIND_STUB)
+    mkdirSync(join(sb.home, '.claude/projects'), { recursive: true })
+    const r = sb.run({ STUB_FIND_FAIL: join(sb.home, '.claude/projects') })
+    assert.equal(r.status, 0, r.stdout + r.stderr)
+    assert.match(r.stdout, /skipped: busy: cannot check agent activity under ~\/\.claude\/projects \(find exit 1\)/)
+    assertNoAction(sb)
+    assert.equal(stampIsToday(sb), false)
+  }))
+
+test('busy: idle exactly 30 min passes; with two HIDIdleTime values the smallest counts', () =>
+  withSandbox({}, (sb) => {
+    let r = sb.run({ STUB_IDLE_NS: String(30 * 60e9) })
+    assert.match(r.stdout, /gate passed/)
+    ago(sb.stamp, DAY)
+    const two = (a, b) => `+-o IOHIDSystem\n    | |     "HIDIdleTime" = ${a}\n+-o IOHIDSystem\n    | |     "HIDIdleTime" = ${b}`
+    const before = called(sb, 'lsappinfo').length
+    r = sb.run({ STUB_IOREG_RAW: two(7200e9, 60e9) })
+    assert.match(r.stdout, /skipped: busy: keyboard or mouse used 1 min ago/)
+    r = sb.run({ STUB_IOREG_RAW: two(60e9, 7200e9) })
+    assert.match(r.stdout, /skipped: busy: keyboard or mouse used 1 min ago/)
+    assert.equal(called(sb, 'lsappinfo').length, before, 'a busy run looked up an app')
+  }))
+
+test('cannot evaluate: a 19-digit HIDIdleTime (would overflow) counts as busy', () =>
+  withSandbox({}, (sb) => {
+    const r = sb.run({ STUB_IDLE_NS: '9'.repeat(19) })
+    assert.match(r.stdout, /skipped: busy: cannot read HIDIdleTime from ioreg \(exit 0\)/)
+    assertNoAction(sb)
+  }))
+
+test('appcast: a SUFeedURL that is not https is never fetched; a warning only', () =>
+  withSandbox({}, (sb) => {
+    writeFileSync(sb.plistOf('downie'), `CFBundleIdentifier=${APPS.downie.id}\nCFBundleShortVersionString=4.13.3\nSUFeedURL=http://software.example.test/downie/v4/updates.xml\n`)
+    const r = sb.run()
+    assert.equal(r.status, 0, r.stdout + r.stderr)
+    assert.match(r.stdout, /warning: Downie: could not check \(SUFeedURL is not https: http:\/\/software\.example\.test/)
+    assert.deepEqual(called(sb, 'curl'), [])
+    assert.deepEqual(sb.mails(), [])
+  }))
+
+test('appcast: equal versions written differently (4.13.3.0) and older ones (installed 4.13.10, feed 4.13.9) are never "update available"', () =>
+  withSandbox({}, (sb) => {
+    sb.feed('downie', appcast('4.13.3.0'))
+    let r = sb.run()
+    assert.match(r.stdout, /Downie: up to date \(4\.13\.3; newest in the appcast: 4\.13\.3\.0\)/)
+    ago(sb.stamp, DAY)
+    sb.setVersion('downie', '4.13.10')
+    sb.feed('downie', appcast('4.13.9', '4.9.99'))
+    r = sb.run()
+    assert.match(r.stdout, /Downie: up to date \(4\.13\.10; newest in the appcast: 4\.13\.9\)/)
+    assert.deepEqual(sb.mails(), [])
+  }))
+
+test('appcast: the measured Downie feed shape (one item, minimumSystemVersion element) parses', () =>
+  withSandbox({}, (sb) => {
+    // Shape of software.charliemonroe.net/trial/downie/v4/updates.xml on 2026-11-11.
+    sb.feed('downie', '<?xml version="1.0" encoding="utf-8"?>\n<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" xmlns:dc="http://purl.org/dc/elements/1.1/">\n<channel>\n<title>Downie 4</title>\n<item>\n<title>Version 4.13.4</title>\n<sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>\n<enclosure url="https://x.test/Downie.dmg" sparkle:version="5300" sparkle:shortVersionString="4.13.4" length="1" type="application/octet-stream" />\n</item>\n</channel>\n</rss>\n')
+    const r = sb.run()
+    assert.match(sb.mails()[0], /- Downie: update available \(4\.13\.3 -> 4\.13\.4\); relaunch by hand\n/, r.stdout)
+  }))
+
+test('mail: a hostname with a newline cannot inject a header (the header block stays From, To, Subject)', () =>
+  withSandbox({}, (sb) => {
+    addStub(sb, 'hostname', '#!/bin/sh\nprintf "evil\\nBcc: attacker@example.com\\n"\n')
+    sb.start('chrome', 'chrome:157.0.8103.40')
+    const r = sb.run()
+    assert.equal(r.status, 0, r.stdout + r.stderr)
+    const m = sb.mails()[0]
+    const headers = m.split('\n\n')[0].split('\n')
+    assert.deepEqual(headers.map((h) => h.split(':')[0]), ['From', 'To', 'Subject'], JSON.stringify(m))
+    assert.doesNotMatch(m, /^Bcc:/m)
+  }))
+
+test('stale: a marker already showing (an earlier failure) is kept, and no stall mail goes out', () =>
+  withSandbox({}, (sb) => {
+    ago(sb.stamp, 8 * DAY)
+    writeFileSync(sb.marker, 'earlier failure\n')
+    const r = sb.run({ STUB_LOAD5: '9.00' })
+    assert.equal(r.status, 0, r.stdout + r.stderr)
+    assert.equal(readFileSync(sb.marker, 'utf8'), 'earlier failure\n')
+    assert.deepEqual(sb.mails(), [])
+  }))
