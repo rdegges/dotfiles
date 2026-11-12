@@ -2005,3 +2005,231 @@ test('appcast: each feed is fetched once; Downie, which has a SUFeedURL, never g
     sb.run()
     assert.deepEqual(called(sb, 'curl'), [`curl -fsSL --max-time 20 ${APPS.downie.feed}`, `curl -fsSL --max-time 20 ${GHOSTTY_FEED}`])
   }))
+
+// --- Tester pass 2: the hold-based Herdr relaunch, the shared lib --------------------------
+//
+// spawnFake starts one more fakeapp process in a sandbox (a second hold, a
+// decoy). withStubBefore puts extra shell lines into one stub right after its
+// call log, so the stub still logs under its own name.
+
+function spawnFake(sb, mode, title) {
+  const r = spawnSync(PERL, [join(sb.base, 'real', 'fakeapp'), mode, title], {
+    encoding: 'utf8',
+    env: { STATE: join(sb.base, 'state'), REAL: join(sb.base, 'real') },
+  })
+  assert.equal(r.status, 0, r.stderr)
+  return Number(r.stdout.trim())
+}
+
+function withStubBefore(sb, name, extra) {
+  const body = STUBS[name]
+  const head = body.startsWith('#!/bin/sh\n' + LOG) ? '#!/bin/sh\n' + LOG : '#!/bin/sh\n'
+  addStub(sb, name, head + extra + body.slice(head.length))
+}
+
+// ps that passes through, except for the herdr-core listing once `open` ran:
+// <after> is shell code that gets the real listing on stdin.
+function psAfterOpen(sb, after) {
+  addStub(sb, 'ps',
+    '#!/bin/sh\n' +
+    'if [ "$*" = "-A -o pid= -o ppid= -o args=" ] && grep -q "^open " "$CALLS"; then\n' +
+    `  ${REAL_PS} "$@" | { ${after}; }; exit $?\n` +
+    'fi\n' +
+    `exec ${REAL_PS} "$@"\n`)
+}
+
+const HOLD2_ARGS = (sb) => `${sb.home}/.local/bin/herdr-core hold --socket ${sb.home}/.local/state/herdr-core/work/work.holder.1.sock`
+
+test('Herdr hold: of two holds, one ends across the relaunch: FAILED "hold ended", the survivor untouched, both in the log', () =>
+  withSandbox({}, (sb) => {
+    const { hold } = sb.herdrCore()
+    const hold2 = spawnFake(sb, 'app', HOLD2_ARGS(sb))
+    sb.start('herdr')
+    sb.stage('herdr')
+    const r = sb.run({ STUB_HERDR_RESTART: 'hold' })
+    assert.equal(r.status, 1, r.stdout + r.stderr)
+    assert.ok(!alive(hold) && alive(hold2))
+    const before = [`${hold} ${HOLD_ARGS(sb)}`, `${hold2} ${HOLD2_ARGS(sb)}`].sort().join(', ')
+    assert.ok(r.stdout.includes(`Herdr: herdr-core hold before: ${before}\n`), r.stdout)
+    assertMarker(sb, /Herdr: herdr-core hold ended, sessions lost \(before: /)
+    assert.match(sb.mails()[0], /\nFailed:\n- Herdr: herdr-core hold ended, sessions lost/)
+    // The first hold's TERM comes from the stub `open` (the simulated restart);
+    // the job signals only Herdr.app, and the survivor gets nothing.
+    assert.deepEqual(sb.signals(), [`TERM ${join(sb.apps, 'Herdr.app/Contents/MacOS/Herdr')}`, `TERM ${HOLD_ARGS(sb)}`])
+  }))
+
+test('Herdr hold: a new hold next to the old ones (all still running) is not a failure', () =>
+  withSandbox({}, (sb) => {
+    const { hold } = sb.herdrCore()
+    withStubBefore(sb, 'open', `[ "$3" = dev.herdr.app ] && "$REAL/fakeapp" app "${HOLD2_ARGS(sb)}" > "$STATE/herdr-hold-new"\n`)
+    sb.start('herdr')
+    sb.stage('herdr')
+    const r = sb.run({ STUB_HERDR_RESTART: 'server' })
+    assert.equal(r.status, 0, r.stdout + r.stderr)
+    const hold2 = Number(readFileSync(join(sb.base, 'state', 'herdr-hold-new'), 'utf8'))
+    assert.ok(alive(hold) && alive(hold2))
+    assert.match(r.stdout, /Herdr: herdr-core hold after: .*, /, 'the after line does not list both holds')
+    assert.match(r.stdout, /changed: Herdr updated and relaunched, 0\.1\.13 -> 0\.1\.15/)
+    assert.equal(existsSync(sb.marker), false)
+  }))
+
+// The job keys a hold on PID and args, so a hold that kept its PID but now
+// serves another socket is a lost session, not a survivor.
+test('Herdr hold: the same PID with other args (another --socket) after the relaunch is FAILED', () =>
+  withSandbox({}, (sb) => {
+    const { hold } = sb.herdrCore()
+    psAfterOpen(sb, "sed 's/default\\.holder\\.1\\.sock/default.holder.9.sock/'")
+    sb.start('herdr')
+    sb.stage('herdr')
+    const r = sb.run({ STUB_HERDR_RESTART: 'server' })
+    assert.equal(r.status, 1, r.stdout + r.stderr)
+    assert.ok(alive(hold))
+    assert.match(r.stdout, new RegExp(`Herdr: herdr-core hold after: ${hold} \\S+ hold --socket \\S+default\\.holder\\.9\\.sock\\n`))
+    assertMarker(sb, /Herdr: herdr-core hold ended, sessions lost/)
+  }))
+
+test('Herdr: only an exact herdr-core basename with the hold subcommand is a hold; decoys mean no hold, no quit', () =>
+  withSandbox({}, (sb) => {
+    sb.herdrCore({ hold: false })
+    const decoys = [
+      `${sb.home}/.local/bin/herdr-core-old hold --socket /tmp/a.sock`,
+      `${sb.home}/.local/bin/herdr hold --socket /tmp/b.sock`,
+      `${sb.home}/.local/bin/xherdr-core hold --socket /tmp/c.sock`,
+      `/usr/bin/vim ${sb.home}/.local/bin/herdr-core hold`,
+      `${sb.home}/.local/bin/herdr-core holdx --socket /tmp/d.sock`,
+    ].map((t) => spawnFake(sb, 'app', t))
+    sb.start('herdr')
+    sb.stage('herdr')
+    const r = sb.run()
+    assert.equal(r.status, 0, r.stdout + r.stderr)
+    assert.deepEqual(sb.signals(), [])
+    assert.deepEqual(called(sb, 'open'), [])
+    for (const d of decoys) assert.ok(alive(d))
+    assert.match(sb.mails()[0], /- Herdr: update staged; not relaunched: no herdr-core hold found, so the job cannot prove the sessions survive; relaunch by hand\n/)
+  }))
+
+// Fail-safe pin: ps args are split on spaces, so a herdr-core under a path
+// with a space is not seen. The job must then refuse to quit Herdr, never
+// quit it blind.
+test('Herdr: a hold whose herdr-core path has a space is not parsed, so Herdr is never quit (reported by hand)', () =>
+  withSandbox({}, (sb) => {
+    sb.herdrCore({ hold: false })
+    const hold = spawnFake(sb, 'app', `${sb.base}/Herdr Tools/herdr-core hold --socket /tmp/e.sock`)
+    sb.start('herdr')
+    sb.stage('herdr')
+    const r = sb.run()
+    assert.equal(r.status, 0, r.stdout + r.stderr)
+    assert.deepEqual(sb.signals(), [])
+    assert.deepEqual(called(sb, 'open'), [])
+    assert.ok(alive(hold))
+    assert.match(sb.mails()[0], /no herdr-core hold found/)
+  }))
+
+test('Herdr: ps cannot list herdr-core after the relaunch: FAILED "cannot prove the sessions survive", Herdr left running', () =>
+  withSandbox({}, (sb) => {
+    const { hold } = sb.herdrCore()
+    psAfterOpen(sb, 'cat > /dev/null; echo "ps: sysctl: Operation not permitted" >&2; exit 1')
+    sb.start('herdr')
+    sb.stage('herdr')
+    const r = sb.run({ STUB_HERDR_RESTART: 'server' })
+    assert.equal(r.status, 1, r.stdout + r.stderr)
+    assert.ok(alive(sb.pidOf('herdr')) && alive(hold))
+    assertMarker(sb, /Herdr: relaunched, but ps cannot list the herdr-core processes, so the job cannot prove the sessions survive/)
+    assert.doesNotMatch(r.stdout, /hold ended|no herdr-core --hc-launchd/)
+    assert.equal(existsSync(join(sb.logs, 'app-update.down')), false, 'a running Herdr was listed as left down')
+  }))
+
+// lsappinfo works for the first lookup after `open` and fails for the check
+// after the broker wait. The job cannot see Herdr, so it fails loud and lists
+// it; the next night, when lsappinfo works, it leaves the list.
+test('Herdr: lsappinfo fails at the check after the broker wait: FAILED with the lsappinfo error, listed down; next night it is cleared', () =>
+  withSandbox({}, (sb) => {
+    sb.herdrCore()
+    withStubBefore(sb, 'lsappinfo',
+      'if [ -n "${STUB_LSA_LATE:-}" ] && grep -q "^open " "$CALLS" && [ "$(sed -n "/^open /,\\$p" "$CALLS" | grep -c "^lsappinfo .*-app dev.herdr.app")" -ge 2 ]; then echo "lsappinfo: cannot reach launchservicesd" >&2; exit 1; fi\n')
+    sb.start('herdr')
+    sb.stage('herdr')
+    let r = sb.run({ STUB_HERDR_RESTART: 'server', STUB_LSA_LATE: '1' })
+    assert.equal(r.status, 1, r.stdout + r.stderr)
+    assert.ok(alive(sb.pidOf('herdr')))
+    assertMarker(sb, /Herdr: relaunched, but the app was not running 3s later \(lsappinfo exit 1: lsappinfo: cannot reach launchservicesd\)/)
+    assert.match(readFileSync(join(sb.logs, 'app-update.down'), 'utf8'), /^dev\.herdr\.app /)
+    assert.doesNotMatch(r.stdout, /changed: Herdr/)
+
+    ago(sb.stamp, DAY)
+    r = sb.run()
+    assert.equal(r.status, 0, r.stdout + r.stderr)
+    assert.match(r.stdout, /app-update: Herdr: runs again \(the job left it down at /)
+    assert.equal(existsSync(join(sb.logs, 'app-update.down')), false)
+    assert.equal(existsSync(sb.marker), false)
+  }))
+
+test('Herdr: no broker before the quit but a hold: relaunched; the broker the launch starts is not a failure', () =>
+  withSandbox({}, (sb) => {
+    const { server, hold } = sb.herdrCore()
+    process.kill(server, 'SIGKILL')
+    sb.start('herdr')
+    sb.stage('herdr')
+    const r = sb.run({ STUB_HERDR_RESTART: 'server' })
+    assert.equal(r.status, 0, r.stdout + r.stderr)
+    assert.ok(alive(hold))
+    assert.match(r.stdout, /Herdr: herdr-core --hc-launchd before: none;/)
+    assert.match(r.stdout, /changed: Herdr updated and relaunched, 0\.1\.13 -> 0\.1\.15/)
+    assert.equal(existsSync(sb.marker), false)
+  }))
+
+test('Herdr: of two terminal clients, only the one the relaunch ended is mailed', () =>
+  withSandbox({}, (sb) => {
+    sb.herdrCore()
+    const keep = sb.herdrClient()
+    const gone = sb.herdrClient() // STUB_HERDR_DETACH ends the last one started
+    sb.start('herdr')
+    sb.stage('herdr')
+    const r = sb.run({ STUB_HERDR_RESTART: 'server', STUB_HERDR_DETACH: '1' })
+    assert.equal(r.status, 0, r.stdout + r.stderr)
+    assert.ok(alive(keep) && !alive(gone))
+    assert.ok(sb.mails()[0].includes(`- Herdr: terminal clients attached with herdr-core connect were detached (PIDs ${gone}); sessions survive in hold; reattach\n`), sb.mails()[0])
+  }))
+
+test('script: the Herdr waits after `open` are 60s for the staged bundle and 15s for the broker, both through bound', () => {
+  assert.match(CODE, /t=\$\(bound 60\); deadline=[^\n]*\n\s+while \[ -e "\$apps\/Herdr\.app\.new\.noindex" \]/)
+  assert.match(CODE, /t=\$\(bound 15\)\n\s+sleep "\$t"/)
+  assert.ok(CODE.indexOf('run 30 open -g -b "$id"') < CODE.indexOf('while [ -e "$apps/Herdr.app.new.noindex" ]'), 'the staged-bundle wait must come after `open`')
+})
+
+test('left down: each app the job can relaunch is named in the mail; an unknown id is shown as is', () =>
+  withSandbox({ installed: [] }, (sb) => {
+    const ids = ['dev.herdr.app', 'com.t3tools.t3code', 'com.fastmail.mac.Fastmail', 'com.1password.1password', 'com.anthropic.claudefordesktop', 'com.example.other']
+    writeFileSync(join(sb.logs, 'app-update.down'), ids.map((id) => `${id} 2026-11-10 03:41\n`).join(''))
+    const r = sb.run()
+    assert.equal(r.status, 1, r.stdout + r.stderr)
+    const m = sb.mails()[0]
+    for (const n of ['Herdr', 'T3 Code', 'Fastmail', '1Password', 'Claude Desktop', 'com.example.other']) {
+      assert.ok(m.includes(`\n- ${n}: still not running since 2026-11-10 03:41; the job quit it\n`), `${n} missing:\n${m}`)
+    }
+    assertMarker(sb, /\(and 5 more\)/)
+  }))
+
+for (const [libCase, body, hour] of [
+  ['parses but defines no oneline', 'onelin() { printf "%s" "$1"; }\n', '03'],
+  ['defines oneline but returns non-zero when sourced', 'oneline() { printf "%s" "$1"; }\nfalse\n', '03'],
+  ['missing, on a catch-up run outside the window', null, '14'],
+]) {
+  test(`lib: a lib/text.sh that ${libCase}: app-update.FAILED ("cannot load"), exit 1, before any probe`, () =>
+    withSandbox({}, (sb) => {
+      const dir = join(sb.base, 'badlib')
+      mkdirSync(dir)
+      const copy = join(dir, 'app-update.sh')
+      writeFileSync(copy, read('dot_cron/executable_app-update.sh'))
+      if (body !== null) {
+        mkdirSync(join(dir, 'lib'))
+        writeFileSync(join(dir, 'lib', 'text.sh'), body)
+      }
+      const r = sb.run({}, { script: copy, hour })
+      assert.equal(r.status, 1, r.stdout + r.stderr)
+      assert.match(readFileSync(sb.marker, 'utf8'), /^\d{4}-\d{2}-\d{2} \d{2}:\d{2} app-update: cannot load ~\/\.cron\/lib\/text\.sh; run chezmoi apply\n$/)
+      assert.deepEqual(called(sb, 'net'), [])
+      assert.deepEqual(called(sb, 'ioreg'), [])
+      assertNoAction(sb)
+    }))
+}
