@@ -25,7 +25,8 @@ case "$timeout" in
     '' | *[!0-9]* | ???????*) printf '%s\n' "wait-for-network: bad WAIT_FOR_NETWORK_TIMEOUT: $timeout" >&2; exit 2 ;;
 esac
 
-# The launchd plist PATH has no /sbin, and macOS ships route only as /sbin/route.
+# The launchd plist PATH has /sbin; this keeps /sbin/route reachable when the
+# script is run by hand with a reduced PATH.
 PATH="$PATH:/usr/sbin:/sbin"
 
 for tool in route dscacheutil; do

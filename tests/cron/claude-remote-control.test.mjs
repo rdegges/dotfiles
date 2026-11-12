@@ -561,6 +561,75 @@ test('preflight: a fixed failure starts claude on the next run (A->B->A: untrust
     assertPreflight(sb, sb.run(), TRUST)
   }))
 
+// --- Under the plist PATH -----------------------------------------------------------------------
+//
+// What a pass proves: run with exactly the PATH the rendered plist sets (no stub
+// dir in front, unlike the tests above), the wrapper finds scutil where macOS
+// ships it (/usr/sbin/scutil), plutil in /usr/bin, and claude in ~/.local/bin,
+// and starts claude under the LocalHostName; with /usr/sbin:/sbin taken out of
+// the shared template (the PATH before PR #87), the same run fails the
+// LocalHostName preflight, scutil is never run, and claude never starts. macOS
+// dirs are emulated by prefixing a sandbox root to every dir in the plist PATH;
+// the real /usr/bin:/bin follow for sh's own tools and hold no scutil (checked).
+// It says nothing about the real launchd or the real scutil.
+
+function plistPath(source = SOURCE) {
+  const xml = execTemplate(readFileSync(join(source, AGENT), 'utf8'), { source })
+  const r = spawnSync('python3', ['-c', 'import plistlib,sys; sys.stdout.write(plistlib.loads(sys.stdin.buffer.read())["EnvironmentVariables"]["PATH"])'], { encoding: 'utf8', input: xml })
+  assert.equal(r.status, 0, r.stderr)
+  return r.stdout
+}
+
+// Puts the stubs where macOS has them under a sandbox root and returns the
+// plist PATH rooted there, then the real /usr/bin:/bin.
+function rootedPath(sb, path) {
+  assert.notEqual(spawnSync('sh', ['-c', 'command -v scutil'], { env: { PATH: SYS_PATH } }).status, 0, `${SYS_PATH} has a scutil; the emulation cannot tell PATHs apart`)
+  const root = join(sb.base, 'root')
+  const dirs = path.split(':')
+  const place = { scutil: '/usr/sbin', plutil: '/usr/bin', claude: dirs.find((d) => d.endsWith('/.local/bin')) }
+  for (const [tool, dir] of Object.entries(place)) {
+    assert.ok(dir, `no ~/.local/bin on the plist PATH ${path}`)
+    mkdirSync(join(root, dir), { recursive: true })
+    writeFileSync(join(root, dir, tool), STUBS[tool])
+    chmodSync(join(root, dir, tool), 0o755)
+  }
+  return [...dirs.map((d) => root + d), SYS_PATH].join(':')
+}
+
+test('plist PATH: the wrapper finds /usr/sbin/scutil and starts claude under the LocalHostName (regression: it failed every start)', () =>
+  withWrapper({ stubs: [] }, async (sb) => {
+    const { child, exit } = sb.start({ PATH: rootedPath(sb, plistPath()) })
+    await until(() => sb.claudeArgs() || existsSync(sb.marker), 'claude to start or the wrapper to fail')
+    assert.equal(existsSync(sb.marker), false, existsSync(sb.marker) ? readFileSync(sb.marker, 'utf8') : '')
+    assert.deepEqual(sb.claudeArgs(), WANT_ARGS)
+    assert.deepEqual(sb.calls().filter((c) => c.startsWith('scutil')), ['scutil --get LocalHostName'])
+    child.kill('SIGTERM')
+    const { code } = await exited(exit)
+    assert.equal(code, 0, sb.logText())
+  }))
+
+test('plist PATH: without /usr/sbin:/sbin in the shared template, scutil is not found and the wrapper fails closed (the check above is not vacuous)', () => {
+  const src = mkdtempSync(join(tmpdir(), 'crc-src-'))
+  try {
+    for (const p of ['.chezmoitemplates', 'private_Library/LaunchAgents']) cpSync(join(SOURCE, p), join(src, p), { recursive: true })
+    const tmpl = join(src, '.chezmoitemplates/launchagent.plist')
+    const text = readFileSync(tmpl, 'utf8')
+    const old = text.replace('/usr/bin:/bin:/usr/sbin:/sbin</string>', '/usr/bin:/bin</string>')
+    assert.notEqual(old, text, 'the shared template no longer ends its PATH with /usr/sbin:/sbin')
+    writeFileSync(tmpl, old)
+    const path = plistPath(src)
+    assert.ok(!path.split(':').includes('/usr/sbin'), path)
+    return withWrapper({ stubs: [] }, async (sb) => {
+      // The marker blames the host name ('this Mac' is the wrapper's fallback),
+      // not the missing scutil: that is today's text, pinned here as observed.
+      assertPreflight(sb, sb.run({ PATH: rootedPath(sb, path) }), /`scutil --get LocalHostName` gave '.*', not a plain host name/)
+      assert.deepEqual(sb.calls().filter((c) => c.startsWith('scutil')), [])
+    })
+  } finally {
+    rmSync(src, { recursive: true, force: true })
+  }
+})
+
 // --- Log size ---------------------------------------------------------------------------------
 
 test('log: over 10 MB at start, it is emptied; at 10 MB or less it is kept and appended to', () =>
