@@ -316,6 +316,9 @@ function launchdRun(job, { route }) {
       writeFileSync(dest, macify(read(`dot_cron/${f}`), root))
       chmodSync(dest, 0o755)
     }
+    // The shared text helper the cf and rea jobs load (dot_cron/lib/text.sh).
+    mkdirSync(join(home, '.cron', 'lib'))
+    writeFileSync(join(home, '.cron', 'lib', 'text.sh'), read('dot_cron/lib/text.sh'))
     const put = (dir, name, body) => {
       mkdirSync(join(root, dir), { recursive: true })
       writeFileSync(join(root, dir, name), body)
@@ -418,6 +421,8 @@ for (const [tmpl, script] of [
       const deployed = join(home, '.cron', script)
       writeFileSync(deployed, read(`dot_cron/executable_${script}`))
       chmodSync(deployed, 0o755)
+      mkdirSync(join(home, '.cron', 'lib'))
+      writeFileSync(join(home, '.cron', 'lib', 'text.sh'), read('dot_cron/lib/text.sh'))
       // A deployed wait that always reports the network down.
       writeFileSync(join(home, '.cron', 'wait-for-network.sh'), '#!/bin/sh\nexit 1\n')
       chmodSync(join(home, '.cron', 'wait-for-network.sh'), 0o755)

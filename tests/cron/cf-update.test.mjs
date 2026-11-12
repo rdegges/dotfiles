@@ -16,7 +16,7 @@
 // writes a marker that does not say "update failed" only when cf.ok is missing
 // or over 72 hours old; any other status (2, 126, 127) runs the update as
 // before; an empty WAIT_FOR_NETWORK runs ~/.cron/wait-for-network.sh. The
-// zshrc loop prints every marker verbatim and nothing when there are none. It says nothing
+// zshrc loop prints every marker literally, minus its control characters, and nothing when there are none. It says nothing
 // about the real npm registry, macOS /bin/sh (bash in POSIX mode; this runs
 // under Debian dash), or launchd itself; those were checked by hand in the gate run.
 // tests/cron/launch-agents.test.mjs proves the agent renders to this command.
@@ -327,7 +327,7 @@ test('banner: prints nothing and exits 0 when ~/.cron/logs is missing or has no 
     assert.equal(r.stdout + r.stderr, '')
   }))
 
-test('banner: one red line per marker, content printed verbatim (no expansion)', { skip: zskip }, () =>
+test('banner: one red line per marker, content printed literally (no expansion)', { skip: zskip }, () =>
   withSandbox({}, (sb) => {
     const logs = join(sb.home, '.cron', 'logs')
     mkdirSync(logs, { recursive: true })
@@ -413,7 +413,7 @@ const SHELLS = [['sh', ['sh']], ['bash --posix -O xpg_echo', ['bash', '--posix',
 // tab, a carriage return, non-ASCII text, and more than 300 characters.
 const HOSTILE = 'dyld: \\c cut \\n here %s\n\x1b[31mred\x1b[0m\ttab\r\n☁ ' + 'x'.repeat(400)
 // The marker text the script must write for a reason: one line, printable ASCII,
-// at most 300 characters (the same steps as oneline() in tailscale-watchdog.sh).
+// at most 300 characters (oneline() in dot_cron/lib/text.sh, for these inputs).
 const clean = (s) => s.replace(/[\n\t\r]/g, ' ').replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '').replace(/[^\x20-\x7e]/g, '').slice(0, 300)
 const printfStub = (stub) => {
   const out = stub.replace('echo "${STUB_CF_ERR:-boom}" >&2', 'printf \'%s\\n\' "${STUB_CF_ERR:-boom}" >&2')

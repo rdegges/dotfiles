@@ -69,6 +69,16 @@ statefile="$logs/tailscale-watchdog.state"
 account=icloud
 rcpt=r@rdegges.com
 
+# oneline (lib/text.sh) turns CLI output into one marker line. A missing,
+# broken, or incomplete lib writes the marker and exits 1 (no mail, no state change).
+lib="$(dirname "$0")/lib/text.sh"
+if [ -r "$lib" ] && sh -n "$lib" 2>/dev/null && command . "$lib" && command -v oneline >/dev/null 2>&1; then :; else
+    printf '%s\n' "tailscale-watchdog: cannot load $lib"
+    mkdir -p "${marker%/*}"
+    printf '%s\n' "$(date '+%F %R') tailscale-watchdog: cannot load ~/.cron/lib/text.sh; run chezmoi apply" > "$marker"
+    exit 1
+fi
+
 mkdir -p "$logs"
 pkey= pstatus= psince=
 [ -f "$statefile" ] && read -r pkey pstatus psince < "$statefile"
@@ -87,12 +97,9 @@ run() { s=$1; shift; if [ -n "$TO" ]; then "$TO" -k 5 "$s" "$@"; else "$@"; fi; 
 
 # Untrusted text (CLI output, the state file, error text) is written with
 # printf '%s\n', never echo: dash and macOS /bin/sh expand backslash escapes in
-# echo, so a \n split the marker and a \c cut it short.
-#
-# One line, at most 300 characters, for the marker, the mail, and the state.
-# Printable ASCII only, before the cut: under launchd there is no LANG, so cut
-# counts bytes and could split a multi-byte character into invalid UTF-8.
-oneline() { printf '%s' "$1" | tr '\n\t' '  ' | LC_ALL=C tr -cd '\11\12\15\40-\176' | cut -c1-300; }
+# echo, so a \n split the marker and a \c cut it short. CLI output goes
+# through oneline (lib/text.sh, loaded above) for the marker, the mail, and the
+# state.
 
 send_mail() { # send_mail <subject> <body>
     msg=$(printf 'From: %s\nTo: %s\nSubject: %s\n\n%s\n' "$rcpt" "$rcpt" "$1" "$2")
@@ -157,10 +164,10 @@ What happened: $what."; then
             exit 1
         fi
     fi
-    echo Running > "$statefile"
+    printf '%s\n' Running > "$statefile"
     rm -f "$marker"
     touch "$stamp"
-    echo "tailscale-watchdog: ok: Running"
+    printf '%s\n' "tailscale-watchdog: ok: Running"
     exit 0
 }
 
@@ -241,7 +248,7 @@ Stopped)
         true) fail logged-out "BackendState is Stopped and the client is logged out; log in by hand" ;;
         *) fail cannot-evaluate "BackendState is Stopped, and LoggedOut cannot be read from \`tailscale debug prefs\` (exit $rc): $(oneline "$out")" ;;
     esac
-    echo "tailscale-watchdog: BackendState Stopped while logged in; running tailscale up"
+    printf '%s\n' "tailscale-watchdog: BackendState Stopped while logged in; running tailscale up"
     out=$(run 30 "$cli" up < /dev/null 2>&1); rc=$?
     [ "$rc" -eq 0 ] || fail up-failed "BackendState was Stopped, and \`tailscale up\` failed (exit $rc; 124 or 137 is the 30s timeout): $(oneline "$out")"
     poll running || fail not-running "BackendState was Stopped; \`tailscale up\` ran, but the state is ${st:-unreadable} ${wait}s later"

@@ -22,7 +22,7 @@ timeout="${WAIT_FOR_NETWORK_TIMEOUT:-60}"
 host=github.com
 
 case "$timeout" in
-    '' | *[!0-9]* | ???????*) echo "wait-for-network: bad WAIT_FOR_NETWORK_TIMEOUT: $timeout" >&2; exit 2 ;;
+    '' | *[!0-9]* | ???????*) printf '%s\n' "wait-for-network: bad WAIT_FOR_NETWORK_TIMEOUT: $timeout" >&2; exit 2 ;;
 esac
 
 # The launchd plist PATH has no /sbin, and macOS ships route only as /sbin/route.
@@ -30,7 +30,7 @@ PATH="$PATH:/usr/sbin:/sbin"
 
 for tool in route dscacheutil; do
     command -v "$tool" >/dev/null 2>&1 \
-        || { echo "wait-for-network: $tool not found; cannot check" >&2; exit 2; }
+        || { printf '%s\n' "wait-for-network: $tool not found; cannot check" >&2; exit 2; }
 done
 
 # Sets route_ok and dns_ok to yes or no. Exits 2 on output it cannot read.
@@ -43,15 +43,15 @@ probe() {
     if out=$(route -n get default 2>/dev/null) && [ -n "$out" ]; then
         case "$out" in
             *interface:*) route_ok=yes ;;
-            *) echo "wait-for-network: cannot read 'route -n get default' output" >&2; exit 2 ;;
+            *) printf '%s\n' "wait-for-network: cannot read 'route -n get default' output" >&2; exit 2 ;;
         esac
     fi
     out=$(dscacheutil -q host -a name "$host" 2>/dev/null) \
-        || { echo "wait-for-network: dscacheutil failed" >&2; exit 2; }
+        || { printf '%s\n' "wait-for-network: dscacheutil failed" >&2; exit 2; }
     if printf '%s\n' "$out" | grep -Eq '^(ip|ipv6)_address: '; then
         dns_ok=yes
     elif [ -n "$out" ]; then
-        echo "wait-for-network: cannot read dscacheutil output" >&2
+        printf '%s\n' "wait-for-network: cannot read dscacheutil output" >&2
         exit 2
     fi
 }
@@ -60,11 +60,11 @@ waited=0
 while :; do
     probe
     if [ "$route_ok" = yes ] && [ "$dns_ok" = yes ]; then
-        [ "$waited" -gt 0 ] && echo "wait-for-network: up after ${waited}s"
+        [ "$waited" -gt 0 ] && printf '%s\n' "wait-for-network: up after ${waited}s"
         exit 0
     fi
     if [ "$waited" -ge "$timeout" ]; then
-        echo "wait-for-network: down after ${waited}s (default route: $route_ok, $host DNS: $dns_ok)"
+        printf '%s\n' "wait-for-network: down after ${waited}s (default route: $route_ok, $host DNS: $dns_ok)"
         exit 1
     fi
     sleep 2
