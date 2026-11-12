@@ -28,9 +28,13 @@
 //   - The loader, in cf-update, rea-update, and tailscale-watchdog under sh
 //     (dash) and bash --posix -O xpg_echo: a missing, unreadable, or
 //     unparsable lib writes the job's marker ("cannot load") and exits 1.
+//     An empty lib, or one cut short before oneline, still leaves the failure
+//     reason in the cf and rea markers; with the real lib the first-step reason
+//     reaches the marker.
 //   - The banner removes every control character but newline from a marker
 //     (ESC, BEL, CR, tab), keeps a multi-line marker's lines, and adds only its
 //     own two color codes.
+//     Under LANG=C.UTF-8 it also removes the C1 controls, NUL, and DEL.
 //
 // What a pass does not prove:
 //   - That every untrusted value that reaches a marker or a mail went through
@@ -360,6 +364,9 @@ function loaderRun(job, libCase, shell) {
       mkdirSync(join(dir, 'lib'))
       const lib = join(dir, 'lib', 'text.sh')
       if (libCase === 'syntax') writeFileSync(lib, 'oneline() {\n    printf "%s" "$1"\n')
+      else if (libCase === 'empty') writeFileSync(lib, '')
+      // Parses and sources fine, but stops before oneline (a cut-short copy).
+      else if (libCase === 'no-oneline') writeFileSync(lib, readFileSync(LIB, 'utf8').split('\noneline()')[0])
       else copyFileSync(LIB, lib)
       if (libCase === 'unreadable') chmodSync(lib, 0o000)
     }
@@ -397,12 +404,34 @@ for (const [name, shell] of LOADER_SHELLS) {
       })
     }
 
+    // An empty lib, or one cut short before oneline, parses under sh -n and
+    // sources fine, so the loader lets it through. cf-update and rea-update
+    // then pass their whole failure reason through the missing oneline, and
+    // the marker loses it ("update failed:  (see ...)"). Whatever the fix
+    // (the loader checks that oneline is defined, or fail() keeps the reason),
+    // the marker must still say why the job failed. Past the loader both jobs
+    // fail at "npm not found on PATH" (no npm in this PATH).
+    if (job !== 'tailscale-watchdog') {
+      for (const libCase of ['empty', 'no-oneline']) {
+        test(`[${name}] loader: ${job} with a lib that parses but has no oneline (${libCase}) still says why it failed`, { skip: skipFor(shell) }, () => {
+          const { r, markers, read: readMarker } = loaderRun(job, libCase, shell)
+          assert.equal(r.status, 1, r.stdout + r.stderr)
+          assert.deepEqual(markers, [marker])
+          assert.match(readMarker(marker), /cannot load|npm not found on PATH/, `${libCase} lib: ${JSON.stringify(readMarker(marker))}`)
+        })
+      }
+    }
+
     test(`[${name}] loader: ${job} with the real lib gets past the loader`, { skip: skipFor(shell) }, () => {
       const { r, markers, read: readMarker } = loaderRun(job, 'ok', shell)
       assert.equal(r.status, 1, r.stdout + r.stderr)
       assert.doesNotMatch(r.stdout + r.stderr, /cannot load/)
       assert.deepEqual(markers, [marker])
       assert.doesNotMatch(readMarker(marker), /cannot load/)
+      // The job's first-step reason reaches the marker, so the loaded oneline
+      // works on it (before, this only checked for no "cannot load").
+      const reason = job === 'tailscale-watchdog' ? 'Tailscale CLI not found or not executable' : 'npm not found on PATH'
+      assert.ok(readMarker(marker).includes(reason), JSON.stringify(readMarker(marker)))
     })
   }
 }
@@ -413,6 +442,25 @@ const zshrcLine = read('dot_zshrc')
   .split('\n')
   .find((l) => l.includes('.FAILED') && !l.trimStart().startsWith('#'))
 const zskip = has('zsh') ? false : 'zsh not installed (see the run command at the top)'
+
+// An interactive shell runs the banner under a UTF-8 locale, where
+// [[:cntrl:]] also matches the C1 controls (U+0080-U+009F; U+009B is the
+// one-character CSI). The test above runs with no locale. Non-ASCII text stays.
+// Not covered: a raw 0x9B byte (invalid UTF-8) is not a character to zsh and
+// stays; UTF-8 terminals show it as U+FFFD, not as a CSI.
+test('banner: under LANG=C.UTF-8 the C1 controls, NUL, and DEL go too; UTF-8 text stays', { skip: zskip }, () => {
+  const home = mkdtempSync(join(tmpdir(), 'text-lib-banner-'))
+  try {
+    const logs = join(home, '.cron', 'logs')
+    mkdirSync(logs, { recursive: true })
+    writeFileSync(join(logs, 'x.FAILED'), Buffer.from('a\u009b[2Jb\u0085c\x00d\x7fe ☁ f\n', 'utf8'))
+    const r = spawnSync('zsh', ['-f', '-c', zshrcLine], { encoding: 'utf8', env: { HOME: home, PATH: SYS_PATH, LANG: 'C.UTF-8', LC_ALL: 'C.UTF-8' } })
+    assert.equal(r.status, 0, r.stderr)
+    assert.equal(r.stdout, '\x1b[31mcron: a[2Jbcde ☁ f\x1b[0m\n')
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+})
 
 test('banner: a marker with ESC, BEL, and CR prints with none of them but the two color codes; lines stay', { skip: zskip }, () => {
   const home = mkdtempSync(join(tmpdir(), 'text-lib-banner-'))
