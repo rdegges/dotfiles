@@ -194,7 +194,7 @@ for (const job of Object.keys(AGENTS)) {
       assert.deepEqual(p.StartCalendarInterval, want.schedule)
 
       const path = p.EnvironmentVariables.PATH
-      assert.equal(path, `${home}/.asdf/shims:${home}/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin`)
+      assert.equal(path, `${home}/.asdf/shims:${home}/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin`)
       for (const dir of path.split(':')) assert.ok(dir.startsWith('/'), `relative PATH entry ${dir}`)
       assert.deepEqual(p.EnvironmentVariables, {
         PATH: path,
@@ -242,7 +242,7 @@ function scheduledXml(label, { command, schedule }, home) {
 \t<key>EnvironmentVariables</key>
 \t<dict>
 \t\t<key>PATH</key>
-\t\t<string>${h}/.asdf/shims:${h}/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+\t\t<string>${h}/.asdf/shims:${h}/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
 \t\t<key>HOMEBREW_NO_ENV_HINTS</key>
 \t\t<string>1</string>
 \t\t<key>HOMEBREW_NO_AUTO_UPDATE</key>
@@ -293,7 +293,7 @@ for (const job of Object.keys(SERVICE_AGENTS)) {
       assert.equal(p.ThrottleInterval, 60)
       assert.equal(p.ProcessType, 'Interactive')
       assert.deepEqual(p.EnvironmentVariables, {
-        PATH: `${home}/.asdf/shims:${home}/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin`,
+        PATH: `${home}/.asdf/shims:${home}/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin`,
         HOMEBREW_NO_ENV_HINTS: '1',
         HOMEBREW_NO_AUTO_UPDATE: '1',
         HOMEBREW_NO_ASK: '1',
@@ -368,7 +368,7 @@ test('agents: the installer check fails on the old PATH without ~/.local/bin (th
     assert.notEqual(old, text, 'the shared template no longer has the ~/.local/bin entry this test removes')
     writeFileSync(tmpl, old)
     const path = agentPath(home, src)
-    assert.equal(path, `${home}/.asdf/shims:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin`)
+    assert.equal(path, `${home}/.asdf/shims:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin`)
     const r = spawnSync('/bin/sh', ['-c', INSTALLER_PATH_CHECK], { encoding: 'utf8', env: { PATH: path, HOME: home } })
     assert.equal(r.status, 1)
   } finally {
@@ -1390,3 +1390,31 @@ for (const [answer, want] of [['true', 'true'], ['false', 'false']]) {
     }
   })
 }
+
+// macOS ships these only in /usr/sbin or /sbin, and launchd's default PATH has
+// neither. Before /usr/sbin:/sbin joined the shared PATH, the Remote Control
+// wrapper could not run scutil (it failed every start) and app-update could not
+// run ioreg (every night counted as busy). This ties each tool a job calls bare
+// to a directory on the rendered PATH. It proves the PATH covers the tools
+// listed here; it does not find a new sbin tool that is not on the list.
+const SBIN_TOOLS = { ioreg: '/usr/sbin', sysctl: '/usr/sbin', scutil: '/usr/sbin', lsof: '/usr/sbin', networksetup: '/usr/sbin', pmset: '/usr/bin', route: '/sbin', ifconfig: '/sbin', ping: '/sbin' }
+test('agents: every macOS sbin tool a cron job calls is in a directory on the plist PATH', () => {
+  const home = mkdtempSync(join(tmpdir(), 'launch-agents-'))
+  try {
+    const dirs = agentPath(home).split(':')
+    const cron = join(SOURCE, 'dot_cron')
+    const used = new Set()
+    for (const f of readdirSync(cron)) {
+      if (!f.startsWith('executable_')) continue
+      for (const line of readFileSync(join(cron, f), 'utf8').split('\n')) {
+        if (line.trimStart().startsWith('#')) continue
+        for (const tool of Object.keys(SBIN_TOOLS)) if (new RegExp(`(^|[\\s(|;&$])${tool}\\s`).test(line)) used.add(tool)
+      }
+    }
+    // The jobs this was found in still use these; if not, update the list.
+    for (const t of ['ioreg', 'sysctl', 'scutil', 'route']) assert.ok(used.has(t), `no job calls ${t} any more; found: ${[...used].join(', ')}`)
+    for (const t of used) assert.ok(dirs.includes(SBIN_TOOLS[t]), `${t} lives in ${SBIN_TOOLS[t]}, which is not on the plist PATH ${dirs.join(':')}`)
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+})

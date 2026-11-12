@@ -23,6 +23,9 @@
   (/opt/homebrew) and Intel (/usr/local). ~/.local/bin must be on PATH: the
   installer that `codex update` runs appends a PATH block to ~/.zprofile
   whenever it is missing, and the next `chezmoi update` deletes that block.
+  /usr/sbin and /sbin must be on PATH too: macOS ships ioreg, sysctl, scutil,
+  lsof, and route only there, and launchd's default PATH has neither. The
+  Remote Control server's sessions inherit this PATH as well.
 
   Homebrew, non-interactively: quiet the env hints, skip the redundant implicit
   auto-update (the brew job runs `brew update` explicitly), and never block on
@@ -70,7 +73,7 @@
 	<key>EnvironmentVariables</key>
 	<dict>
 		<key>PATH</key>
-		<string>{{ .home | html }}/.asdf/shims:{{ .home | html }}/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+		<string>{{ .home | html }}/.asdf/shims:{{ .home | html }}/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
 		<key>HOMEBREW_NO_ENV_HINTS</key>
 		<string>1</string>
 		<key>HOMEBREW_NO_AUTO_UPDATE</key>
