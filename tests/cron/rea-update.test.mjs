@@ -76,8 +76,9 @@ function sandbox({ stubs = ['npm', 'asdf', 'rea'], homeName = 'home' } = {}) {
     marker,
     stamp: join(logs, 'rea.ok'),
     calls: () => readFileSync(calls, 'utf8').split('\n').filter(Boolean),
-    run: (env = {}) =>
-      spawnSync('sh', [SCRIPT], {
+    // shell: the shell and its options; macOS runs these scripts with /bin/sh.
+    run: (env = {}, { shell = ['sh'] } = {}) =>
+      spawnSync(shell[0], [...shell.slice(1), SCRIPT], {
         encoding: 'utf8',
         input: 'stdin must not reach rea setup\n',
         env: { HOME: home, PATH: `${bin}:${SYS_PATH}`, CALLS: calls, WAIT_FOR_NETWORK: wait, ...env },
@@ -485,3 +486,46 @@ test('codex: exactly one [mcp_servers.rea] table, and it is the last table (keys
   assert.equal(tables.filter((t) => t === '[mcp_servers.rea]').length, 1, tables.join('\n'))
   assert.equal(tables.at(-1), '[mcp_servers.rea]', tables.join('\n'))
 })
+
+// --- Untrusted text in the marker and the log (printf, one marker line) ---------------
+//
+// `rea --version` output and error text reach the FAILED marker and the log.
+// dash and macOS /bin/sh (bash 3.2 built strict-POSIX, so xpg_echo is on) expand
+// backslash escapes in `echo`, so a \c in that text cut the marker short, and
+// multi-line or colored output made it several lines. Debian's `bash --posix`
+// leaves xpg_echo off; -O xpg_echo makes it behave like macOS /bin/sh.
+
+const SHELLS = [['sh', ['sh']], ['bash --posix -O xpg_echo', ['bash', '--posix', '-O', 'xpg_echo']]]
+// A `rea --version` that fails with many lines, color codes, backslashes, a
+// tab, a carriage return, non-ASCII text, and more than 300 characters.
+const HOSTILE = 'dyld: \\c cut \\n here %s\n\x1b[31mred\x1b[0m\ttab\r\n☁ ' + 'x'.repeat(400)
+// The marker text the script must write for a reason: one line, printable ASCII,
+// at most 300 characters (the same steps as oneline() in tailscale-watchdog.sh).
+const clean = (s) => s.replace(/[\n\t\r]/g, ' ').replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '').replace(/[^\x20-\x7e]/g, '').slice(0, 300)
+const printfStub = (stub) => {
+  const out = stub.replace('echo "${STUB_REA_ERR:-boom}" >&2', 'printf \'%s\\n\' "${STUB_REA_ERR:-boom}" >&2')
+  assert.notEqual(out, stub, 'stub patch did not apply')
+  return out
+}
+
+for (const [name, shell] of SHELLS) {
+  test(`[${name}] a hostile \`rea --version\` error: the marker is one printable-ASCII line, cut at 300, with the text literal`, () =>
+    withSandbox({}, (sb) => {
+      writeFileSync(join(sb.base, 'bin', 'rea'), printfStub(STUBS.rea))
+      const r = sb.run({ STUB_REA_RC: '1', STUB_REA_ERR: HOSTILE }, { shell })
+      assert.equal(r.status, 1, r.stdout + r.stderr)
+      const m = readFileSync(sb.marker, 'utf8')
+      assert.match(m, /^\d{4}-\d{2}-\d{2} \d{2}:\d{2} /)
+      assert.equal(m.slice(17), `rea update failed: ${clean(`rea --version: ${HOSTILE}`)} (see ~/.cron/logs/rea.log)\n`)
+      assert.ok(m.includes('dyld: \\c cut \\n here %s red tab  '), JSON.stringify(m))
+      // The log keeps the whole text, literally.
+      assert.ok(r.stdout.includes('rea-update: FAILED: rea --version: dyld: \\c cut \\n here %s\n'), JSON.stringify(r.stdout))
+    }))
+
+  test(`[${name}] a backslash in the \`rea --version\` output reaches the ok log line literally`, () =>
+    withSandbox({}, (sb) => {
+      const r = sb.run({ STUB_REA_OUT: 'rea 9.9.9 \\c tail \\n end' }, { shell })
+      assert.equal(r.status, 0, r.stdout + r.stderr)
+      assert.ok(r.stdout.endsWith('rea-update: ok: rea 9.9.9 \\c tail \\n end\n'), JSON.stringify(r.stdout))
+    }))
+}
