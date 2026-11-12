@@ -30,10 +30,21 @@ pkg="${REA_UPDATE_PACKAGE:-rea-agents@latest}"
 marker="$HOME/.cron/logs/rea.FAILED"
 stamp="$HOME/.cron/logs/rea.ok"
 
+# One line of printable ASCII, at most 300 characters, for the marker. The
+# reason can carry CLI output (`rea --version`), which can have many lines,
+# color codes, or bytes that are not ASCII. It is modeled on oneline() in
+# tailscale-watchdog.sh, but stricter: it also strips CSI color codes and
+# turns CR into a space, so the marker is always one printable-ASCII line.
+# Text that carries CLI output is written with printf '%s\n', never echo:
+# dash and macOS /bin/sh expand backslash escapes in echo, so a \c in it cut
+# the marker short.
+esc=$(printf '\033')
+oneline() { printf '%s' "$1" | LC_ALL=C tr '\n\t\r' '   ' | LC_ALL=C sed "s/$esc\[[0-9;?]*[A-Za-z]//g" | LC_ALL=C tr -cd '\40-\176' | cut -c1-300; }
+
 fail() {
-    echo "rea-update: FAILED: $1"
+    printf '%s\n' "rea-update: FAILED: $1"
     mkdir -p "${marker%/*}"
-    echo "$(date '+%F %R') rea update failed: $1 (see ~/.cron/logs/rea.log)" > "$marker"
+    printf '%s\n' "$(date '+%F %R') rea update failed: $(oneline "$1") (see ~/.cron/logs/rea.log)" > "$marker"
     exit 1
 }
 
@@ -63,4 +74,4 @@ rea doctor --client codex --json \
 rm -f "$marker"
 mkdir -p "${marker%/*}"
 touch "$stamp"
-echo "rea-update: ok: $version"
+printf '%s\n' "rea-update: ok: $version"
