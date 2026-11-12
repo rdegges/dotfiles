@@ -590,6 +590,42 @@ test('[bash --posix xpg_echo] a backslash in the state file is written back lite
     assert.equal(readFileSync(sb.statefile, 'utf8'), 'NeedsLogin unsent 2026\\c-01\\n02\n')
   }))
 
+// himalaya 1.2.0 colors its errors with ANSI escapes even when stderr is not a
+// TTY, and NO_COLOR, TERM=dumb, CLICOLOR=0, and --quiet do not turn that off
+// (measured on the homelab Mac). The text below is its real panic output, byte
+// for byte apart from a shorter path. oneline() keeps only printable ASCII, so
+// without stripping the escapes the log line kept fragments such as `[31m`.
+const HIMALAYA_COLORED_PANIC =
+  '\x1b[31mThe application panicked (crashed).\x1b[0m\n' +
+  'Message:  \x1b[36mindex out of bounds: the len is 0 but the index is 0\x1b[0m\n' +
+  'Location: \x1b[35m/cargo-vendor-dir/mail-parser-0.9.4/src/core/message.rs\x1b[0m:\x1b[35m89\x1b[0m\n'
+
+test('a colored himalaya error: the log line has no ANSI codes or [31m fragments', () =>
+  withSandbox({ backend: 'NeedsLogin' }, (sb) => {
+    const panic = join(sb.base, 'panic.txt')
+    writeFileSync(panic, HIMALAYA_COLORED_PANIC)
+    writeFileSync(join(sb.bin, 'himalaya'), `#!/bin/sh\ncat > /dev/null\ncat "${panic}" >&2\nexit 101\n`)
+    chmodSync(join(sb.bin, 'himalaya'), 0o755)
+    const r = sb.run()
+    assertFailed(sb, r, /the alert mail failed too/)
+    const line = r.stdout.split('\n').find((l) => l.includes('mail failed:'))
+    assert.equal(
+      line,
+      'tailscale-watchdog: mail failed: The application panicked (crashed). Message:  index out of bounds: the len is 0 but the index is 0 Location: /cargo-vendor-dir/mail-parser-0.9.4/src/core/message.rs:89',
+    )
+  }))
+
+test('a colored `up` error: the marker and the mail have no ANSI codes or fragments', () =>
+  withSandbox({ backend: 'Stopped' }, (sb) => {
+    writeFileSync(sb.cliPath, rawUpErrCli())
+    const r = sb.run({ STUB_UP_RC: '1', STUB_UP_ERR: '\x1b[1;31merror:\x1b[0m \x1b[33mbackend\x1b[m busy \x1b[2K' })
+    const m = assertFailed(sb, r, /`tailscale up` failed/)
+    assert.ok(m.includes('timeout): error: backend busy  (see '), JSON.stringify(m))
+    for (const text of [m, sb.mails()[0]]) {
+      assert.doesNotMatch(text, /\x1b|\[[0-9;]*[A-Za-z]/, JSON.stringify(text))
+    }
+  }))
+
 // macOS /bin/sh is bash 3.2 in POSIX mode; the rest of this file runs under dash.
 test('[bash --posix] down then recovered: both mails arrive whole on stdin, marker cleared', { skip: spawnSync('sh', ['-c', 'command -v bash']).status === 0 ? false : 'bash not installed' }, () =>
   withSandbox({ backend: 'NeedsLogin' }, (sb) => {

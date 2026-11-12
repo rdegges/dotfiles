@@ -90,9 +90,13 @@ run() { s=$1; shift; if [ -n "$TO" ]; then "$TO" -k 5 "$s" "$@"; else "$@"; fi; 
 # echo, so a \n split the marker and a \c cut it short.
 #
 # One line, at most 300 characters, for the marker, the mail, and the state.
-# Printable ASCII only, before the cut: under launchd there is no LANG, so cut
+# ANSI escape sequences (ESC [ ... letter) go first: himalaya 1.2.0 colors its
+# errors even when stderr is not a TTY, and NO_COLOR, TERM=dumb, and --quiet do
+# not stop it, so the ASCII filter alone left fragments such as `[31m`. Then
+# printable ASCII only, before the cut: under launchd there is no LANG, so cut
 # counts bytes and could split a multi-byte character into invalid UTF-8.
-oneline() { printf '%s' "$1" | tr '\n\t' '  ' | LC_ALL=C tr -cd '\11\12\15\40-\176' | cut -c1-300; }
+esc=$(printf '\033')
+oneline() { printf '%s' "$1" | tr '\n\t' '  ' | LC_ALL=C sed "s/$esc\[[0-9;?]*[A-Za-z]//g" | LC_ALL=C tr -cd '\11\12\15\40-\176' | cut -c1-300; }
 
 send_mail() { # send_mail <subject> <body>
     msg=$(printf 'From: %s\nTo: %s\nSubject: %s\n\n%s\n' "$rcpt" "$rcpt" "$1" "$2")
