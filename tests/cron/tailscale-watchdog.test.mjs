@@ -141,10 +141,13 @@ function sandbox({ backend = 'Running', app = true, stubs = Object.keys(STUBS), 
         .filter((f) => f.startsWith('mail.'))
         .sort((a, b) => Number(a.slice(5)) - Number(b.slice(5)))
         .map((f) => readFileSync(join(state, f), 'utf8')),
-    run(env = {}) {
+    // shell: the argv that runs the script (macOS /bin/sh is bash in POSIX
+    // mode); input: what the caller feeds the script's own stdin.
+    run(env = {}, { shell = ['sh'], input } = {}) {
       const t0 = Date.now()
-      const r = spawnSync('sh', [SCRIPT], {
+      const r = spawnSync(shell[0], [...shell.slice(1), SCRIPT], {
         encoding: 'utf8',
+        input,
         // Built from scratch so the host's TAILSCALE_* never leak in.
         env: { HOME: home, PATH: `${bin}:${SYS_PATH}`, CALLS: calls, STATE: state, TAILSCALE_CLI: cliPath, TAILSCALE_WATCHDOG_WAIT: '3', ...env },
       })
@@ -447,6 +450,70 @@ test('mail: a himalaya panic (empty stdin, exit 101) is a failed send: marker, e
     assert.deepEqual(sb.mails(), [])
   }))
 
+// The message on himalaya's stdin is the script's own text, not whatever the
+// caller's stdin holds: launchd gives /dev/null, but a person can run the job
+// from a pipe, and a leaked byte would change or replace the mail.
+test('mail: the caller\'s stdin never reaches himalaya; the mail is exactly the message the script built', () =>
+  withSandbox({ backend: 'NeedsLogin' }, (sb) => {
+    const r = sb.run({}, { input: 'From: attacker@example.com\nSubject: CALLER STDIN\n\nleaked\n' })
+    assert.match(r.stdout, /mailed: Tailscale is down on testhost: NeedsLogin/, r.stdout + r.stderr)
+    const m = sb.mails()
+    assert.equal(m.length, 1)
+    assert.match(m[0], /^From: r@rdegges\.com\nTo: r@rdegges\.com\nSubject: Tailscale is down on testhost: NeedsLogin\n\n/)
+    assert.doesNotMatch(m[0], /CALLER STDIN|leaked|attacker/)
+  }))
+
+// printf-format characters, backslashes, and option-like text in the reason
+// must arrive as literal bytes: the message is data on a pipe, never a printf
+// format or a himalaya argument.
+// The stub CLI prints its `up` error with dash's echo, which would expand these
+// backslashes itself; this one prints them raw.
+const rawUpErrCli = () => {
+  const cli = CLI.replace('echo "${STUB_UP_ERR:-boom}" >&2', 'printf \'%s\\n\' "${STUB_UP_ERR:-boom}" >&2')
+  assert.notEqual(cli, CLI, 'stub patch did not apply')
+  return cli
+}
+
+test('mail: %, backslashes, and option-like text in the reason arrive literally on stdin', () =>
+  withSandbox({ backend: 'Stopped' }, (sb) => {
+    const err = 'disk 100% full %s %n \\n \\t -a other --config /tmp/x'
+    writeFileSync(sb.cliPath, rawUpErrCli())
+    const r = sb.run({ STUB_UP_RC: '1', STUB_UP_ERR: err })
+    assert.equal(r.status, 1, r.stdout + r.stderr)
+    assert.match(r.stdout, /mailed: Tailscale is down on testhost: up-failed/)
+    assert.deepEqual(sb.calls().filter((c) => c.startsWith('himalaya')), ['himalaya message send -a icloud (4 args)'])
+    const m = sb.mails()
+    assert.equal(m.length, 1)
+    assert.ok(m[0].includes(`): ${err}\n\n`), JSON.stringify(m[0]))
+  }))
+
+// Defect proof (pre-existing, not from the stdin change): the marker lines are
+// written with `echo`, and both dash and macOS /bin/sh (bash 3.2, xpg_echo on)
+// expand backslash escapes in echo: a literal \n in CLI output splits the
+// marker into two lines, and \c cuts the rest of it off, "(see ...log)" and the
+// final newline included. Invariant from this file's own header: each failure
+// writes one whole marker line.
+test.todo('PROPOSED CONTRACT: a `\\n` or `\\c` in the `up` error keeps the marker one whole line', () =>
+  withSandbox({ backend: 'Stopped' }, (sb) => {
+    writeFileSync(sb.cliPath, rawUpErrCli())
+    const r = sb.run({ STUB_UP_RC: '1', STUB_UP_ERR: 'parse error: "a\\nb" then \\c the rest' })
+    const m = assertFailed(sb, r, /`tailscale up` failed/)
+    assert.ok(m.includes('"a\\nb" then \\c the rest (see '), JSON.stringify(m))
+  }))
+
+// macOS /bin/sh is bash 3.2 in POSIX mode; the rest of this file runs under dash.
+test('[bash --posix] down then recovered: both mails arrive whole on stdin, marker cleared', { skip: spawnSync('sh', ['-c', 'command -v bash']).status === 0 ? false : 'bash not installed' }, () =>
+  withSandbox({ backend: 'NeedsLogin' }, (sb) => {
+    const bash = { shell: ['bash', '--posix'] }
+    assertFailed(sb, sb.run({}, bash), /NeedsLogin/)
+    sb.setBackend('Running')
+    assertHealthy(sb, sb.run({}, bash))
+    const m = sb.mails()
+    assert.deepEqual(m.map(subject), ['Tailscale is down on testhost: NeedsLogin', 'Tailscale recovered on testhost'])
+    assert.match(m[0], /^From: r@rdegges\.com\nTo: r@rdegges\.com\nSubject: .*\n\nTailscale on testhost is not up/)
+    assert.match(m[1], /What happened: the last report was NeedsLogin, and this run found Tailscale Running\.$/)
+  }))
+
 test('mail only on change: the same failure twice mails once; a different failure mails again', () =>
   withSandbox({ backend: 'NeedsLogin' }, (sb) => {
     assertFailed(sb, sb.run(), /NeedsLogin/)
@@ -536,6 +603,9 @@ test('without timeout/gtimeout on PATH it still runs, unbounded', () =>
     assert.notEqual(spawnSync('sh', ['-c', 'command -v timeout || command -v gtimeout'], { env: { PATH } }).status, 0, 'timeout leaked onto PATH')
     assertHealthy(sb, sb.run({ PATH }))
     assert.ok(tsCalls(sb).includes('up'))
+    // The unbounded branch of run() pipes the message straight into himalaya.
+    assert.deepEqual(sb.mails().map(subject), ['Tailscale recovered on testhost'])
+    assert.match(sb.mails()[0], /^From: r@rdegges\.com\nTo: r@rdegges\.com\n/)
   }))
 
 test('HOME with spaces and non-ASCII: marker and state land in that HOME', () =>
