@@ -7,7 +7,7 @@
      ~/.cron/logs/claude-remote-control.FAILED, which every new shell prints.
      `exec` makes the wrapper launchd's process, so a bootout's TERM reaches it
      and it stops the server cleanly. The loader never reloads this service;
-     run_onchange_after_restart-claude-remote-control.sh.tmpl restarts it when
+     run_onchange_after_zz-restart-claude-remote-control.sh.tmpl restarts it when
      it changes. */ -}}
 {{ template "launchagent.plist" (dict
 	"label" "com.rdegges.claude-remote-control"

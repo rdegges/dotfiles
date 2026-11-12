@@ -11,7 +11,10 @@
 # flag (mail on or off) restarts it too. Personal Macs only: this renders empty
 # when `work` is true, like the gate in .chezmoiignore. It runs after the
 # loader (after_ scripts run in name order), so a server that was not loaded
-# yet has just been bootstrapped, and this restarts it once more.
+# yet has just been bootstrapped, and this restarts it once more. The zz-
+# prefix makes it the last after_ script: a deferral exits 1, and chezmoi stops
+# at the first failed script, so any script named after it would wait for the
+# next quiet apply.
 #
 # A restart drops the sessions that the server runs. So it is deferred while a
 # session in ~/Code is active: when any file under the ~/Code transcript folder

@@ -1,6 +1,6 @@
 // The always-on Claude Code Remote Control server: its wrapper
 // (dot_cron/executable_claude-remote-control.sh.tmpl), its restart script
-// (run_onchange_after_restart-claude-remote-control.sh.tmpl), and its work gate.
+// (run_onchange_after_zz-restart-claude-remote-control.sh.tmpl), and its work gate.
 // Its plist, the shared template's `service` key, and the loader's service rules
 // are tested in tests/cron/launch-agents.test.mjs.
 //
@@ -68,7 +68,7 @@ import { setTimeout as sleep } from 'node:timers/promises'
 const SOURCE = new URL('../../', import.meta.url).pathname
 const read = (p) => readFileSync(join(SOURCE, p), 'utf8')
 const WRAPPER = 'dot_cron/executable_claude-remote-control.sh.tmpl'
-const RESTART = 'run_onchange_after_restart-claude-remote-control.sh.tmpl'
+const RESTART = 'run_onchange_after_zz-restart-claude-remote-control.sh.tmpl'
 const AGENT = 'private_Library/LaunchAgents/com.rdegges.claude-remote-control.plist.tmpl'
 const LOADER = 'run_onchange_after_load-launch-agents.sh.tmpl'
 const LABEL = 'com.rdegges.claude-remote-control'
@@ -1003,4 +1003,11 @@ test('restart: under a real `chezmoi apply`, it runs after the loader; a deferre
   } finally {
     rmSync(base, { recursive: true, force: true })
   }
+})
+
+test('restart: the restart script is the last after_ script chezmoi runs (a deferral exits 1 and stops the scripts after it)', () => {
+  const key = (n) => n.replace(/^run_/, '').replace(/^(onchange_|once_)/, '').replace(/^after_/, '')
+  const after = readdirSync(SOURCE).filter((n) => /^run_(onchange_|once_)?after_/.test(n)).sort((a, b) => (key(a) < key(b) ? -1 : key(a) > key(b) ? 1 : 0))
+  assert.ok(after.length > 1, `found only: ${after.join(', ')}`)
+  assert.equal(after.at(-1), RESTART, after.join('\n'))
 })

@@ -268,7 +268,7 @@ again each minute.
 
 The load script never reloads this agent while it runs, because a reload stops
 the sessions on it. Instead,
-`run_onchange_after_restart-claude-remote-control.sh.tmpl` restarts the server
+`run_onchange_after_zz-restart-claude-remote-control.sh.tmpl` restarts the server
 when its plist, the shared template, or its script changes. If a file in the
 `~/Code` transcript folder (`~/.claude/projects/-Users-<you>-Code`) changed in
 the last 20 minutes, the restart waits. It then writes
@@ -277,7 +277,7 @@ hourly job too) tries again. A running server keeps its Claude Code version
 until it restarts, for example at the next login.
 
 To stop the server on one Mac, run both commands. A `bootout` alone comes back
-at the next login or apply.
+at the next login, or at the next apply that changes a launch agent.
 
 ```bash
 launchctl disable gui/$UID/com.rdegges.claude-remote-control
@@ -285,7 +285,9 @@ launchctl bootout gui/$UID/com.rdegges.claude-remote-control
 ```
 
 To start it again, run `launchctl enable gui/$UID/com.rdegges.claude-remote-control`,
-then `chezmoi apply`.
+then `launchctl bootstrap gui/$UID ~/Library/LaunchAgents/com.rdegges.claude-remote-control.plist`.
+A plain `chezmoi apply` does not start it, because the load script runs only
+when a launch agent changes.
 
 **Security.** Each session that starts from my claude.ai account runs on every
 online personal Mac in `bypassPermissions` mode. This is the

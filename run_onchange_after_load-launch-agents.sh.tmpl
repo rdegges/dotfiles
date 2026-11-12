@@ -8,7 +8,7 @@
      condition; keep the two lists equal. */ -}}
 {{- $notWork := list "com.rdegges.claude-remote-control" -}}
 {{- /* Always-on services (KeepAlive). The loader never reloads a loaded one;
-     each has its own run_onchange_after_restart-<job>.sh.tmpl. */ -}}
+     each has its own run_onchange_after_zz-restart-<job>.sh.tmpl. */ -}}
 {{- $services := list "com.rdegges.claude-remote-control" -}}
 {{- $agents := list -}}
 {{- range glob (joinPath .chezmoi.sourceDir "private_Library/LaunchAgents/*.plist.tmpl") -}}
