@@ -147,6 +147,71 @@ and each fix sends one "recovered" mail. To keep Tailscale down on purpose,
 first run `launchctl bootout gui/$UID/com.rdegges.tailscale-watchdog`. The
 agent comes back at the next login or the next agent change.
 
+### App updates (homelab only)
+
+On the homelab server Mac, launchd runs `~/.cron/app-update.sh` at 02:40, 03:40,
+04:40, and 05:40. The first run that finds the Mac idle does one pass. The later
+runs that night find today's `~/.cron/logs/app-update.ok` and exit.
+
+Before it does anything, the job makes sure that the Mac is not in use. A check
+that cannot give an answer counts as "in use":
+
+- The local hour must be 02 to 05. A launchd run after a wake, outside these
+  hours, exits with `outside window`.
+- The network must be up (`wait-for-network.sh`).
+- No file under `~/.claude/projects` or `~/.codex/sessions` changed in the last
+  20 minutes.
+- Nobody used the keyboard or mouse in the last 30 minutes.
+- The 5-minute load average is 4 or less.
+
+The job finds each app by its exact bundle id, never by process name. To quit
+an app, it sends `kill -TERM` to the main process and waits up to 60 seconds.
+It never sends SIGKILL and never uses AppleScript. Then it runs
+`open -g -b <bundle id>`. The mail says "updated" only when the version in the
+app's `Info.plist` changed. The job never leaves an app that it quit in a
+stopped state, unless `open` fails. If an app does not come back, the job puts
+it in `~/.cron/logs/app-update.down`. Each later pass writes FAILED again until
+the app runs.
+
+| App | What the job does |
+| --- | --- |
+| Herdr | Relaunches it when `/Applications/Herdr.app.new.noindex` exists. The agent shells are children of `herdr-core hold`, not of Herdr.app. The hold process outlives the broker. After a relaunch, launchd is its parent, and its PID and socket stay the same. The launch of Herdr.app restarts `herdr-core --hc-launchd`, a broker that owns no shell. The launch also applies the staged bundle. The job records the PID and args (with `--socket`) of each hold before the quit, and starts Herdr as soon as it exits. After the relaunch, the job waits up to 60 seconds until `Herdr.app.new.noindex` is gone, then 15 seconds for the broker. If the bundle stays, or a hold is gone or has other args, or no broker runs, the job writes FAILED. A new broker PID is not a failure. If no hold runs before the quit, the job does not relaunch Herdr. If the relaunch ends a `herdr-core connect` client in a terminal or an SSH session, the mail tells you to attach it again. The `herdr_class` line at the top of the script sets the mode: `relaunch` or `report`. |
+| T3 Code, Fastmail, 1Password | Relaunch when `~/Library/Caches/<bundle id>.ShipIt/ShipItState.plist` exists and the update bundle that its `updateBundleURL` names also exists. Squirrel never deletes the plist. ShipIt moves or deletes the update bundle when it installs. After the quit, the job waits up to 120 seconds until no ShipIt for that app runs and the update bundle is gone. Then it starts the app. If the 120 seconds run out, the job waits up to 60 seconds more for ShipIt to stop, then starts the app anyway and writes FAILED. 1Password comes back locked, so `op` fails until you unlock it. On this Mac, the Squirrel probe has only been seen to fire for Claude Desktop. For T3 Code, Fastmail, and 1Password it is not measured. |
+| Claude Desktop | Same as above, but only when no `claude` process runs under it and its session files and VM disk did not change in the last hour. Otherwise the mail says "skipped: session active". |
+| Chrome | Report only, because a quit loses tabs. The mail tells you when the installed version differs from the running version. |
+| Downie, Ghostty | Report only. The job reads the Sparkle feed (`SUFeedURL`) and tells you when a newer version is available. Ghostty's `Info.plist` has no `SUFeedURL`, so the job reads Ghostty's published feed, `https://release.files.ghostty.org/appcast.xml`. Only version numbers such as `1.4.0` count. The build labels in Ghostty's feed do not count. |
+| Docker Desktop | Once a week, on Sunday (the 02:40 Sunday run is Saturday night). It also runs on any other night when `~/.cron/logs/app-update-docker.ok` is older than 8 days or missing. The job does not update Docker while a container runs. It runs `docker desktop update --quiet` (at most 20 minutes) and waits up to 10 minutes for Docker to answer again. |
+
+The job does not update the Claude Code CLI, which updates itself.
+
+The job sends mail to r@rdegges.com (himalaya account `icloud`) only when an app
+changed, failed, or needs a relaunch by hand. A night with nothing to do sends
+no mail. Warnings, such as a feed that the job cannot read, are part of the
+mail but do not cause one. The "relaunch by hand" list of the last mail is in
+`~/.cron/logs/app-update.reported`. A night with no failure, no change, and
+the same list sends no mail. A failure, or a mail that the job cannot send,
+writes `~/.cron/logs/app-update.FAILED`, and every new shell prints it. Only a
+pass with no failure removes the marker. If no pass completes in 7 days, a
+skipped run writes the marker and sends one mail.
+
+launchd appends to `~/.cron/logs/app-update.log`. The run that does the pass
+empties the log first. Thus the later runs of the night add one "already ran
+today" line each, and the log of the pass stays.
+
+Two variables are for a forced run by hand:
+
+- `APP_UPDATE_ANY_HOUR=1` removes the hour limit. The busy checks still apply.
+- `APP_UPDATE_MAIL_ACCOUNT=<account>` sends the mail from another himalaya
+  account. Use an account that does not exist to force a mail failure.
+
+`run_onchange_after_configure-homelab-updaters.sh.tmpl` sets Downie to check
+for and install its own updates (`SUEnableAutomaticChecks` and
+`SUAutomaticallyUpdate`). The script runs only when `homelab` is true. Downie
+is sandboxed, and macOS can refuse access to its preferences. If the script
+cannot write them, it writes `~/.cron/logs/homelab-updaters.FAILED` with the
+commands to run once in Terminal. Ghostty's auto-update is a setting in its own
+config file, so the script does not change it.
+
 The jobs used to run from cron. `run_onchange_after_retire-crontab.sh.tmpl`
 removes the old crontab. If it cannot (from cron, `crontab` hangs on a macOS
 privacy prompt), it writes `~/.cron/logs/crontab.FAILED`. Then run
@@ -205,7 +270,8 @@ On work machines, chezmoi also writes one AWS SSO profile and wraps the `aws` co
 ### The homelab flag
 
 A second flag, `homelab`, is true only on the homelab server Mac. It gates the
-jobs of that Mac (today: the [Tailscale watchdog](#tailscale-watchdog-homelab-only)).
+jobs of that Mac (today: the [Tailscale watchdog](#tailscale-watchdog-homelab-only)
+and the [app updates](#app-updates-homelab-only)).
 `chezmoi init` asks for it once, with the default `false`, next to `work`. A
 machine that has not run `chezmoi init` since this flag was added has no
 `homelab` key. Templates read the flag as `(index . "homelab")`, so a missing
@@ -218,12 +284,16 @@ Two files gate each homelab job, and their lists must stay equal:
 - `run_onchange_after_load-launch-agents.sh.tmpl` skips the same labels under
   the same condition.
 
+A homelab `run_` script is not in `.chezmoiignore`. Instead, its whole body is
+inside `{{ if (index . "homelab") }}`, so it is empty on other machines and
+chezmoi does not run it.
+
 To turn the flag on, do these steps on the homelab Mac:
 
 1. Run `chezmoi init` and answer "yes" to the homelab prompt.
 2. Run `chezmoi apply`.
-3. Run `launchctl print gui/$UID | grep tailscale-watchdog` and make sure that
-   the job is loaded.
+3. Run `launchctl print gui/$UID | grep -e tailscale-watchdog -e app-update`
+   and make sure that both jobs are loaded.
 
 To turn the flag off, set `homelab = false` in
 `~/.config/chezmoi/chezmoi.toml`, then run `chezmoi apply`. The load script
@@ -233,6 +303,7 @@ also delete the files by hand:
 
 ```bash
 rm -f ~/Library/LaunchAgents/com.rdegges.tailscale-watchdog.plist ~/.cron/tailscale-watchdog.sh
+rm -f ~/Library/LaunchAgents/com.rdegges.app-update.plist ~/.cron/app-update.sh
 ```
 
 If you do not delete them, the job starts again at the next login. The load
@@ -309,7 +380,12 @@ The only per-machine step is `cf auth login`. `cf` keeps its own credentials, ou
   `~/.agents/skills/<name>` to `../../.claude/skills/<name>`, so Codex reads the live
   Claude skill, not a copy. chezmoi manages only those links; the rest of
   `~/.agents/skills` belongs to the `skills` tool (`dot_agents/skills.txt`).
-- **herdr** — terminal multiplexer for AI agents, installed via Homebrew.
+- **herdr** — terminal multiplexer for AI agents. The Homebrew formula is the
+  `herdr` CLI. `/Applications/Herdr.app` is not from Homebrew and has its own
+  updater. The agent shells are children of `herdr-core hold`, which launchd
+  owns, so a quit of Herdr.app does not end the sessions. The launch of
+  Herdr.app restarts `herdr-core --hc-launchd`, a broker that owns no shell, and
+  applies a staged update.
 - **opencode** (`opencode`) — installed via Homebrew from homebrew-core.
   Not from upstream's `anomalyco/tap`: its `opencode` formula is still OpenCode 1, and its separate `opencode-v2` formula conflicts with core's.
   `~/.config/opencode/AGENTS.md` is rendered from `dot_claude/CLAUDE.md.tmpl`

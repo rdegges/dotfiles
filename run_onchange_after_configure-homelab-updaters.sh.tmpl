@@ -1,0 +1,45 @@
+{{- if (index . "homelab") -}}
+#!/bin/bash
+# Homelab server Mac only: this renders empty, so chezmoi does not run it,
+# unless `homelab` is true. Not listed in .chezmoiignore.
+#
+# Let Downie (bundle id com.charliemonroe.Downie-4, read from its Info.plist on
+# the homelab Mac) check for and install its own updates, so they apply at its
+# next quit. The nightly app-update job (dot_cron/executable_app-update.sh)
+# only reports a newer Downie, because it never quits Downie. Ghostty's
+# auto-update is a setting in its own config file; this script leaves it alone.
+#
+# Downie is sandboxed, so its preferences live in its container, and macOS can
+# refuse another program access to that container (a `defaults read` of this
+# domain from a shell has failed with "Domain ... not found"). Each value is
+# read back after the write. When a write or the read-back fails, this writes
+# ~/.cron/logs/homelab-updaters.FAILED, which every new shell prints, with the
+# commands to run once by hand, and exits 0: the hourly apply must not fail on
+# a permission that only a person at the Mac can grant.
+set -uo pipefail
+
+domain=com.charliemonroe.Downie-4
+marker="$HOME/.cron/logs/homelab-updaters.FAILED"
+fix="defaults write $domain SUEnableAutomaticChecks -bool true && defaults write $domain SUAutomaticallyUpdate -bool true && rm -f ~/.cron/logs/homelab-updaters.FAILED"
+
+# Bounded like the loader: this runs from the hourly `chezmoi update` job,
+# where nobody can answer a prompt.
+TO=$(command -v gtimeout || command -v timeout || true)
+run() { if [ -n "$TO" ]; then "$TO" -k 5 30 "$@"; else "$@"; fi; }
+
+ok=yes
+for key in SUEnableAutomaticChecks SUAutomaticallyUpdate; do
+    run defaults write "$domain" "$key" -bool true || ok=no
+    [ "$(run defaults read "$domain" "$key" 2>/dev/null)" = 1 ] || ok=no
+done
+
+mkdir -p "${marker%/*}"
+if [ "$ok" = yes ]; then
+    rm -f "$marker"
+    echo "homelab-updaters: Downie checks for and installs its own updates"
+else
+    echo "homelab-updaters: could not set Downie's updater defaults; see ~/.cron/logs/homelab-updaters.FAILED" >&2
+    echo "run '$fix' once in Terminal (macOS may ask to allow access to Downie's data)" > "$marker"
+fi
+exit 0
+{{ end -}}
