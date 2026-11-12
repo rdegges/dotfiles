@@ -276,9 +276,11 @@ only when `work = true`).
 so every `claude` session starts in bypass mode, not only `cc`. (The CLI reads
 the mode only under `permissions`; a top-level `defaultMode` is ignored.)
 
-It also sets `remoteControlAtStartup` to `true`, so every session starts the
-Remote Control bridge and I can drive it from my claude.ai account. The
-unattended `vault-agent-settings.json` profile sets it to `true` too, by choice.
+It also sets `remoteControlAtStartup` to `true`, so every interactive `claude`
+session starts the Remote Control bridge and I can drive it from my claude.ai
+account. The `vault-agent-settings.json` profile sets it to `true` too, by
+choice. As of Claude Code 2.1.322 the key does nothing for `claude -p` runs, so
+scheduled print-mode runs do not start Remote Control.
 
 `dot_zshenv` exports `CLAUDE_CODE_EVEN_MORE_DANGEROUSLY_SKIP_PERMISSIONS=1`.
 Bypass mode still blocks a few destructive commands such as `rm -rf ~`; this

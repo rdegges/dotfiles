@@ -164,6 +164,21 @@ test(`an interactive session with the repo's settings.json runs the Remote Contr
 })
 
 test(`--settings vault-agent-settings.json turns Remote Control on by itself in an interactive session`, async () => {
+  // Control: the same run with the profile's key false must start no bridge,
+  // so a pass below is caused by the profile's own key.
+  const dir = mkdtempSync(join(tmpdir(), 'vault-profile-'))
+  try {
+    const vaultOff = join(dir, 'vault-agent-settings.json')
+    writeFileSync(vaultOff, JSON.stringify({ ...VAULT, [KEY]: false }))
+    const control = await runInteractive(keyOff, ['--settings', vaultOff])
+    assert.deepEqual(
+      bridgeLines(control),
+      [],
+      `probe cannot evaluate: with ${KEY} false in user settings and in the vault profile the CLI still logged bridge lines, so they are not caused by the key`,
+    )
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
   const actual = await runInteractive(keyOff, ['--settings', VAULT_PROFILE])
   assert.ok(
     actual.includes(BRIDGE_INIT),
