@@ -168,15 +168,18 @@ The job finds each app by its exact bundle id, never by process name. To quit
 an app, it sends `kill -TERM` to the main process and waits up to 60 seconds.
 It never sends SIGKILL and never uses AppleScript. Then it runs
 `open -g -b <bundle id>`. The mail says "updated" only when the version in the
-app's `Info.plist` changed.
+app's `Info.plist` changed. The job never leaves an app that it quit in a
+stopped state, unless `open` fails. If an app does not come back, the job puts
+it in `~/.cron/logs/app-update.down`. Each later pass writes FAILED again until
+the app runs.
 
 | App | What the job does |
 | --- | --- |
-| Herdr | Relaunches it when `/Applications/Herdr.app.new.noindex` exists. The sessions live in the `herdr-core` server, which launchd owns, so they stay. The job records the `herdr-core` PIDs before the quit. If they change, the job writes FAILED ("herdr-core restarted, sessions lost"). |
-| T3 Code, Fastmail, 1Password | Relaunch when `~/Library/Caches/<bundle id>.ShipIt/ShipItState.plist` exists. After the quit, the job waits up to 120 seconds until ShipIt is done, and only then starts the app. 1Password comes back locked, so `op` fails until you unlock it. |
+| Herdr | Relaunches it when `/Applications/Herdr.app.new.noindex` exists. The sessions live in the `herdr-core` server, not in Herdr.app. `herdr-core --hc-launchd` runs as its own session leader (parent PID 1), outside the process group of Herdr.app, so a quit of Herdr.app does not stop it. The job records the `herdr-core` PIDs before the quit. If they change, the job writes FAILED ("herdr-core restarted, sessions lost"). After the quit, the job waits up to 60 seconds until `Herdr.app.new.noindex` is gone, then starts Herdr. If it stays, the job starts Herdr anyway and writes FAILED. Two lines at the top of the script set the Herdr mode: `herdr_class` (`relaunch` or `report`) and `herdr_watch` (the `herdr-core` roles whose PIDs must stay the same). |
+| T3 Code, Fastmail, 1Password | Relaunch when `~/Library/Caches/<bundle id>.ShipIt/ShipItState.plist` exists and the update bundle that its `updateBundleURL` names also exists. Squirrel never deletes the plist. ShipIt moves or deletes the update bundle when it installs. After the quit, the job waits up to 120 seconds until no ShipIt for that app runs and the update bundle is gone. Then it starts the app. If the 120 seconds run out, the job waits up to 60 seconds more for ShipIt to stop, then starts the app anyway and writes FAILED. 1Password comes back locked, so `op` fails until you unlock it. On this Mac, the Squirrel probe has only been seen to fire for Claude Desktop. For T3 Code, Fastmail, and 1Password it is not measured. |
 | Claude Desktop | Same as above, but only when no `claude` process runs under it and its session files and VM disk did not change in the last hour. Otherwise the mail says "skipped: session active". |
 | Chrome | Report only, because a quit loses tabs. The mail tells you when the installed version differs from the running version. |
-| Downie, Ghostty | Report only. The job reads the Sparkle feed (`SUFeedURL`) and tells you when a newer version is available. Ghostty's `Info.plist` has no `SUFeedURL`, so its line is always "could not check". |
+| Downie, Ghostty | Report only. The job reads the Sparkle feed (`SUFeedURL`) and tells you when a newer version is available. Ghostty's `Info.plist` has no `SUFeedURL`, so the job reads Ghostty's published feed, `https://release.files.ghostty.org/appcast.xml`. Only version numbers such as `1.4.0` count. The build labels in Ghostty's feed do not count. |
 | Docker Desktop | Once a week, on Sunday (the 02:40 Sunday run is Saturday night). It also runs on any other night when `~/.cron/logs/app-update-docker.ok` is older than 8 days or missing. The job does not update Docker while a container runs. It runs `docker desktop update --quiet` (at most 20 minutes) and waits up to 10 minutes for Docker to answer again. |
 
 The job does not update the Claude Code CLI, which updates itself.
@@ -184,9 +187,16 @@ The job does not update the Claude Code CLI, which updates itself.
 The job sends mail to r@rdegges.com (himalaya account `icloud`) only when an app
 changed, failed, or needs a relaunch by hand. A night with nothing to do sends
 no mail. Warnings, such as a feed that the job cannot read, are part of the
-mail but do not cause one. A failure, or a mail that the job cannot send,
-writes `~/.cron/logs/app-update.FAILED`, and every new shell prints it. If no
-pass completes in 7 days, a skipped run writes the marker and sends one mail.
+mail but do not cause one. The "relaunch by hand" list of the last mail is in
+`~/.cron/logs/app-update.reported`. A night with no failure, no change, and
+the same list sends no mail. A failure, or a mail that the job cannot send,
+writes `~/.cron/logs/app-update.FAILED`, and every new shell prints it. Only a
+pass with no failure removes the marker. If no pass completes in 7 days, a
+skipped run writes the marker and sends one mail.
+
+launchd appends to `~/.cron/logs/app-update.log`. The run that does the pass
+empties the log first. Thus the later runs of the night add one "already ran
+today" line each, and the log of the pass stays.
 
 Two variables are for a forced run by hand:
 
@@ -372,8 +382,9 @@ The only per-machine step is `cf auth login`. `cf` keeps its own credentials, ou
   `~/.agents/skills` belongs to the `skills` tool (`dot_agents/skills.txt`).
 - **herdr** — terminal multiplexer for AI agents. The Homebrew formula is the
   `herdr` CLI. `/Applications/Herdr.app` is not from Homebrew and has its own
-  updater. The `herdr-core` server, which launchd owns, hosts the sessions, so
-  a quit of Herdr.app does not end them.
+  updater. The `herdr-core` server hosts the sessions. `herdr-core --hc-launchd`
+  runs as its own session leader (parent PID 1), outside the process group of
+  Herdr.app, so a quit of Herdr.app does not end the sessions.
 - **opencode** (`opencode`) — installed via Homebrew from homebrew-core.
   Not from upstream's `anomalyco/tap`: its `opencode` formula is still OpenCode 1, and its separate `opencode-v2` formula conflicts with core's.
   `~/.config/opencode/AGENTS.md` is rendered from `dot_claude/CLAUDE.md.tmpl`

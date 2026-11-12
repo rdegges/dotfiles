@@ -24,18 +24,27 @@
 # and no Apple Events are used (TCC). A quit is `kill -TERM` to the app's main
 # PID, then a wait of at most 60s; never SIGKILL. A relaunch is
 # `open -g -b <bundle id>` and a check for a new PID within 60s.
-#   - Herdr (relaunch): pending = /Applications/Herdr.app.new.noindex. The
-#     agent sessions live in the herdr-core server that launchd owns, not in
-#     Herdr.app. The PIDs of `herdr-core --hc-launchd` and `herdr-core hold`
-#     are recorded before the quit and compared after the relaunch: a change
-#     is FAILED ("herdr-core restarted, sessions lost"). No server found: not
-#     relaunched.
+#   - Herdr (relaunch; herdr_class below can make it report only): pending =
+#     /Applications/Herdr.app.new.noindex. The agent sessions live in the
+#     herdr-core server, not in Herdr.app: as measured, `herdr-core
+#     --hc-launchd` runs as its own session leader (parent PID 1), outside
+#     Herdr.app's process group. The PIDs of the herdr-core roles in
+#     herdr_watch are recorded before the quit and compared after the
+#     relaunch: a change is FAILED ("herdr-core restarted, sessions lost"). No
+#     server found: not relaunched. After the quit, wait at most 60s for
+#     Herdr.app.new.noindex to go, then `open` (anyway, with FAILED, if it
+#     stays).
 #   - T3 Code, Fastmail, 1Password (relaunch, Squirrel): pending =
-#     ~/Library/Caches/<bundle id>.ShipIt/ShipItState.plist. After the app
-#     exits, wait at most 120s until no ShipIt process for that bundle id runs
-#     and ShipItState.plist is gone; only then `open`. An `open` while ShipIt
-#     still swaps the bundle can start a half-installed app. 1Password comes
-#     back locked, so `op` fails until someone unlocks it; the mail says so.
+#     ~/Library/Caches/<bundle id>.ShipIt/ShipItState.plist exists and the
+#     update bundle that its updateBundleURL names exists. Squirrel never
+#     deletes the plist; ShipIt moves or deletes the update bundle when it
+#     installs. After the app exits, wait at most 120s until no ShipIt process
+#     for that bundle id runs and the update bundle is gone; then `open`. An
+#     `open` while ShipIt still swaps the bundle can start a half-installed
+#     app. When the 120s run out, wait at most 60s more for ShipIt to exit,
+#     then `open` anyway and write FAILED: the job never leaves an app it quit
+#     down. 1Password comes back locked, so `op` fails until someone unlocks
+#     it; the mail says so.
 #   - Claude Desktop (relaunch only with no session): Squirrel, as above. Not
 #     relaunched when a `claude` process descends from Claude.app, or when a
 #     file under claude-code-sessions/ or local-agent-mode-sessions/, or
@@ -45,7 +54,8 @@
 #     framework version that the running Chrome's helpers use. Chrome's updater
 #     replaces the bundle in place, so a difference is a staged update.
 #   - Downie and Ghostty (report only; a Ghostty quit closes its shells):
-#     SUFeedURL from Info.plist, fetched with curl (20s), newest
+#     SUFeedURL from Info.plist (Ghostty's has none, so its published feed is
+#     the fallback), fetched with curl (20s), newest dotted-number
 #     sparkle:shortVersionString against the installed version. A feed that
 #     cannot be read is a warning, not FAILED.
 #   - Docker Desktop, weekly: on Sunday, or on any pass when
@@ -60,11 +70,22 @@
 #
 # Mail goes to r@rdegges.com only when something changed, failed, or needs a
 # relaunch by hand; a night with nothing to do sends nothing. Warnings ride
-# along in such a mail but do not send one. A failure writes
-# ~/.cron/logs/app-update.FAILED (replaced, never appended), which every new
-# shell prints (dot_zshrc), and exits 1. So does a mail that cannot be sent. A
-# completed pass touches app-update.ok, also when an app failed: a failed
-# relaunch is not retried the same night. A clean pass removes the marker.
+# along in such a mail but do not send one. The "relaunch by hand" list of the
+# last mail is kept in app-update.reported; a night with only that same list
+# sends no mail. A failure writes ~/.cron/logs/app-update.FAILED (replaced,
+# never appended), which every new shell prints (dot_zshrc), and exits 1. So
+# does a mail that cannot be sent. A completed pass touches app-update.ok,
+# also when an app failed: a failed relaunch is not retried the same night.
+# Only a pass with no failure removes the marker.
+#
+# An app that the job quit and could not bring back goes into
+# ~/.cron/logs/app-update.down (bundle id and date). Each pass first checks
+# that list: an app that runs again leaves it, and one that still does not is
+# FAILED again, so a later quiet night cannot hide it.
+#
+# launchd appends to app-update.log. The run that does the pass empties it
+# first, so the later "already ran today" runs add one line each and the pass
+# log stays.
 #
 # APP_UPDATE_ANY_HOUR=1 skips the hour guard. APP_UPDATE_MAIL_ACCOUNT replaces
 # the himalaya account (default icloud), for a forced mail failure. For tests
@@ -79,6 +100,14 @@ logs="$HOME/.cron/logs"
 marker="$logs/app-update.FAILED"
 stamp="$logs/app-update.ok"
 dstamp="$logs/app-update-docker.ok"
+down="$logs/app-update.down"
+reported="$logs/app-update.reported"
+# Herdr: herdr_class "relaunch" quits and reopens Herdr.app when an update is
+# staged; "report" only mails that one is staged. herdr_watch: the herdr-core
+# roles whose PIDs must be the same after the relaunch ("hc-launchd hold" or
+# "hc-launchd").
+herdr_class=relaunch
+herdr_watch="hc-launchd hold"
 # The himalaya account "icloud" is the Fastmail-backed r@rdegges.com account;
 # the name is historical (see dot_config/himalaya/config.toml.tmpl).
 account="${APP_UPDATE_MAIL_ACCOUNT:-icloud}"
@@ -162,6 +191,11 @@ if [ -e "$stamp" ] && [ "$(date -r "$stamp" +%F 2>/dev/null)" = "$today" ]; then
     say "already ran today ($today)"
     exit 0
 fi
+
+# The plist appends (>>), so the later runs of the night add their "already
+# ran today" line instead of wiping this log. This run starts it fresh.
+: > "$logs/app-update.log"
+say "run at $(date '+%F %R')"
 
 # launchd runs a job the Mac slept through as soon as the Mac wakes, often
 # before the network is back (see wait-for-network.sh). Any status but 1
@@ -262,11 +296,62 @@ shipit_busy() {
     printf '%s\n' "$out" | grep -F -q -- "/ShipIt $1.ShipIt"
 }
 
-# herdr_core: print the herdr-core server and holder PIDs ("hc-launchd:<pid>
-# hold:<pid>", sorted), or return 1 when ps fails.
+# herdr_core: print the PIDs of the herdr-core roles in herdr_watch
+# ("hc-launchd:<pid> hold:<pid>", sorted), or return 1 when ps fails.
 herdr_core() {
     out=$(ps -A -o pid= -o args= 2>/dev/null) || return 1
-    printf '%s\n' "$out" | awk '{ n = split($2, p, "/"); if (p[n] == "herdr-core" && ($3 == "--hc-launchd" || $3 == "hold")) print substr($3, 1 + ($3 ~ /^--/) * 2) ":" $1 }' | sort | tr '\n' ' ' | sed 's/ $//'
+    printf '%s\n' "$out" | awk -v watch=" $herdr_watch " '{
+        n = split($2, p, "/"); r = $3; sub(/^--/, "", r)
+        if (p[n] == "herdr-core" && ($3 == "--hc-launchd" || $3 == "hold") && index(watch, " " r " ")) print r ":" $1
+    }' | sort | tr '\n' ' ' | sed 's/ $//'
+}
+
+# shipit_update <bundle id>: set $upd to the update bundle that the app's
+# ShipItState.plist names (updateBundleURL, a file:// URL). Return 0 when that
+# bundle exists (an update waits), 1 when it does not or there is no plist,
+# and 2 when the plist cannot be read.
+shipit_update() {
+    upd=
+    st="$HOME/Library/Caches/$1.ShipIt/ShipItState.plist"
+    [ -e "$st" ] || return 1
+    u=$(plutil -extract updateBundleURL raw -o - "$st" 2>/dev/null) || return 2
+    case "$u" in file:///*) ;; *) return 2 ;; esac
+    upd=$(printf '%s' "${u#file://}" | sed 's/%20/ /g')
+    upd=${upd%/}
+    [ -n "$upd" ] && [ -e "$upd" ]
+}
+
+# app_name <bundle id>: the name the mail uses for an app the job relaunches.
+app_name() {
+    case "$1" in
+        dev.herdr.app) echo Herdr ;;
+        com.t3tools.t3code) echo "T3 Code" ;;
+        com.fastmail.mac.Fastmail) echo Fastmail ;;
+        com.1password.1password) echo 1Password ;;
+        com.anthropic.claudefordesktop) echo "Claude Desktop" ;;
+        *) echo "$1" ;;
+    esac
+}
+
+# left_down <bundle id>: the job quit this app and could not bring it back.
+left_down() { printf '%s %s\n' "$1" "$(date '+%F %R')" >> "$down"; }
+
+# check_down: for each app in app-update.down, drop it when it runs again, or
+# add FAILED again when it still does not.
+check_down() {
+    [ -s "$down" ] || { rm -f "$down"; return 0; }
+    keep=
+    while read -r did when <&3; do
+        [ -n "$did" ] || continue
+        dname=$(app_name "$did")
+        if app_pid "$did" && [ -n "$pid" ]; then
+            say "$dname: runs again (the job left it down at $when)"
+            continue
+        fi
+        add F "$dname: still not running since $when; the job quit it${err:+ ($err)}"
+        keep="$keep$did $when$nl"
+    done 3< "$down"
+    if [ -n "$keep" ]; then printf '%s' "$keep" > "$down"; else rm -f "$down"; fi
 }
 
 # claude_session <pid>: set $why and return 0 when Claude Desktop hosts a
@@ -327,24 +412,47 @@ relaunch() {
     done
 
     if [ "$kind" = shipit ]; then
-        state="$HOME/Library/Caches/$id.ShipIt/ShipItState.plist"
-        t=$(bound 120); deadline=$(($(date +%s) + t))
-        while shipit_busy "$id" || [ -e "$state" ]; do
+        # Done: no ShipIt for this bundle, and the update bundle ($upd, set by
+        # shipit_update) is gone. ShipItState.plist stays: Squirrel never
+        # deletes it.
+        t=$(bound 120); deadline=$(($(date +%s) + t)); late=
+        while shipit_busy "$id" || [ -e "$upd" ]; do
+            if [ "$(date +%s)" -ge "$deadline" ]; then late=$t; break; fi
+            sleep 1
+        done
+        if [ -n "$late" ]; then
+            # Never leave the app down: once no ShipIt for it runs (at most
+            # another 60s), start it anyway.
+            t=$(bound 60); deadline=$(($(date +%s) + t))
+            while shipit_busy "$id" && [ "$(date +%s)" -lt "$deadline" ]; do sleep 1; done
+            if shipit_busy "$id"; then why="ShipIt still runs"; else why="the update bundle is still there"; fi
+            add F "$name: ShipIt did not finish within ${late}s ($why); started anyway"
+        fi
+    fi
+
+    if [ "$kind" = herdr ]; then
+        t=$(bound 60); deadline=$(($(date +%s) + t))
+        while [ -e "$apps/Herdr.app.new.noindex" ]; do
             if [ "$(date +%s)" -ge "$deadline" ]; then
-                add F "$name: quit, but ShipIt did not finish within ${t}s (ShipIt still runs or ShipItState.plist is still there); not started, so start it by hand once ShipIt is done"; return
+                add F "$name: the staged update was still at Herdr.app.new.noindex ${t}s after the quit; started anyway"
+                break
             fi
             sleep 1
         done
     fi
 
     if ! out=$(run 30 open -g -b "$id" < /dev/null 2>&1); then
-        add F "$name: quit, but \`open -g -b $id\` failed: $out"; return
+        add F "$name: quit, but \`open -g -b $id\` failed: $out"
+        left_down "$id"
+        return
     fi
     t=$(bound 60); deadline=$(($(date +%s) + t))
     while :; do
         if app_pid "$id" && [ -n "$pid" ] && [ "$pid" != "$old" ]; then break; fi
         if [ "$(date +%s)" -ge "$deadline" ]; then
-            add F "$name: quit and \`open -g -b $id\` ran, but the app was not running ${t}s later"; return
+            add F "$name: quit and \`open -g -b $id\` ran, but the app was not running ${t}s later"
+            left_down "$id"
+            return
         fi
         sleep 1
     done
@@ -363,28 +471,42 @@ relaunch() {
     fi
 }
 
+# squirrel_pending <name> <bundle id>: return 0 when a Squirrel update waits
+# ($upd is its bundle); say why not and return 1 otherwise.
+squirrel_pending() {
+    shipit_update "$2"
+    case $? in
+        0) return 0 ;;
+        1) say "$1: no update staged" ;;
+        *) add M "$1: cannot read updateBundleURL from its ShipItState.plist; not relaunched; relaunch by hand if an update waits" ;;
+    esac
+    return 1
+}
+
 squirrel_app() { # squirrel_app <name> <bundle id> <bundle> [note]
     installed "$1" "$2" "$3" || return
-    if [ ! -e "$HOME/Library/Caches/$2.ShipIt/ShipItState.plist" ]; then say "$1: no update staged"; return; fi
+    squirrel_pending "$1" "$2" || return
     app_pid "$2" || { add F "$1: update staged, but its PID cannot be read ($err); not relaunched"; return; }
-    if [ -z "$pid" ]; then add W "$1: ShipItState.plist is there, but the app is not running; not started"; return; fi
+    if [ -z "$pid" ]; then add M "$1: update staged, but the app is not running; not started; start it by hand"; return; fi
     relaunch "$1" "$2" shipit "${4:-}"
 }
 
 herdr_app() {
     installed Herdr dev.herdr.app Herdr.app || return
     if [ ! -e "$apps/Herdr.app.new.noindex" ]; then say "Herdr: no update staged"; return; fi
+    staged=$(version "$apps/Herdr.app.new.noindex/Contents/Info.plist")
+    if [ "$herdr_class" != relaunch ]; then add M "Herdr: update staged ($staged); relaunch by hand"; return; fi
     app_pid dev.herdr.app || { add F "Herdr: update staged, but its PID cannot be read ($err); not relaunched"; return; }
-    if [ -z "$pid" ]; then add W "Herdr: an update is staged, but Herdr.app is not running; not started"; return; fi
+    if [ -z "$pid" ]; then add M "Herdr: update staged ($staged), but Herdr.app is not running; not started; start it by hand"; return; fi
     relaunch Herdr dev.herdr.app herdr
 }
 
 claude_app() {
     n="Claude Desktop" id=com.anthropic.claudefordesktop
     installed "$n" "$id" Claude.app || return
-    if [ ! -e "$HOME/Library/Caches/$id.ShipIt/ShipItState.plist" ]; then say "$n: no update staged"; return; fi
+    squirrel_pending "$n" "$id" || return
     app_pid "$id" || { add F "$n: update staged, but its PID cannot be read ($err); not relaunched"; return; }
-    if [ -z "$pid" ]; then add W "$n: ShipItState.plist is there, but the app is not running; not started"; return; fi
+    if [ -z "$pid" ]; then add M "$n: update staged, but the app is not running; not started; start it by hand"; return; fi
     claude_session "$pid"
     case $? in
         0) add M "$n: update staged; skipped: session active ($why); relaunch by hand"; return ;;
@@ -412,10 +534,17 @@ chrome_app() {
     fi
 }
 
-appcast_app() { # appcast_app <name> <bundle id> <bundle> [note]
+# appcast_app <name> <bundle id> <bundle> [note] [fallback feed]: the fallback
+# feed is used only when Info.plist has no SUFeedURL.
+appcast_app() {
     installed "$1" "$2" "$3" || return
     inst=$(version "$plist")
-    feed=$(plutil -extract SUFeedURL raw -o - "$plist" 2>/dev/null) || { add W "$1: could not check (no SUFeedURL in its Info.plist)"; return; }
+    feed=$(plutil -extract SUFeedURL raw -o - "$plist" 2>/dev/null) || feed=
+    if [ -z "$feed" ]; then
+        feed=${5:-}
+        if [ -z "$feed" ]; then add W "$1: could not check (no SUFeedURL in its Info.plist)"; return; fi
+        say "$1: no SUFeedURL in its Info.plist; using $feed"
+    fi
     case "$feed" in
         https://*) ;;
         *) add W "$1: could not check (SUFeedURL is not https: $feed)"; return ;;
@@ -423,12 +552,14 @@ appcast_app() { # appcast_app <name> <bundle id> <bundle> [note]
     if ! body=$(run 25 curl -fsSL --max-time 20 "$feed" < /dev/null 2>&1); then
         add W "$1: could not check (fetch of $feed failed: $body)"; return
     fi
+    # Only dotted numbers count: Ghostty's feed also has build labels such as
+    # "663205b5 (2024-12-20)", which are not versions.
     newest=
     for v in $(printf '%s\n' "$body" | grep -o -e 'sparkle:shortVersionString="[^"]*"' -e '<sparkle:shortVersionString>[^<]*' \
-        | sed -e 's/^sparkle:shortVersionString="//' -e 's/"$//' -e 's/^<sparkle:shortVersionString>//' | LC_ALL=C tr -cd '0-9A-Za-z.+\n-'); do
+        | sed -e 's/^sparkle:shortVersionString="//' -e 's/"$//' -e 's/^<sparkle:shortVersionString>//' | grep -E '^[0-9]+(\.[0-9]+)*$'); do
         if [ -z "$newest" ] || vnewer "$v" "$newest"; then newest=$v; fi
     done
-    if [ -z "$newest" ]; then add W "$1: could not check (no sparkle:shortVersionString in $feed)"; return; fi
+    if [ -z "$newest" ]; then add W "$1: could not check (no dotted version number in the appcast at $feed)"; return; fi
     if vnewer "$newest" "$inst"; then
         add M "$1: update available ($inst -> $newest); relaunch by hand${4:-}"
     else
@@ -480,6 +611,7 @@ docker_app() {
 
 # --- The pass ------------------------------------------------------------------
 
+check_down
 herdr_app
 squirrel_app "T3 Code" com.t3tools.t3code "T3 Code (Beta).app"
 squirrel_app Fastmail com.fastmail.mac.Fastmail Fastmail.app
@@ -487,13 +619,25 @@ squirrel_app 1Password com.1password.1password 1Password.app "; now locked: \`op
 claude_app
 chrome_app
 appcast_app Downie com.charliemonroe.Downie-4 "Downie 4.app"
-appcast_app Ghostty com.mitchellh.ghostty Ghostty.app " (the job never quits Ghostty: a quit closes its shells)"
+appcast_app Ghostty com.mitchellh.ghostty Ghostty.app " (the job never quits Ghostty: a quit closes its shells)" \
+    https://release.files.ghostty.org/appcast.xml
 docker_app
 
 touch "$stamp"
 say "pass complete"
 
-[ -n "$F$C$M" ] || { rm -f "$marker"; say "nothing to report; no mail"; exit 0; }
+if [ -z "$F$C" ]; then
+    if [ -z "$M" ]; then
+        rm -f "$marker" "$reported"
+        say "nothing to report; no mail"
+        exit 0
+    fi
+    # The same "relaunch by hand" list as the last mail: no new mail.
+    if [ -f "$reported" ] && [ "$(cat "$reported")" = "${M%"$nl"}" ]; then
+        say "the same items as the last mail need a hand; no mail"
+        exit 0
+    fi
+fi
 
 body="App update pass on $host, $(date '+%F %R')."
 for s in "Failed:F" "Updated or relaunched:C" "Relaunch by hand:M" "Warnings:W"; do
@@ -505,6 +649,9 @@ subject="App updates on $host"
 [ -z "$F" ] || subject="$subject: FAILED"
 mailed=yes
 send_mail "$subject" "$body" || mailed=no
+if [ "$mailed" = yes ]; then
+    if [ -n "$M" ]; then printf '%s' "$M" > "$reported"; else rm -f "$reported"; fi
+fi
 
 if [ -n "$F" ]; then
     first=$(printf '%s' "$F" | head -n 1); first=${first#- }

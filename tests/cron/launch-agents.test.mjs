@@ -87,7 +87,9 @@ const HOMELAB_AGENTS = {
   },
   'app-update': {
     schedule: APP_UPDATE_HOURS.map((h) => ({ Hour: h, Minute: 40 })),
-    command: '{ date; $HOME/.cron/app-update.sh; } > $HOME/.cron/logs/app-update.log 2>&1',
+    // Appends: the script empties the log itself when it does the pass, so
+    // the later "already ran today" runs keep the pass log.
+    command: '{ date; $HOME/.cron/app-update.sh; } >> $HOME/.cron/logs/app-update.log 2>&1',
   },
 }
 const HOMELAB_LABELS = Object.keys(HOMELAB_AGENTS).map((j) => `com.rdegges.${j}`).sort()
@@ -275,6 +277,8 @@ test('agents: the app update runs at 02:40-05:40, inside its own 02:00-05:59 win
   assert.deepEqual(p.StartCalendarInterval.map((e) => [e.Hour, e.Minute]), [[2, 40], [3, 40], [4, 40], [5, 40]])
   // The script's hour guard passes only 02-05; each run must fall inside it.
   assert.match(read('dot_cron/executable_app-update.sh'), /^ {8}02 \| 03 \| 04 \| 05\) ;;$/m)
+  assert.match(p.ProgramArguments[2], / >> \$HOME\/\.cron\/logs\/app-update\.log 2>&1$/, 'the app update must append to its log')
+  assert.match(read('dot_cron/executable_app-update.sh'), /^: > "\$logs\/app-update\.log"$/m)
   const others = Object.entries(AGENTS).filter(([j]) => j !== 'app-update').flatMap(([, a]) => a.schedule.map((e) => e.Minute))
   assert.ok(!others.includes(40), `another job runs at :40: ${others.join(',')}`)
 })

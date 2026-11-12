@@ -26,33 +26,43 @@
 //     `claude` CLI process is never signalled, and pgrep, pkill, killall, and
 //     osascript are never run;
 //   - Herdr, T3 Code, Fastmail, and 1Password relaunch only when an update is
-//     staged and the app runs; `open` runs only after the app exited and,
-//     for Squirrel apps, after ShipIt finished (and never when the ShipIt wait
-//     runs out); an app that ignores SIGTERM is left running and never gets
-//     SIGKILL; an app that does not come back, a failed `open`, and a changed
-//     herdr-core PID each write FAILED; no herdr-core server means no relaunch;
+//     staged and the app runs (a staged update for an app that is not running
+//     is mailed); a Squirrel update is staged only while the bundle that
+//     ShipItState.plist's updateBundleURL names exists, and the plist, which
+//     Squirrel never deletes, is never waited on; `open` runs only after the
+//     app exited and, for Squirrel apps, after ShipIt finished, or, when the
+//     wait runs out, anyway with FAILED, so the job never leaves an app it quit
+//     down unless `open` fails; Herdr is opened after its staged bundle moved
+//     into place, or anyway with FAILED; an app that ignores SIGTERM is left
+//     running and never gets SIGKILL; an app that does not come back, a failed
+//     `open`, and a changed herdr-core PID each write FAILED; an app left down
+//     stays FAILED on later nights until it runs again; no herdr-core server
+//     means no relaunch; each Herdr switch (report only, server PID only) is a
+//     one-line change that works;
 //   - Claude Desktop is not relaunched while a claude process runs under it or
 //     its session files or VM disk changed in the last hour, or when that
 //     cannot be checked;
 //   - Chrome, Downie, and Ghostty are never signalled: a staged Chrome, a newer
-//     appcast version (attribute or element form, newest of several), and a
-//     feed that cannot be read are reported as such;
+//     appcast version (attribute or element form, newest of several, dotted
+//     numbers only, Ghostty from its published feed because its Info.plist has
+//     none), and a feed that cannot be read are reported as such;
 //   - Docker updates on Sunday or when its stamp is over 8 days old or missing,
 //     not when a container runs or Docker does not answer, and a failed update
 //     or a Docker that does not come back writes FAILED;
 //   - the mail says "updated" only when the version changed; it goes to
 //     r@rdegges.com from the himalaya account icloud (or
 //     APP_UPDATE_MAIL_ACCOUNT), whole on stdin, only when something changed,
-//     failed, or needs a hand; mail and marker text is printable ASCII; a mail
-//     that cannot be sent writes FAILED and exits 1; the 7-day stale alert
-//     mails once;
+//     failed, or needs a hand, and not again for the same "relaunch by hand"
+//     list; mail and marker text is printable ASCII; a mail that cannot be
+//     sent writes FAILED and exits 1; the 7-day stale alert mails once; the
+//     pass empties its log and the later runs of the night keep it;
 //   - the run script renders only with homelab true and writes the two Sparkle
 //     keys for Downie's measured bundle id, and a refused write leaves a marker
 //     with the fix and does not fail the apply.
 //
 // What a pass does not prove: real ShipIt or Herdr installs (whether SIGTERM
-// lets Squirrel install, whether ShipIt removes ShipItState.plist, how Herdr
-// swaps in Herdr.app.new.noindex), real lsappinfo, ioreg, or Docker Desktop
+// lets Squirrel install, whether ShipIt removes the update bundle in time,
+// whether Herdr moves Herdr.app.new.noindex at quit), real lsappinfo, ioreg, or Docker Desktop
 // output beyond the shapes copied here from the homelab Mac, whether Downie's
 // sandbox lets `defaults` write its keys, real launchd timing, macOS bash 3.2
 // (this runs under Debian bash), or real mail delivery. Those need the
@@ -92,10 +102,19 @@ const APPS = {
   claude: { name: 'Claude Desktop', id: 'com.anthropic.claudefordesktop', bundle: 'Claude.app', exe: 'Claude', version: '5.1231.0' },
   chrome: { name: 'Chrome', id: 'com.google.Chrome', bundle: 'Google Chrome.app', exe: 'Google Chrome', version: '157.0.8103.52' },
   downie: { name: 'Downie', id: 'com.charliemonroe.Downie-4', bundle: 'Downie 4.app', exe: 'Downie 4', version: '4.13.3', feed: 'https://software.example.test/downie/v4/updates.xml' },
-  // No SUFeedURL: the real Ghostty.app Info.plist has none.
+  // No SUFeedURL: the real Ghostty.app Info.plist has none, so the job uses
+  // GHOSTTY_FEED.
   ghostty: { name: 'Ghostty', id: 'com.mitchellh.ghostty', bundle: 'Ghostty.app', exe: 'ghostty', version: '1.4.0' },
   docker: { name: 'Docker Desktop', id: 'com.docker.docker', bundle: 'Docker.app', exe: 'Docker', version: '4.98.0' },
 }
+
+const GHOSTTY_FEED = 'https://release.files.ghostty.org/appcast.xml'
+// The shape of GHOSTTY_FEED as fetched on 2026-11-11 (element form, one item
+// per line, release notes cut): the first item is a build label, not a version.
+const ghosttyAppcast = (...versions) =>
+  "<?xml version='1.0' encoding='utf-8'?>\n<rss xmlns:sparkle=\"http://www.andymatuschak.org/xml-namespaces/sparkle\" version=\"2.0\">\n    <channel>\n        <title>Ghostty</title>\n" +
+  ['663205b5 (2024-12-20)', ...versions].map((v, i) => `    <item><title>Build ${8346 + i}</title><pubDate>Fri, 20 Dec 2024 22:38:00 +0000</pubDate><sparkle:version>${8346 + i}</sparkle:version><sparkle:shortVersionString>${v}</sparkle:shortVersionString><sparkle:minimumSystemVersion>13.0.0</sparkle:minimumSystemVersion><description>notes</description><enclosure url="https://release.files.ghostty.org/x/ghostty-macos-universal.zip" type="application/octet-stream" length="1" /></item>\n`).join('') +
+  '    </channel>\n</rss>\n'
 
 // A Sparkle appcast in the shape of Downie's real one (attribute form).
 const appcast = (...versions) =>
@@ -108,9 +127,12 @@ const appcast = (...versions) =>
 // $STATE/signals. Modes: app (exits on SIGTERM), stuck (ignores it), claude (a
 // process named "claude", like the Claude Code CLI), with-claude (an app with
 // a claude child), chrome:<version> (an app with a helper child whose args are
-// [helper title]), shipit:<seconds>:<file>:<app pid> (like the real ShipIt:
-// waits until <app pid> has exited, then deletes <file> and exits <seconds>
-// later). Every PID goes to $STATE/pids for cleanup.
+// [helper title]), shipit:<seconds>:<dir>:<app pid> (like the real ShipIt:
+// waits until <app pid> has exited, then, <seconds> later, deletes the update
+// bundle <dir> and exits; ShipItState.plist stays, as Squirrel never deletes
+// it), herdrswap:<seconds>:<apps dir>:<app pid> (waits until <app pid> has
+// exited, then, <seconds> later, moves Herdr.app.new.noindex over Herdr.app).
+// Every PID goes to $STATE/pids for cleanup.
 const FAKEAPP = String.raw`#!${PERL}
 use strict; use warnings; use POSIX ();
 my ($mode, $title, $helper) = @ARGV;
@@ -128,10 +150,15 @@ if ($mode =~ /^chrome:/) { my $c = fork() // die; if ($c == 0) { note('pids', $$
 $0 = $title;
 my $stuck = $mode eq 'stuck';
 $SIG{TERM} = sub { note('signals', "TERM $title"); exit 0 unless $stuck };
+sub wait_exit { my $app = shift; while (1) { my $st = qx(ps -o stat= -p $app 2>/dev/null); last if $? != 0 || $st =~ /^\s*(Z|$)/; select(undef, undef, undef, 0.2) } }
 if ($mode =~ /^shipit:(\d+):(.*):(\d+)$/) {
-  my ($n, $f, $app) = ($1, $2, $3);
-  while (1) { my $st = qx(ps -o stat= -p $app 2>/dev/null); last if $? != 0 || $st =~ /^\s*(Z|$)/; select(undef, undef, undef, 0.2) }
-  sleep $n; unlink $f; exit 0
+  my ($n, $d, $app) = ($1, $2, $3);
+  wait_exit($app); sleep $n; system('rm', '-rf', $d); exit 0
+}
+if ($mode =~ /^herdrswap:(\d+):(.*):(\d+)$/) {
+  my ($n, $apps, $app) = ($1, $2, $3);
+  wait_exit($app); sleep $n;
+  system('rm', '-rf', "$apps/Herdr.app"); rename("$apps/Herdr.app.new.noindex", "$apps/Herdr.app"); unlink("$apps/Herdr.app.new.json.noindex"); exit 0
 }
 sleep 1 while 1;
 `
@@ -152,11 +179,12 @@ const STUBS = {
     '#!/bin/sh\n' + LOG +
     'id=$3\n' +
     'procs=$(ps -A -o args=)\n' +
-    'if [ -e "$HOME/Library/Caches/$id.ShipIt/ShipItState.plist" ] || printf "%s\\n" "$procs" | grep -F -q -- "/ShipIt $id.ShipIt"; then echo "$id" >> "$STATE/early"; fi\n' +
+    'if { [ -f "$STATE/upd/$id" ] && [ -e "$(cat "$STATE/upd/$id")" ]; } || printf "%s\\n" "$procs" | grep -F -q -- "/ShipIt $id.ShipIt"; then echo "$id" >> "$STATE/early"; fi\n' +
     'case " ${STUB_OPEN_FAIL:-} " in *" $id "*) echo "LSOpenURLsWithRole() failed with error -10814" >&2; exit 1 ;; esac\n' +
     'if [ -f "$STATE/update/$id" ]; then sed -i "s/^CFBundleShortVersionString=.*/CFBundleShortVersionString=$(cat "$STATE/update/$id")/" "$(cat "$STATE/plist/$id")"; fi\n' +
-    'if [ "$id" = dev.herdr.app ] && [ -d "$APP_UPDATE_APPS/Herdr.app.new.noindex" ]; then rm -rf "$APP_UPDATE_APPS/Herdr.app"; mv "$APP_UPDATE_APPS/Herdr.app.new.noindex" "$APP_UPDATE_APPS/Herdr.app"; fi\n' +
-    'if [ "$id" = dev.herdr.app ] && [ -n "${STUB_HERDR_RESTART:-}" ]; then kill "$(cat "$STATE/herdr-server")"; "$REAL/fakeapp" app "$HOME/.local/bin/herdr-core --hc-launchd /tmp/hc-ready-2" > "$STATE/herdr-server"; fi\n' +
+    // STUB_HERDR_RESTART=hold restarts the holder; any other value, the server.
+    'if [ "$id" = dev.herdr.app ] && [ "${STUB_HERDR_RESTART:-}" = hold ]; then kill "$(cat "$STATE/herdr-hold")"; "$REAL/fakeapp" app "$HOME/.local/bin/herdr-core hold --socket /tmp/holder-2.sock" > "$STATE/herdr-hold";\n' +
+    'elif [ "$id" = dev.herdr.app ] && [ -n "${STUB_HERDR_RESTART:-}" ]; then kill "$(cat "$STATE/herdr-server")"; "$REAL/fakeapp" app "$HOME/.local/bin/herdr-core --hc-launchd /tmp/hc-ready-2" > "$STATE/herdr-server"; fi\n' +
     'case " ${STUB_NOAPP:-} " in *" $id "*) exit 0 ;; esac\n' +
     '"$REAL/fakeapp" app "$(cat "$STATE/title/$id")" > "$STATE/apps/$id"\n',
   // plutil -extract <key> raw -o - <file>; the fake Info.plist holds key=value lines.
@@ -224,7 +252,7 @@ function sandbox({ installed = Object.keys(APPS) } = {}) {
   const state = join(base, 'state')
   const real = join(base, 'real')
   const apps = join(base, 'Apps dir')
-  for (const d of [home, bin, real, apps, ...['apps', 'title', 'plist', 'update', 'feeds'].map((s) => join(state, s))]) mkdirSync(d, { recursive: true })
+  for (const d of [home, bin, real, apps, ...['apps', 'title', 'plist', 'update', 'upd', 'feeds'].map((s) => join(state, s))]) mkdirSync(d, { recursive: true })
   for (const [n, s] of Object.entries(STUBS)) {
     writeFileSync(join(bin, n), s)
     chmodSync(join(bin, n), 0o755)
@@ -247,6 +275,7 @@ function sandbox({ installed = Object.keys(APPS) } = {}) {
     writeFileSync(join(state, 'plist', a.id), plistOf(k))
     writeFileSync(join(state, 'title', a.id), join(apps, a.bundle, 'Contents', 'MacOS', a.exe))
     if (a.feed) writeFileSync(feedFile(a.feed), appcast(a.version))
+    if (k === 'ghostty') writeFileSync(feedFile(GHOSTTY_FEED), ghosttyAppcast('1.3.1', a.version))
   }
   // A pass ran yesterday, and Docker updated 2 days ago: not stale, not due.
   const stamp = join(logs, 'app-update.ok')
@@ -266,6 +295,7 @@ function sandbox({ installed = Object.keys(APPS) } = {}) {
     return Number(r.stdout.trim())
   }
   const shipitState = (k) => join(home, 'Library', 'Caches', `${APPS[k].id}.ShipIt`, 'ShipItState.plist')
+  const updateBundle = (k) => join(home, 'Library', 'Caches', `${APPS[k].id}.ShipIt`, 'update.Ab C1', APPS[k].bundle)
 
   const sb = {
     base, home, bin, logs, apps, stamp, dstamp,
@@ -283,33 +313,43 @@ function sandbox({ installed = Object.keys(APPS) } = {}) {
       writeFileSync(join(state, 'apps', a.id), String(pid))
       return pid
     },
-    // stage <app> [new version]: an update waits. Squirrel apps get a
-    // ShipItState.plist; Herdr gets Herdr.app.new.noindex with that version.
-    // The new version lands at the next `open` (or the ShipIt finish).
-    stage(k, version) {
+    // stage <app> [new version] [{ swap }]: an update waits. Squirrel apps get
+    // a ShipItState.plist whose updateBundleURL names an update bundle (in a
+    // directory with a space, so the URL holds %20), and that bundle. Herdr
+    // gets Herdr.app.new.noindex with that version and, when Herdr runs and
+    // swap is not false, a swapper that moves it into place after the quit.
+    // A Squirrel app's new version lands at the next `open`.
+    stage(k, version, { swap = true } = {}) {
       const a = APPS[k]
       if (k === 'herdr') {
         writePlist(join(apps, 'Herdr.app.new.noindex', 'Contents', 'Info.plist'), a, version ?? '0.1.15')
         writeFileSync(join(apps, 'Herdr.app.new.json.noindex'), `{"version":"${version ?? '0.1.15'}"}`)
+        if (swap && existsSync(join(state, 'apps', a.id))) fake(`herdrswap:1:${apps}:${sb.pidOf(k)}`, 'herdr swapper')
         return
       }
+      const upd = updateBundle(k)
+      mkdirSync(join(upd, 'Contents'), { recursive: true })
       mkdirSync(join(shipitState(k), '..'), { recursive: true })
-      writeFileSync(shipitState(k), 'bundleIdentifier=' + a.id + '\n')
+      writeFileSync(shipitState(k), `bundleIdentifier=${a.id}\nupdateBundleURL=file://${upd.replace(/ /g, '%20')}/\n`)
+      writeFileSync(join(state, 'upd', a.id), upd)
       if (version) writeFileSync(join(state, 'update', a.id), version)
     },
+    updateBundle: (k) => updateBundle(k),
     // shipit <app> <seconds>: a ShipIt for that app, with the real command
-    // line shape, that waits for the running app to exit, then removes
-    // ShipItState.plist and exits after <seconds>. Start the app first.
+    // line shape, that waits for the running app to exit, then deletes the
+    // update bundle and exits after <seconds>. Start the app first.
     shipit(k, seconds) {
       const a = APPS[k]
       const app = existsSync(join(state, 'apps', a.id)) ? readFileSync(join(state, 'apps', a.id), 'utf8').trim() : '999999'
-      return fake(`shipit:${seconds}:${shipitState(k)}:${app}`, `${join(apps, a.bundle)}/Contents/Frameworks/Squirrel.framework/Resources/ShipIt ${a.id}.ShipIt ${shipitState(k)}`)
+      return fake(`shipit:${seconds}:${join(updateBundle(k), '..')}:${app}`, `${join(apps, a.bundle)}/Contents/Frameworks/Squirrel.framework/Resources/ShipIt ${a.id}.ShipIt ${shipitState(k)}`)
     },
-    // The herdr-core session server and holder, as launchd owns them.
+    // The herdr-core session server and holder: their own session leaders,
+    // outside Herdr.app's process group, as measured.
     herdrCore() {
       const server = fake('app', `${home}/.local/bin/herdr-core --hc-launchd /tmp/hc-launchd-1/ready`)
       const hold = fake('app', `${home}/.local/bin/herdr-core hold --socket ${home}/.local/state/herdr-core/default/default.holder.1.sock`)
       writeFileSync(join(state, 'herdr-server'), String(server))
+      writeFileSync(join(state, 'herdr-hold'), String(hold))
       return { server, hold }
     },
     // claudeFiles([recent]): Claude Desktop's session dirs and VM disk, all
@@ -332,7 +372,7 @@ function sandbox({ installed = Object.keys(APPS) } = {}) {
     },
     // claudeCli(): a Claude Code CLI session outside Claude Desktop.
     claudeCli: () => fake('claude', 'claude cli'),
-    feed(k, xml) { writeFileSync(feedFile(APPS[k].feed), xml) },
+    feed(k, xml) { writeFileSync(feedFile(APPS[k].feed ?? (k === 'ghostty' ? GHOSTTY_FEED : undefined)), xml) },
     setVersion(k, v) { writePlist(plistOf(k), APPS[k], v) },
     calls: () => lines(calls),
     signals: () => lines(join(state, 'signals')),
@@ -343,9 +383,9 @@ function sandbox({ installed = Object.keys(APPS) } = {}) {
         .sort((a, b) => Number(a.slice(5)) - Number(b.slice(5)))
         .map((f) => readFileSync(join(state, f), 'utf8')),
     pidOf: (k) => Number(readFileSync(join(state, 'apps', APPS[k].id), 'utf8')),
-    run(env = {}, { hour = '03', weekday = 3 } = {}) {
+    run(env = {}, { hour = '03', weekday = 3, script = SCRIPT } = {}) {
       const t0 = Date.now()
-      const r = spawnSync(BASH, [SCRIPT], {
+      const r = spawnSync(BASH, [script], {
         encoding: 'utf8',
         // Built from scratch so the host's APP_UPDATE_* never leak in.
         env: {
@@ -613,8 +653,11 @@ test('no-op night: nothing staged, everything current: no signal, no open, no ma
     assert.ok(stampIsToday(sb))
     assert.equal(existsSync(sb.marker), false)
     assert.match(r.stdout, /nothing to report; no mail/)
-    // Ghostty has no SUFeedURL (as on the real Mac): a warning, which sends no mail alone.
-    assert.match(r.stdout, /warning: Ghostty: could not check \(no SUFeedURL in its Info\.plist\)/)
+    // Ghostty has no SUFeedURL (as on the real Mac): its published feed is
+    // checked instead, and the build label in it is not taken for a version.
+    assert.match(r.stdout, /Ghostty: no SUFeedURL in its Info\.plist; using https:\/\/release\.files\.ghostty\.org\/appcast\.xml/)
+    assert.match(r.stdout, /Ghostty: up to date \(1\.4\.0; newest in the appcast: 1\.4\.0\)/)
+    assert.doesNotMatch(r.stdout, /warning:/)
     assertForbiddenUnused(sb)
   }))
 
@@ -682,16 +725,63 @@ test('Herdr: nothing staged: not touched', () =>
     assert.deepEqual(sb.signals(), [])
   }))
 
-test('Herdr: staged but Herdr.app not running: not started, a warning only (no mail)', () =>
+test('Herdr: staged but Herdr.app not running: not started, and mailed for a start by hand', () =>
   withSandbox({}, (sb) => {
     sb.herdrCore()
     sb.stage('herdr')
     const r = sb.run()
     assert.equal(r.status, 0, r.stdout + r.stderr)
     assert.deepEqual(called(sb, 'open'), [])
-    assert.match(r.stdout, /warning: Herdr: an update is staged, but Herdr\.app is not running; not started/)
-    assert.deepEqual(sb.mails(), [])
+    assert.match(sb.mails()[0], /\nRelaunch by hand:\n- Herdr: update staged \(0\.1\.15\), but Herdr\.app is not running; not started; start it by hand\n/)
   }))
+
+test('Herdr: the staged update stays after the quit: `open` runs anyway after the wait, FAILED', () =>
+  withSandbox({}, (sb) => {
+    const { server, hold } = sb.herdrCore()
+    sb.start('herdr')
+    sb.stage('herdr', '0.1.15', { swap: false })
+    const r = sb.run()
+    assert.equal(r.status, 1, r.stdout + r.stderr)
+    assert.deepEqual(opens(sb), ['dev.herdr.app'])
+    assert.ok(alive(sb.pidOf('herdr')), 'Herdr was left down')
+    assert.ok(alive(server) && alive(hold))
+    assertMarker(sb, /Herdr: the staged update was still at Herdr\.app\.new\.noindex 3s after the quit; started anyway/)
+    assert.match(sb.mails()[0], /- Herdr relaunched, but the version is unchanged \(0\.1\.13\)/)
+  }))
+
+// The two switches at the top of the script: each is one line to change.
+function scriptWith(sb, from, to) {
+  const src = read('dot_cron/executable_app-update.sh')
+  assert.equal(src.split(from).length, 2, `the script has no single line ${from}`)
+  const copy = join(sb.base, 'app-update.sh')
+  writeFileSync(copy, src.replace(from, to))
+  return copy
+}
+
+test('Herdr switch: herdr_class=report: a staged update is mailed, Herdr is never signalled', () =>
+  withSandbox({}, (sb) => {
+    sb.herdrCore()
+    sb.start('herdr')
+    sb.stage('herdr')
+    const r = sb.run({}, { script: scriptWith(sb, '\nherdr_class=relaunch\n', '\nherdr_class=report\n') })
+    assert.equal(r.status, 0, r.stdout + r.stderr)
+    assert.deepEqual(sb.signals(), [])
+    assert.deepEqual(called(sb, 'open'), [])
+    assert.match(sb.mails()[0], /- Herdr: update staged \(0\.1\.15\); relaunch by hand\n/)
+  }))
+
+for (const [watch, restart, failed] of [['hc-launchd hold', 'hold', true], ['hc-launchd', 'hold', false], ['hc-launchd', 'server', true]]) {
+  test(`Herdr switch: herdr_watch="${watch}": a restarted ${restart} is ${failed ? '' : 'not '}FAILED`, () =>
+    withSandbox({}, (sb) => {
+      sb.herdrCore()
+      sb.start('herdr')
+      sb.stage('herdr')
+      const r = sb.run({ STUB_HERDR_RESTART: restart }, { script: scriptWith(sb, '\nherdr_watch="hc-launchd hold"\n', `\nherdr_watch="${watch}"\n`) })
+      assert.equal(r.status, failed ? 1 : 0, r.stdout + r.stderr)
+      assert.equal(/herdr-core restarted, sessions lost/.test(r.stdout), failed, r.stdout)
+      assert.match(r.stdout, /changed: Herdr updated and relaunched, 0\.1\.13 -> 0\.1\.15/)
+    }))
+}
 
 // --- Squirrel apps (T3 Code, Fastmail, 1Password) ----------------------------------
 
@@ -705,32 +795,75 @@ test('T3 Code staged: SIGTERM, wait for ShipIt to finish, then open; version 0.1
     assert.deepEqual(sb.signals(), [`TERM ${join(sb.apps, 'T3 Code (Beta).app/Contents/MacOS/T3 Code (Beta)')}`])
     assert.deepEqual(opens(sb), ['com.t3tools.t3code'])
     assert.deepEqual(sb.early(), [], '`open` ran while ShipIt was still at work')
-    assert.equal(existsSync(sb.shipitState('t3')), false)
+    // Squirrel never deletes ShipItState.plist; the update bundle is what goes.
+    assert.equal(existsSync(sb.shipitState('t3')), true)
+    assert.equal(existsSync(sb.updateBundle('t3')), false)
     assert.ok(!alive(old))
     assert.ok(alive(sb.pidOf('t3')))
     assert.match(sb.mails()[0], /- T3 Code updated and relaunched, 0\.1\.7 -> 0\.1\.8\n/)
   }))
 
-test('Squirrel: ShipIt still running when the wait runs out: FAILED, and `open` never runs', () =>
+test('Squirrel: ShipIt still busy past the bound: after at most 60s more, `open` runs anyway, the app is up, FAILED', () =>
   withSandbox({}, (sb) => {
-    sb.start('fastmail')
+    const old = sb.start('fastmail')
     sb.stage('fastmail', '1.9.1')
     sb.shipit('fastmail', 600)
     const r = sb.run()
     assert.equal(r.status, 1, r.stdout + r.stderr)
-    assert.deepEqual(called(sb, 'open'), [])
-    assertMarker(sb, /Fastmail: quit, but ShipIt did not finish within 3s \(ShipIt still runs or ShipItState\.plist is still there\); not started/)
-    assert.match(sb.mails()[0], /Failed:\n- Fastmail: quit, but ShipIt did not finish/)
+    assert.ok(r.elapsed >= 5 && r.elapsed < 30, `took ${r.elapsed}s (3s bound, then 3s more for ShipIt)`)
+    assert.deepEqual(opens(sb), ['com.fastmail.mac.Fastmail'])
+    assert.notEqual(sb.pidOf('fastmail'), old)
+    assert.ok(alive(sb.pidOf('fastmail')), 'the job left Fastmail down')
+    assertMarker(sb, /Fastmail: ShipIt did not finish within 3s \(ShipIt still runs\); started anyway/)
+    assert.match(sb.mails()[0], /Failed:\n- Fastmail: ShipIt did not finish within 3s \(ShipIt still runs\); started anyway\n/)
+    assert.equal(existsSync(join(sb.logs, 'app-update.down')), false, 'the app is up, so it is not on the down list')
   }))
 
-test('Squirrel: ShipIt is gone but ShipItState.plist stays: FAILED after the wait, no `open`', () =>
+test('Squirrel: ShipItState.plist stays after ShipIt finished (as Squirrel leaves it): no wait on it, relaunched', () =>
+  withSandbox({}, (sb) => {
+    sb.start('fastmail')
+    sb.stage('fastmail', '1.9.1')
+    sb.shipit('fastmail', 0)
+    const r = sb.run()
+    assert.equal(r.status, 0, r.stdout + r.stderr)
+    assert.ok(r.elapsed < 5.5, `waited ${r.elapsed}s: a wait on the plist would run out the 3s bound and 3s more`)
+    assert.ok(existsSync(sb.shipitState('fastmail')))
+    assert.match(r.stdout, /changed: Fastmail updated and relaunched, 1\.9\.0 -> 1\.9\.1/)
+  }))
+
+test('Squirrel: no ShipIt runs and the update bundle stays: `open` anyway after the wait, FAILED, app up', () =>
   withSandbox({}, (sb) => {
     sb.start('fastmail')
     sb.stage('fastmail', '1.9.1')
     const r = sb.run()
     assert.equal(r.status, 1, r.stdout + r.stderr)
-    assert.deepEqual(called(sb, 'open'), [])
-    assertMarker(sb, /ShipIt did not finish within 3s/)
+    assert.deepEqual(opens(sb), ['com.fastmail.mac.Fastmail'])
+    assert.ok(alive(sb.pidOf('fastmail')))
+    assertMarker(sb, /Fastmail: ShipIt did not finish within 3s \(the update bundle is still there\); started anyway/)
+  }))
+
+test('Squirrel: ShipItState.plist there but its update bundle gone (the state after an install): no update staged, not touched', () =>
+  withSandbox({}, (sb) => {
+    const pid = sb.start('claude')
+    sb.stage('claude', '5.1232.0')
+    rmSync(join(sb.updateBundle('claude'), '..'), { recursive: true })
+    const r = sb.run()
+    assert.equal(r.status, 0, r.stdout + r.stderr)
+    assert.match(r.stdout, /Claude Desktop: no update staged/)
+    assert.deepEqual(sb.signals(), [])
+    assert.ok(alive(pid))
+  }))
+
+test('Squirrel: the updateBundleURL is decoded (%20 is a space) and must be a file:// URL', () =>
+  withSandbox({}, (sb) => {
+    sb.start('t3')
+    sb.stage('t3', '0.1.8')
+    assert.match(readFileSync(sb.shipitState('t3'), 'utf8'), /updateBundleURL=file:\/\/.*update\.Ab%20C1\/T3%20Code%20\(Beta\)\.app\/\n/)
+    writeFileSync(sb.shipitState('t3'), 'updateBundleURL=https://example.test/T3.app/\n')
+    const r = sb.run()
+    assert.equal(r.status, 0, r.stdout + r.stderr)
+    assert.deepEqual(sb.signals(), [])
+    assert.match(sb.mails()[0], /- T3 Code: cannot read updateBundleURL from its ShipItState\.plist; not relaunched/)
   }))
 
 test('Squirrel: a ShipIt for another bundle id does not hold this app back', () =>
@@ -754,14 +887,13 @@ test('1Password relaunched: the mail says it is now locked and `op` fails until 
     assert.match(sb.mails()[0], /- 1Password updated and relaunched, 8\.12\.44 -> 8\.12\.46; now locked: `op` fails until 1Password is unlocked\n/)
   }))
 
-test('Squirrel: ShipItState.plist there but the app is not running: not started, a warning only', () =>
+test('Squirrel: an update staged but the app not running: not started, and mailed for a start by hand', () =>
   withSandbox({}, (sb) => {
     sb.stage('t3', '0.1.8')
     const r = sb.run()
     assert.equal(r.status, 0, r.stdout + r.stderr)
     assert.deepEqual(called(sb, 'open'), [])
-    assert.match(r.stdout, /warning: T3 Code: ShipItState\.plist is there, but the app is not running; not started/)
-    assert.deepEqual(sb.mails(), [])
+    assert.match(sb.mails()[0], /\nRelaunch by hand:\n- T3 Code: update staged, but the app is not running; not started; start it by hand\n/)
   }))
 
 // --- Relaunch failures ------------------------------------------------------------
@@ -962,7 +1094,7 @@ test('Downie: the appcast has a newer version: "update available, relaunch by ha
     const r = sb.run()
     assert.equal(r.status, 0, r.stdout + r.stderr)
     assert.deepEqual(sb.signals(), [])
-    assert.deepEqual(called(sb, 'curl'), [`curl -fsSL --max-time 20 ${APPS.downie.feed}`])
+    assert.deepEqual(called(sb, 'curl').filter((c) => !c.endsWith(GHOSTTY_FEED)), [`curl -fsSL --max-time 20 ${APPS.downie.feed}`])
     assert.match(sb.mails()[0], /- Downie: update available \(4\.13\.3 -> 4\.13\.4\); relaunch by hand\n/)
   }))
 
@@ -987,7 +1119,7 @@ test('Downie: same or older version in the appcast: nothing to report', () =>
 
 for (const [name, setup, env, re] of [
   ['the fetch fails', () => {}, { STUB_CURL_FAIL: '1' }, /Downie: could not check \(fetch of https:\/\/software\.example\.test\/downie\/v4\/updates\.xml failed: curl: \(6\) Could not resolve host/],
-  ['the appcast has no version', (sb) => sb.feed('downie', '<html>maintenance</html>'), {}, /Downie: could not check \(no sparkle:shortVersionString in /],
+  ['the appcast has no version', (sb) => sb.feed('downie', '<html>maintenance</html>'), {}, /Downie: could not check \(no dotted version number in the appcast at /],
 ]) {
   test(`Downie: ${name}: "could not check" is a warning, not FAILED, and sends no mail alone`, () =>
     withSandbox({}, (sb) => {
@@ -1006,7 +1138,7 @@ test('warnings ride along in a mail that goes out for another reason', () =>
     const r = sb.run({ STUB_CURL_FAIL: '1' })
     assert.equal(r.status, 0, r.stdout + r.stderr)
     const m = sb.mails()[0]
-    assert.match(m, /\n\nRelaunch by hand:\n- Chrome: .*\n\nWarnings:\n- Downie: could not check .*\n- Ghostty: could not check \(no SUFeedURL in its Info\.plist\)\n\nLog: ~\/\.cron\/logs\/app-update\.log$/)
+    assert.match(m, /\n\nRelaunch by hand:\n- Chrome: .*\n\nWarnings:\n- Downie: could not check .*\n- Ghostty: could not check \(fetch of https:\/\/release\.files\.ghostty\.org\/appcast\.xml failed: .*\n\nLog: ~\/\.cron\/logs\/app-update\.log$/)
   }))
 
 test('Ghostty with a feed that has a newer version: reported, never signalled', () =>
@@ -1433,9 +1565,6 @@ test('full night: every relaunchable app staged, Chrome staged, Downie newer, Do
       '- Chrome: update staged \\(running 157\\.0\\.8103\\.40, installed 157\\.0\\.8103\\.52\\)[^\\n]*',
       '- Downie: update available \\(4\\.13\\.3 -> 4\\.13\\.4\\); relaunch by hand',
       '',
-      'Warnings:',
-      '- Ghostty: could not check \\(no SUFeedURL in its Info\\.plist\\)',
-      '',
       'Log: ~/\\.cron/logs/app-update\\.log$',
     ].join('\\n')), JSON.stringify(m[0]))
     assert.equal(existsSync(sb.marker), false)
@@ -1500,7 +1629,7 @@ for (const [name, setup, args, re] of [
     }))
 }
 
-test('cannot evaluate: ps cannot list ShipIt after the quit: counts as still running, FAILED after the wait, never opened', () =>
+test('cannot evaluate: ps cannot list ShipIt after the quit: counts as still running; after both waits `open` runs anyway, FAILED', () =>
   withSandbox({}, (sb) => {
     addStub(sb, 'ps', PS_STUB)
     sb.start('t3')
@@ -1508,8 +1637,8 @@ test('cannot evaluate: ps cannot list ShipIt after the quit: counts as still run
     sb.shipit('t3', 1)
     const r = sb.run({ STUB_PS_FAIL: '-A -o args=' })
     assert.equal(r.status, 1, r.stdout + r.stderr)
-    assert.deepEqual(called(sb, 'open'), [])
-    assertMarker(sb, /T3 Code: quit, but ShipIt did not finish within 3s/)
+    assert.deepEqual(opens(sb), ['com.t3tools.t3code'])
+    assertMarker(sb, /T3 Code: ShipIt did not finish within 3s \(ShipIt still runs\); started anyway/)
   }))
 
 test('cannot evaluate: Chrome with ps failing is "could not check" (a warning), and Chrome is never signalled', () =>
@@ -1573,7 +1702,7 @@ test('appcast: a SUFeedURL that is not https is never fetched; a warning only', 
     const r = sb.run()
     assert.equal(r.status, 0, r.stdout + r.stderr)
     assert.match(r.stdout, /warning: Downie: could not check \(SUFeedURL is not https: http:\/\/software\.example\.test/)
-    assert.deepEqual(called(sb, 'curl'), [])
+    assert.deepEqual(called(sb, 'curl').filter((c) => !c.endsWith(GHOSTTY_FEED)), [], 'the http feed was fetched')
     assert.deepEqual(sb.mails(), [])
   }))
 
@@ -1618,4 +1747,149 @@ test('stale: a marker already showing (an earlier failure) is kept, and no stall
     assert.equal(r.status, 0, r.stdout + r.stderr)
     assert.equal(readFileSync(sb.marker, 'utf8'), 'earlier failure\n')
     assert.deepEqual(sb.mails(), [])
+  }))
+
+// --- Rework: apps left down, the kept log, repeat mails, Ghostty's feed -------------------
+
+const downFile = (sb) => join(sb.logs, 'app-update.down')
+
+for (const [how, env] of [['`open` fails', { STUB_OPEN_FAIL: 'com.t3tools.t3code' }], ['the app does not come back', { STUB_NOAPP: 'com.t3tools.t3code' }]]) {
+  test(`left down (${how}): night 1 FAILED and listed; night 2, with only warnings otherwise, still FAILED and mailed; once it runs, cleared`, () =>
+    withSandbox({}, (sb) => {
+      sb.start('t3')
+      sb.stage('t3', '0.1.8')
+      sb.shipit('t3', 1)
+      let r = sb.run(env)
+      assert.equal(r.status, 1, r.stdout + r.stderr)
+      const line = readFileSync(downFile(sb), 'utf8')
+      assert.match(line, /^com\.t3tools\.t3code \d{4}-\d{2}-\d{2} \d{2}:\d{2}\n$/)
+      const when = line.trim().split(' ').slice(1).join(' ')
+
+      // Night 2: nothing else to report but warnings (every feed fails).
+      ago(sb.stamp, DAY)
+      r = sb.run({ STUB_CURL_FAIL: '1' })
+      assert.equal(r.status, 1, r.stdout + r.stderr)
+      assertMarker(sb, new RegExp(`T3 Code: still not running since ${when}; the job quit it`))
+      const m = sb.mails()
+      assert.equal(m.length, 2)
+      assert.equal(subject(m[1]), 'App updates on testhost: FAILED')
+      assert.match(m[1], /\nFailed:\n- T3 Code: still not running since /)
+      assert.equal(readFileSync(downFile(sb), 'utf8'), line, 'the down list changed')
+
+      // Night 3: someone started it again.
+      sb.start('t3')
+      ago(sb.stamp, DAY)
+      r = sb.run()
+      assert.equal(r.status, 0, r.stdout + r.stderr)
+      assert.match(r.stdout, /T3 Code: runs again \(the job left it down at /)
+      assert.equal(existsSync(downFile(sb)), false)
+      assert.equal(existsSync(sb.marker), false)
+    }))
+}
+
+test('left down: an app that the job brought back is never listed', () =>
+  withSandbox({}, (sb) => {
+    sb.start('t3')
+    sb.stage('t3', '0.1.8')
+    sb.shipit('t3', 1)
+    assert.equal(sb.run().status, 0)
+    assert.equal(existsSync(downFile(sb)), false)
+  }))
+
+test('log: the run that does the pass empties app-update.log; a later "already ran today" run leaves it alone', () =>
+  withSandbox({}, (sb) => {
+    const log = join(sb.logs, 'app-update.log')
+    writeFileSync(log, 'last night\n')
+    let r = sb.run()
+    assert.equal(r.status, 0, r.stdout + r.stderr)
+    assert.equal(readFileSync(log, 'utf8'), '', 'the pass did not start a fresh log')
+    assert.match(r.stdout, /^app-update: run at \d{4}-\d{2}-\d{2} \d{2}:\d{2}$/m)
+    writeFileSync(log, 'tonight\'s pass\n')
+    r = sb.run({}, { hour: '04' })
+    assert.match(r.stdout, /already ran today/)
+    assert.equal(readFileSync(log, 'utf8'), 'tonight\'s pass\n')
+    r = sb.run({}, { hour: '09' })
+    assert.equal(readFileSync(log, 'utf8'), 'tonight\'s pass\n')
+  }))
+
+test('repeat mail: the same "relaunch by hand" list on a later night sends no mail; a new item, a change, or a failure does', () =>
+  withSandbox({}, (sb) => {
+    const night = (env) => { ago(sb.stamp, DAY); return sb.run(env) }
+    sb.feed('downie', appcast('4.13.4'))
+    let r = sb.run()
+    assert.equal(sb.mails().length, 1)
+
+    writeFileSync(sb.marker, 'a marker from before\n')
+    r = night()
+    assert.equal(r.status, 0, r.stdout + r.stderr)
+    assert.match(r.stdout, /the same items as the last mail need a hand; no mail/)
+    assert.equal(sb.mails().length, 1, 'two nights with Downie 4.13.4 available sent two mails')
+    assert.equal(readFileSync(sb.marker, 'utf8'), 'a marker from before\n')
+    rmSync(sb.marker)
+
+    sb.start('chrome', 'chrome:157.0.8103.40')
+    night()
+    assert.equal(sb.mails().length, 2, 'a new item (Chrome) sent no mail')
+
+    sb.start('t3')
+    sb.stage('t3', '0.1.8')
+    sb.shipit('t3', 1)
+    night()
+    assert.equal(sb.mails().length, 3, 'a change sent no mail')
+    assert.match(sb.mails()[2], /- Downie: update available/)
+
+    night()
+    assert.equal(sb.mails().length, 3)
+
+    // Everything current: the list is cleared, so the same item later mails again.
+    sb.feed('downie', appcast('4.13.3'))
+    process.kill(sb.pidOf('chrome'), 'SIGKILL')
+    night()
+    assert.equal(sb.mails().length, 3)
+    assert.equal(existsSync(join(sb.logs, 'app-update.reported')), false)
+    sb.feed('downie', appcast('4.13.4'))
+    night()
+    assert.equal(sb.mails().length, 4)
+
+    // A failure always mails, also with the same list.
+    sb.stage('t3', '0.1.9')
+    sb.shipit('t3', 1)
+    r = night({ STUB_OPEN_FAIL: 'com.t3tools.t3code' })
+    assert.equal(r.status, 1, r.stdout + r.stderr)
+    assert.equal(sb.mails().length, 5, 'a failure sent no mail')
+  }))
+
+test('repeat mail: when the mail fails, the list is not recorded, so the next night mails it', () =>
+  withSandbox({}, (sb) => {
+    sb.feed('downie', appcast('4.13.4'))
+    assert.equal(sb.run({ STUB_MAIL_RC: '1' }).status, 1)
+    assert.equal(existsSync(join(sb.logs, 'app-update.reported')), false)
+    ago(sb.stamp, DAY)
+    assert.equal(sb.run().status, 0)
+    assert.equal(sb.mails().length, 1)
+  }))
+
+test('Ghostty: no SUFeedURL, so its published feed is fetched; a newer version there is reported', () =>
+  withSandbox({}, (sb) => {
+    sb.feed('ghostty', ghosttyAppcast('1.4.0', '1.4.1'))
+    const r = sb.run()
+    assert.equal(r.status, 0, r.stdout + r.stderr)
+    assert.ok(called(sb, 'curl').includes(`curl -fsSL --max-time 20 ${GHOSTTY_FEED}`), called(sb, 'curl').join('\n'))
+    assert.deepEqual(sb.signals(), [])
+    assert.match(sb.mails()[0], /- Ghostty: update available \(1\.4\.0 -> 1\.4\.1\); relaunch by hand \(the job never quits Ghostty: a quit closes its shells\)\n/)
+  }))
+
+test('Ghostty: the build label "663205b5 (2024-12-20)" is never a version, also when it is the only entry', () =>
+  withSandbox({}, (sb) => {
+    sb.feed('ghostty', ghosttyAppcast())
+    const r = sb.run()
+    assert.equal(r.status, 0, r.stdout + r.stderr)
+    assert.match(r.stdout, /warning: Ghostty: could not check \(no dotted version number in the appcast at https:\/\/release\.files\.ghostty\.org\/appcast\.xml\)/)
+    assert.deepEqual(sb.mails(), [])
+  }))
+
+test('appcast: each feed is fetched once; Downie, which has a SUFeedURL, never gets the fallback', () =>
+  withSandbox({}, (sb) => {
+    sb.run()
+    assert.deepEqual(called(sb, 'curl'), [`curl -fsSL --max-time 20 ${APPS.downie.feed}`, `curl -fsSL --max-time 20 ${GHOSTTY_FEED}`])
   }))
