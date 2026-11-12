@@ -424,7 +424,7 @@ test('codex: renders the exact entry rea setup writes, at the pinned Node', () =
   assert.ifError(r.error)
   assert.equal(r.status, 0, r.stderr)
   const block = r.stdout.slice(r.stdout.indexOf('[mcp_servers.rea]'))
-  assert.match(block, /^\[mcp_servers\.rea\]\ncommand = "\/.+\/\.asdf\/installs\/nodejs\/26\.4\.0\/bin\/rea"\nargs = \[ "mcp" \]\nstartup_timeout_sec = 30\ntool_timeout_sec = 450\n/)
+  assert.match(block, /^\[mcp_servers\.rea\]\ncommand = "\/.+\/\.asdf\/installs\/nodejs\/26\.4\.0\/bin\/node"\nargs = \[ "\/.+\/\.asdf\/installs\/nodejs\/26\.4\.0\/bin\/rea", "mcp" \]\nstartup_timeout_sec = 30\ntool_timeout_sec = 450\n/)
   // The durable prefs above it survive the move to a template.
   assert.match(r.stdout, /^approval_policy = "never"$/m)
 })
@@ -432,7 +432,8 @@ test('codex: renders the exact entry rea setup writes, at the pinned Node', () =
 test('codex: follows a Node bump in dot_tool-versions', () => {
   const r = renderCodex('nodejs   28.0.1\n')
   assert.equal(r.status, 0, r.stderr)
-  assert.match(r.stdout, /\/nodejs\/28\.0\.1\/bin\/rea"/)
+  assert.match(r.stdout, /^command = "\/.+\/nodejs\/28\.0\.1\/bin\/node"$/m)
+  assert.match(r.stdout, /\/nodejs\/28\.0\.1\/bin\/rea", "mcp" \]$/m)
 })
 
 test('codex: fails the render when no Node is pinned (never a //bin/rea path)', () => {
@@ -454,10 +455,10 @@ for (const [name, tv, want] of [
   ['fallback versions: first wins', 'nodejs 26.4.0 24.11.0 system\n', '26.4.0'],
   ['no trailing newline', 'nodejs 26.4.0', '26.4.0'],
 ]) {
-  test(`codex: ${name} still renders .../nodejs/${want}/bin/rea`, () => {
+  test(`codex: ${name} still renders .../nodejs/${want}/bin/node`, () => {
     const r = renderCodex(tv)
     assert.equal(r.status, 0, r.stderr)
-    assert.match(r.stdout, new RegExp(`^command = "/[^"\\r]+/\\.asdf/installs/nodejs/${want.replace(/\./g, '\\.')}/bin/rea"$`, 'm'))
+    assert.match(r.stdout, new RegExp(`^command = "/[^"\\r]+/\\.asdf/installs/nodejs/${want.replace(/\./g, '\\.')}/bin/node"$`, 'm'))
   })
 }
 
@@ -476,7 +477,7 @@ for (const [name, tv] of [
 test('codex: a home dir with spaces and non-ASCII lands verbatim inside the TOML string', () => {
   const r = renderCodex('nodejs 26.4.0\n', 'Ränd all ☁️')
   assert.equal(r.status, 0, r.stderr)
-  assert.match(r.stdout, /^command = "\/.+\/Ränd all ☁️\/\.asdf\/installs\/nodejs\/26\.4\.0\/bin\/rea"$/m)
+  assert.match(r.stdout, /^command = "\/.+\/Ränd all ☁️\/\.asdf\/installs\/nodejs\/26\.4\.0\/bin\/node"$/m)
 })
 
 test('codex: exactly one [mcp_servers.rea] table, and it is the last table (keys cannot leak into another)', () => {

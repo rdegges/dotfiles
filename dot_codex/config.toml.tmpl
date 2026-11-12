@@ -32,7 +32,7 @@ bearer_token_env_var = "PARALLEL_API_KEY"
 {{- $node := include "dot_tool-versions" | regexFind "(?m)^nodejs\\s+\\S+" | replace "nodejs" "" | trim }}
 {{- if not $node }}{{ fail "dot_tool-versions pins no nodejs version" }}{{ end }}
 [mcp_servers.rea]
-command = "{{ .chezmoi.homeDir }}/.asdf/installs/nodejs/{{ $node }}/bin/rea"
-args = [ "mcp" ]
+command = "{{ .chezmoi.homeDir }}/.asdf/installs/nodejs/{{ $node }}/bin/node"
+args = [ "{{ .chezmoi.homeDir }}/.asdf/installs/nodejs/{{ $node }}/bin/rea", "mcp" ]
 startup_timeout_sec = 30
 tool_timeout_sec = 450
