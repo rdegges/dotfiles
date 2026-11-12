@@ -70,7 +70,9 @@ TO=$(command -v gtimeout || command -v timeout || true)
 run() { s=$1; shift; if [ -n "$TO" ]; then "$TO" -k 5 "$s" "$@"; else "$@"; fi; }
 
 # One line, at most 300 characters, for the marker, the mail, and the state.
-oneline() { printf '%s' "$1" | tr '\n\t' '  ' | cut -c1-300; }
+# Printable ASCII only, before the cut: under launchd there is no LANG, so cut
+# counts bytes and could split a multi-byte character into invalid UTF-8.
+oneline() { printf '%s' "$1" | tr '\n\t' '  ' | LC_ALL=C tr -cd '\11\12\15\40-\176' | cut -c1-300; }
 
 send_mail() { # send_mail <subject> <body>
     msg=$(printf 'From: %s\nTo: %s\nSubject: %s\n\n%s\n' "$rcpt" "$rcpt" "$1" "$2")
@@ -123,13 +125,21 @@ What happened: $what."; then
     exit 0
 }
 
+# one <pattern> <text>: print the only match of <pattern> anywhere in <text>
+# (also several on one line, as in compact JSON), or return 1 when there is not
+# exactly one.
+one() {
+    m=$(printf '%s\n' "$2" | grep -o "$1")
+    [ -n "$m" ] && [ "$(printf '%s\n' "$m" | wc -l)" -eq 1 ] && printf '%s\n' "$m"
+}
+
 # read_state: set $st to the BackendState, or return 1 with $st empty and the
 # reason in $err. Exactly one known value must appear in the JSON. The exit
 # code is not trusted either way: the state the JSON states is what counts.
 read_state() {
     st= err=
     out=$(run 10 "$cli" status --json < /dev/null 2>&1); rc=$?
-    v=$(printf '%s\n' "$out" | sed -n 's/.*"BackendState": *"\([A-Za-z]*\)".*/\1/p')
+    v=$(one '"BackendState": *"[A-Za-z]*"' "$out" | sed 's/.*"\([A-Za-z]*\)"$/\1/')
     case "$v" in
         NoState | NeedsLogin | NeedsMachineAuth | Stopped | Starting | Running | InUseOtherUser) st=$v ;;
         *) err="cannot read BackendState from \`tailscale status --json\` (exit $rc): $(oneline "$out")"; return 1 ;;
@@ -186,7 +196,7 @@ case "$st" in
 Running) ok "$fixed" "$before" ;;
 Stopped)
     out=$(run 10 "$cli" debug prefs < /dev/null 2>&1); rc=$?
-    lo=$(printf '%s\n' "$out" | sed -n 's/.*"LoggedOut": *\([a-z]*\).*/\1/p')
+    lo=$(one '"LoggedOut": *[a-z]*' "$out" | sed 's/.*: *//')
     case "$lo" in
         false) ;;
         true) fail logged-out "BackendState is Stopped and the client is logged out; log in by hand" ;;

@@ -91,8 +91,10 @@ by hand.
 On the homelab server Mac (`homelab = true`, see
 [Work vs. personal machines](#work-vs-personal-machines)), launchd runs
 `~/.cron/tailscale-watchdog.sh` every 5 minutes, at :02, :07, and so on to :57.
-The schedule never uses :15 or :20. Thus the hourly chezmoi apply at :15 does
-not find the job running, which would fail the agent load.
+In the normal case, this schedule keeps the job away from the hourly chezmoi
+apply at :15. A worst-case run lasts about 4.5 minutes, so a run that starts at
+:12 can still be running at :15. In that case the load script leaves the job
+alone and sets `chezmoi.FAILED`, and the next apply tries again.
 
 Tailscale updates stay with the App Store (or the updater of the Standalone
 build). The watchdog does not update the app. It makes sure that the client is
@@ -117,6 +119,11 @@ account `icloud`. Mail goes out only when the state changes, and
 `~/.cron/logs/tailscale-watchdog.state` records the last state. A fix or a
 recovery sends one mail. The job does not wait for the network, because an
 outage is what it reports.
+
+A deliberate `tailscale down` on the homelab Mac is undone within 5 minutes,
+and each fix sends one "recovered" mail. To keep Tailscale down on purpose,
+first run `launchctl bootout gui/$UID/com.rdegges.tailscale-watchdog`. The
+agent comes back at the next login or the next agent change.
 
 The jobs used to run from cron. `run_onchange_after_retire-crontab.sh.tmpl`
 removes the old crontab. If it cannot (from cron, `crontab` hangs on a macOS

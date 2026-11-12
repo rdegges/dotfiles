@@ -25,8 +25,9 @@
 // sent writes the marker, exits 1, and is retried by the next run.
 //
 // What a pass does not prove: the real Tailscale CLI's output or exit codes on
-// macOS (the JSON shape was read by hand from 1.104.5), what real `tailscale up`
-// does with non-default prefs, real pgrep/open/plutil behavior, real launchd
+// macOS (the JSON shape was read by hand from 1.104.5, and from the Standalone
+// 1.104.6, io.tailscale.ipn.macsys, that the Mac runs now), what real
+// `tailscale up` does with non-default prefs, real pgrep/open/plutil behavior, real launchd
 // timing, macOS /bin/sh (bash 3.2 in POSIX mode; this runs under Debian dash),
 // or real mail delivery. Those need the user-present `tailscale down` run on
 // the homelab Mac.

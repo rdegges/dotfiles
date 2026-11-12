@@ -2,9 +2,11 @@
      that the Tailscale client is up and fix the two known safe cases (app not
      running, or Stopped while logged in). On failure the script writes
      ~/.cron/logs/tailscale-watchdog.FAILED, which every new shell prints, and
-     mails on each change of state. Every 5 minutes at :02, :07, ... :57: never
-     at :15 or :20, so the hourly `chezmoi update` at :15 does not find it
-     running, which would fail the agent reload and set chezmoi.FAILED. */ -}}
+     mails on each change of state. Every 5 minutes at :02, :07, ... :57. In the
+     normal case this keeps the job away from the hourly `chezmoi update` at
+     :15. A worst-case run lasts about 4.5 minutes, so a run that starts at :12
+     can still be running at :15; then the loader leaves the job alone, sets
+     chezmoi.FAILED, and the next apply retries. */ -}}
 {{ template "launchagent.plist" (dict
 	"label" "com.rdegges.tailscale-watchdog"
 	"schedule" (list (dict "Minute" 2) (dict "Minute" 7) (dict "Minute" 12) (dict "Minute" 17) (dict "Minute" 22) (dict "Minute" 27) (dict "Minute" 32) (dict "Minute" 37) (dict "Minute" 42) (dict "Minute" 47) (dict "Minute" 52) (dict "Minute" 57))
