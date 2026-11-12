@@ -24,7 +24,7 @@
 //     echo, a printf whose format is not one single-quoted literal, tr -c,
 //     cut -c, an ESC literal, esc= or bel=, or its own oneline(); a file that
 //     calls oneline has the loader, after `marker=` and before the first call.
-//     It scans every file, and all six current jobs by name.
+//     It scans every file, and all seven current jobs by name.
 //   - The loader, in cf-update, rea-update, and tailscale-watchdog under sh
 //     (dash) and bash --posix -O xpg_echo: a missing, unreadable, or
 //     unparsable lib writes the job's marker ("cannot load") and exits 1.
@@ -306,7 +306,7 @@ test('lint: the rules catch each banned form and pass the allowed ones', () => {
 test('lint: every dot_cron file (lib/ excepted) is clean, and oneline callers load the lib first', () => {
   const files = cronFiles()
   assert.ok(files.length > 0, 'the lint scanned no files')
-  for (const job of ['cf-update', 'chezmoi-update', 'rea-update', 'tailscale-watchdog', 'vault-snapshot', 'wait-for-network']) {
+  for (const job of ['app-update', 'cf-update', 'chezmoi-update', 'rea-update', 'tailscale-watchdog', 'vault-snapshot', 'wait-for-network']) {
     assert.ok(files.includes(`executable_${job}.sh`), `${job} not scanned: ${files.join(', ')}`)
   }
   const found = []
@@ -330,9 +330,9 @@ test('lint: every dot_cron file (lib/ excepted) is clean, and oneline callers lo
   assert.deepEqual(found, [])
 })
 
-test('lint: the jobs that call oneline are exactly cf-update, rea-update, and tailscale-watchdog', () => {
+test('lint: the jobs that call oneline are exactly app-update, cf-update, rea-update, and tailscale-watchdog', () => {
   const callers = cronFiles().filter((f) => codeLines(readFileSync(join(CRON, f), 'utf8')).some(({ text }) => /\boneline\b/.test(text)))
-  assert.deepEqual(callers.sort(), ['executable_cf-update.sh', 'executable_rea-update.sh', 'executable_tailscale-watchdog.sh'])
+  assert.deepEqual(callers.sort(), ['executable_app-update.sh', 'executable_cf-update.sh', 'executable_rea-update.sh', 'executable_tailscale-watchdog.sh'])
 })
 
 // --- Loader: a missing or broken lib fails closed with a marker ------------------

@@ -25,15 +25,19 @@
 # PID, then a wait of at most 60s; never SIGKILL. A relaunch is
 # `open -g -b <bundle id>` and a check for a new PID within 60s.
 #   - Herdr (relaunch; herdr_class below can make it report only): pending =
-#     /Applications/Herdr.app.new.noindex. The agent sessions live in the
-#     herdr-core server, not in Herdr.app: as measured, `herdr-core
-#     --hc-launchd` runs as its own session leader (parent PID 1), outside
-#     Herdr.app's process group. The PIDs of the herdr-core roles in
-#     herdr_watch are recorded before the quit and compared after the
-#     relaunch: a change is FAILED ("herdr-core restarted, sessions lost"). No
-#     server found: not relaunched. After the quit, wait at most 60s for
-#     Herdr.app.new.noindex to go, then `open` (anyway, with FAILED, if it
-#     stays).
+#     /Applications/Herdr.app.new.noindex. As measured (0.1.13 to 0.1.15), the
+#     agent shells are children of `herdr-core hold`, which outlives the
+#     relaunch: launchd becomes its parent, and its PID and socket stay.
+#     Herdr.app's launch restarts `herdr-core --hc-launchd`, a broker that owns
+#     no shell, and applies the staged bundle. So the job records each hold
+#     (PID and args, which carry --socket) before the quit, and runs `open` as
+#     soon as Herdr.app exits. After the relaunch it waits at most 60s for
+#     Herdr.app.new.noindex to go (FAILED when it stays), then 15s for the
+#     broker restart. A hold that is gone or has other args is FAILED ("hold
+#     ended, sessions lost"), and so is no broker; a new broker PID is only
+#     logged. No hold found: not relaunched. A `herdr-core connect` client
+#     from outside Herdr.app (a terminal) that the relaunch ends is mailed for
+#     a reattach by hand.
 #   - T3 Code, Fastmail, 1Password (relaunch, Squirrel): pending =
 #     ~/Library/Caches/<bundle id>.ShipIt/ShipItState.plist exists and the
 #     update bundle that its updateBundleURL names exists. Squirrel never
@@ -103,17 +107,24 @@ dstamp="$logs/app-update-docker.ok"
 down="$logs/app-update.down"
 reported="$logs/app-update.reported"
 # Herdr: herdr_class "relaunch" quits and reopens Herdr.app when an update is
-# staged; "report" only mails that one is staged. herdr_watch: the herdr-core
-# roles whose PIDs must be the same after the relaunch ("hc-launchd hold" or
-# "hc-launchd").
+# staged; "report" only mails that one is staged.
 herdr_class=relaunch
-herdr_watch="hc-launchd hold"
 # The himalaya account "icloud" is the Fastmail-backed r@rdegges.com account;
 # the name is historical (see dot_config/himalaya/config.toml.tmpl).
 account="${APP_UPDATE_MAIL_ACCOUNT:-icloud}"
 rcpt=r@rdegges.com
 nl='
 '
+
+# oneline (lib/text.sh) turns CLI output into one marker or mail line. A
+# missing, broken, or incomplete lib writes the marker and exits 1.
+lib="$(dirname "$0")/lib/text.sh"
+if [ -r "$lib" ] && sh -n "$lib" 2>/dev/null && command . "$lib" && command -v oneline >/dev/null 2>&1; then :; else
+    printf '%s\n' "app-update: cannot load $lib"
+    mkdir -p "${marker%/*}"
+    printf '%s\n' "$(date '+%F %R') app-update: cannot load ~/.cron/lib/text.sh; run chezmoi apply" > "$marker"
+    exit 1
+fi
 
 # The launchd plist PATH has no /usr/sbin, and macOS ships ioreg and sysctl
 # only there.
@@ -125,11 +136,6 @@ mkdir -p "$logs"
 # otherwise. run <seconds> <cmd...>
 TO=$(command -v gtimeout || command -v timeout || true)
 run() { s=$1; shift; if [ -n "$TO" ]; then "$TO" -k 5 "$s" "$@"; else "$@"; fi; }
-
-# One line, at most 300 characters, for the marker and the mail. Printable
-# ASCII only, before the cut: under launchd there is no LANG, so cut counts
-# bytes and could split a multi-byte character into invalid UTF-8.
-oneline() { printf '%s' "$1" | tr '\n\t' '  ' | LC_ALL=C tr -cd '\11\12\15\40-\176' | cut -c1-300; }
 
 say() { printf 'app-update: %s\n' "$1"; }
 
@@ -296,14 +302,25 @@ shipit_busy() {
     printf '%s\n' "$out" | grep -F -q -- "/ShipIt $1.ShipIt"
 }
 
-# herdr_core: print the PIDs of the herdr-core roles in herdr_watch
-# ("hc-launchd:<pid> hold:<pid>", sorted), or return 1 when ps fails.
+# herdr_core <Herdr.app PID>: list the herdr-core processes (exact basename),
+# or return 1 when ps fails. Sets:
+#   hc_hold    one "<pid> <args>" line per `herdr-core hold`, sorted; the
+#              args carry --socket. These own the agent shells.
+#   hc_broker  the PIDs of `herdr-core --hc-launchd`, the broker ('' if none).
+#   hc_client  the PIDs of `herdr-core connect` whose parent is not
+#              Herdr.app: clients in a terminal.
 herdr_core() {
-    out=$(ps -A -o pid= -o args= 2>/dev/null) || return 1
-    printf '%s\n' "$out" | awk -v watch=" $herdr_watch " '{
-        n = split($2, p, "/"); r = $3; sub(/^--/, "", r)
-        if (p[n] == "herdr-core" && ($3 == "--hc-launchd" || $3 == "hold") && index(watch, " " r " ")) print r ":" $1
-    }' | sort | tr '\n' ' ' | sed 's/ $//'
+    out=$(ps -A -o pid= -o ppid= -o args= 2>/dev/null) || return 1
+    out=$(printf '%s\n' "$out" | awk -v app="$1" '{
+        n = split($3, p, "/"); if (p[n] != "herdr-core") next
+        a = $0; sub(/^ *[0-9]+ +[0-9]+ +/, "", a)
+        if ($4 == "hold") print "H " $1 " " a
+        else if ($4 == "--hc-launchd") print "L " $1
+        else if ($4 == "connect" && $2 != app) print "C " $1
+    }' | sort)
+    hc_hold=$(printf '%s\n' "$out" | sed -n 's/^H //p')
+    hc_broker=$(printf '%s\n' "$out" | sed -n 's/^L //p' | tr '\n' ' ' | sed 's/ $//')
+    hc_client=$(printf '%s\n' "$out" | sed -n 's/^C //p' | tr '\n' ' ' | sed 's/ $//')
 }
 
 # shipit_update <bundle id>: set $upd to the update bundle that the app's
@@ -324,12 +341,12 @@ shipit_update() {
 # app_name <bundle id>: the name the mail uses for an app the job relaunches.
 app_name() {
     case "$1" in
-        dev.herdr.app) echo Herdr ;;
-        com.t3tools.t3code) echo "T3 Code" ;;
-        com.fastmail.mac.Fastmail) echo Fastmail ;;
-        com.1password.1password) echo 1Password ;;
-        com.anthropic.claudefordesktop) echo "Claude Desktop" ;;
-        *) echo "$1" ;;
+        dev.herdr.app) printf '%s\n' Herdr ;;
+        com.t3tools.t3code) printf '%s\n' "T3 Code" ;;
+        com.fastmail.mac.Fastmail) printf '%s\n' Fastmail ;;
+        com.1password.1password) printf '%s\n' 1Password ;;
+        com.anthropic.claudefordesktop) printf '%s\n' "Claude Desktop" ;;
+        *) printf '%s\n' "$1" ;;
     esac
 }
 
@@ -389,14 +406,14 @@ relaunch() {
     name=$1 id=$2 kind=$3 extra=${4:-}
     old=$pid
     before=$(version "$plist")
-    hc=
     if [ "$kind" = herdr ]; then
-        hc=$(herdr_core) || { add M "$name: update staged; not relaunched: ps cannot list the herdr-core processes; relaunch by hand"; return; }
-        case "$hc" in
-            *hc-launchd:*) ;;
-            *) add M "$name: update staged; not relaunched: no herdr-core --hc-launchd server found, so the job cannot prove the sessions survive; relaunch by hand"; return ;;
-        esac
-        say "$name: herdr-core before: $hc"
+        herdr_core "$old" || { add M "$name: update staged; not relaunched: ps cannot list the herdr-core processes; relaunch by hand"; return; }
+        if [ -z "$hc_hold" ]; then
+            add M "$name: update staged; not relaunched: no herdr-core hold found, so the job cannot prove the sessions survive; relaunch by hand"; return
+        fi
+        hold_before=$hc_hold broker_before=$hc_broker client_before=$hc_client
+        say "$name: herdr-core hold before: ${hc_hold//$nl/, }"
+        say "$name: herdr-core --hc-launchd before: ${hc_broker:-none}; connect clients outside Herdr.app: ${hc_client:-none}"
     fi
 
     say "$name: sending SIGTERM to PID $old"
@@ -430,17 +447,6 @@ relaunch() {
         fi
     fi
 
-    if [ "$kind" = herdr ]; then
-        t=$(bound 60); deadline=$(($(date +%s) + t))
-        while [ -e "$apps/Herdr.app.new.noindex" ]; do
-            if [ "$(date +%s)" -ge "$deadline" ]; then
-                add F "$name: the staged update was still at Herdr.app.new.noindex ${t}s after the quit; started anyway"
-                break
-            fi
-            sleep 1
-        done
-    fi
-
     if ! out=$(run 30 open -g -b "$id" < /dev/null 2>&1); then
         add F "$name: quit, but \`open -g -b $id\` failed: $out"
         left_down "$id"
@@ -457,16 +463,58 @@ relaunch() {
         sleep 1
     done
 
+    noapply=
     if [ "$kind" = herdr ]; then
-        after_hc=$(herdr_core) || after_hc="(ps failed)"
-        say "$name: herdr-core after: $after_hc"
-        [ "$after_hc" = "$hc" ] || add F "$name: herdr-core restarted, sessions lost (before: $hc; after: ${after_hc:-none})"
+        # Herdr.app applies the staged bundle when it launches, not when it
+        # quits, so this wait comes after `open`.
+        t=$(bound 60); deadline=$(($(date +%s) + t))
+        while [ -e "$apps/Herdr.app.new.noindex" ]; do
+            if [ "$(date +%s)" -ge "$deadline" ]; then
+                add F "$name: relaunched, but the staged update did not apply (still at Herdr.app.new.noindex after ${t}s)"
+                noapply=yes
+                break
+            fi
+            sleep 1
+        done
+        # The launch restarts the --hc-launchd broker (about 2s after `open`,
+        # as measured). Compare only after that.
+        t=$(bound 15)
+        sleep "$t"
+        up=yes
+        if ! app_pid "$id" || [ -z "$pid" ]; then
+            add F "$name: relaunched, but the app was not running ${t}s later${err:+ ($err)}"
+            left_down "$id"
+            up=no
+        fi
+        if herdr_core "$pid"; then
+            hold_after=${hc_hold//$nl/, }
+            say "$name: herdr-core hold after: ${hold_after:-none}"
+            # Each hold must still run with the same args; a new one is fine.
+            lost=
+            while IFS= read -r h; do
+                [ -z "$h" ] || printf '%s\n' "$hc_hold" | grep -F -x -q -- "$h" || lost=yes
+            done <<< "$hold_before"
+            [ -z "$lost" ] || add F "$name: herdr-core hold ended, sessions lost (before: ${hold_before//$nl/, }; after: ${hold_after:-none})"
+            if [ -z "$hc_broker" ]; then
+                add F "$name: no herdr-core --hc-launchd server after the relaunch; sessions unreachable until it starts"
+            elif [ "$hc_broker" != "$broker_before" ]; then
+                say "$name: herdr-core --hc-launchd restarted ($broker_before -> $hc_broker); expected, not a failure"
+            fi
+            gone=
+            for c in $client_before; do
+                case " $hc_client " in *" $c "*) ;; *) gone="$gone $c" ;; esac
+            done
+            [ -z "$gone" ] || add M "$name: terminal clients attached with herdr-core connect were detached (PIDs ${gone# }); sessions survive in hold; reattach"
+        else
+            add F "$name: relaunched, but ps cannot list the herdr-core processes, so the job cannot prove the sessions survive"
+        fi
+        [ "$up" = yes ] || return
     fi
 
     after=$(version "$plist")
     if [ "$after" != "$before" ]; then
         add C "$name updated and relaunched, $before -> $after$extra"
-    else
+    elif [ -z "$noapply" ]; then
         add C "$name relaunched, but the version is unchanged ($before): WARNING, the staged update did not apply$extra"
     fi
 }

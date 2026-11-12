@@ -32,13 +32,20 @@
 //     Squirrel never deletes, is never waited on; `open` runs only after the
 //     app exited and, for Squirrel apps, after ShipIt finished, or, when the
 //     wait runs out, anyway with FAILED, so the job never leaves an app it quit
-//     down unless `open` fails; Herdr is opened after its staged bundle moved
-//     into place, or anyway with FAILED; an app that ignores SIGTERM is left
-//     running and never gets SIGKILL; an app that does not come back, a failed
-//     `open`, and a changed herdr-core PID each write FAILED; an app left down
-//     stays FAILED on later nights until it runs again; no herdr-core server
-//     means no relaunch; each Herdr switch (report only, server PID only) is a
-//     one-line change that works;
+//     down unless `open` fails; Herdr is opened as soon as it exits, and its
+//     staged bundle, which the stub `open` applies as the app starts, must be
+//     gone after the relaunch, or FAILED ("did not apply", the app left
+//     running, no second "version is unchanged" line); an app that ignores
+//     SIGTERM is left running and never gets SIGKILL; an app that does not
+//     come back and a failed `open` each write FAILED; a herdr-core hold that
+//     ends across the relaunch writes FAILED ("hold ended, sessions lost"),
+//     and so does no --hc-launchd broker after it, but a broker with a new
+//     PID does not; a terminal `herdr-core connect` client that the relaunch
+//     ends is mailed for a reattach, and Herdr.app's own client is not; an
+//     app left down stays FAILED on later nights until it runs again; no
+//     herdr-core hold means no relaunch; the Herdr switch (report only) is a
+//     one-line change that works; a missing or broken lib/text.sh writes the
+//     marker and exits 1 before any probe;
 //   - Claude Desktop is not relaunched while a claude process runs under it or
 //     its session files or VM disk changed in the last hour, or when that
 //     cannot be checked;
@@ -61,8 +68,10 @@
 //     with the fix and does not fail the apply.
 //
 // What a pass does not prove: real ShipIt or Herdr installs (whether SIGTERM
-// lets Squirrel install, whether ShipIt removes the update bundle in time,
-// whether Herdr moves Herdr.app.new.noindex at quit), real lsappinfo, ioreg, or Docker Desktop
+// lets Squirrel install, whether ShipIt removes the update bundle in time;
+// Herdr was measured once (2026-11-12, 0.1.13 to 0.1.15): the bundle is
+// applied at launch, the broker restarts, hold survives. A pass does not prove
+// a future Herdr keeps that behavior), real lsappinfo, ioreg, or Docker Desktop
 // output beyond the shapes copied here from the homelab Mac, whether Downie's
 // sandbox lets `defaults` write its keys, real launchd timing, macOS bash 3.2
 // (this runs under Debian bash), or real mail delivery. Those need the
@@ -70,7 +79,7 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync, writeFileSync, mkdirSync, mkdtempSync, existsSync, chmodSync, rmSync, readdirSync, statSync, symlinkSync, utimesSync } from 'node:fs'
+import { readFileSync, writeFileSync, mkdirSync, mkdtempSync, existsSync, chmodSync, rmSync, readdirSync, statSync, symlinkSync, utimesSync, copyFileSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -127,11 +136,13 @@ const appcast = (...versions) =>
 // $STATE/signals. Modes: app (exits on SIGTERM), stuck (ignores it), claude (a
 // process named "claude", like the Claude Code CLI), with-claude (an app with
 // a claude child), chrome:<version> (an app with a helper child whose args are
-// [helper title]), shipit:<seconds>:<dir>:<app pid> (like the real ShipIt:
+// [helper title]), with-connect (an app with a child whose args are [helper
+// title] and that exits with the app, like Herdr.app's own `herdr-core
+// connect`), shipit:<seconds>:<dir>:<app pid> (like the real ShipIt:
 // waits until <app pid> has exited, then, <seconds> later, deletes the update
 // bundle <dir> and exits; ShipItState.plist stays, as Squirrel never deletes
-// it), herdrswap:<seconds>:<apps dir>:<app pid> (waits until <app pid> has
-// exited, then, <seconds> later, moves Herdr.app.new.noindex over Herdr.app).
+// it), herdrswap:<seconds>:<apps dir> (<seconds> later, moves
+// Herdr.app.new.noindex over Herdr.app, as Herdr.app does at launch).
 // Every PID goes to $STATE/pids for cleanup.
 const FAKEAPP = String.raw`#!${PERL}
 use strict; use warnings; use POSIX ();
@@ -147,6 +158,7 @@ note('pids', $$);
 if ($mode eq 'claude') { exec { "$real/claude" } 'claude', '-e', $CLAUDE, $title, $state; die }
 if ($mode eq 'with-claude') { my $c = fork() // die; if ($c == 0) { exec { "$real/claude" } 'claude', '-e', $CLAUDE, 'claude child', $state; die } }
 if ($mode =~ /^chrome:/) { my $c = fork() // die; if ($c == 0) { note('pids', $$); $0 = $helper; sleep 1 while 1 } }
+if ($mode eq 'with-connect') { my $app = $$; my $c = fork() // die; if ($c == 0) { note('pids', $$); $0 = $helper; select(undef, undef, undef, 0.2) while getppid() == $app; exit 0 } }
 $0 = $title;
 my $stuck = $mode eq 'stuck';
 $SIG{TERM} = sub { note('signals', "TERM $title"); exit 0 unless $stuck };
@@ -155,9 +167,9 @@ if ($mode =~ /^shipit:(\d+):(.*):(\d+)$/) {
   my ($n, $d, $app) = ($1, $2, $3);
   wait_exit($app); sleep $n; system('rm', '-rf', $d); exit 0
 }
-if ($mode =~ /^herdrswap:(\d+):(.*):(\d+)$/) {
-  my ($n, $apps, $app) = ($1, $2, $3);
-  wait_exit($app); sleep $n;
+if ($mode =~ /^herdrswap:(\d+):(.*)$/) {
+  my ($n, $apps) = ($1, $2);
+  sleep $n;
   system('rm', '-rf', "$apps/Herdr.app"); rename("$apps/Herdr.app.new.noindex", "$apps/Herdr.app"); unlink("$apps/Herdr.app.new.json.noindex"); exit 0
 }
 sleep 1 while 1;
@@ -182,11 +194,24 @@ const STUBS = {
     'if { [ -f "$STATE/upd/$id" ] && [ -e "$(cat "$STATE/upd/$id")" ]; } || printf "%s\\n" "$procs" | grep -F -q -- "/ShipIt $id.ShipIt"; then echo "$id" >> "$STATE/early"; fi\n' +
     'case " ${STUB_OPEN_FAIL:-} " in *" $id "*) echo "LSOpenURLsWithRole() failed with error -10814" >&2; exit 1 ;; esac\n' +
     'if [ -f "$STATE/update/$id" ]; then sed -i "s/^CFBundleShortVersionString=.*/CFBundleShortVersionString=$(cat "$STATE/update/$id")/" "$(cat "$STATE/plist/$id")"; fi\n' +
-    // STUB_HERDR_RESTART=hold restarts the holder; any other value, the server.
-    'if [ "$id" = dev.herdr.app ] && [ "${STUB_HERDR_RESTART:-}" = hold ]; then kill "$(cat "$STATE/herdr-hold")"; "$REAL/fakeapp" app "$HOME/.local/bin/herdr-core hold --socket /tmp/holder-2.sock" > "$STATE/herdr-hold";\n' +
-    'elif [ "$id" = dev.herdr.app ] && [ -n "${STUB_HERDR_RESTART:-}" ]; then kill "$(cat "$STATE/herdr-server")"; "$REAL/fakeapp" app "$HOME/.local/bin/herdr-core --hc-launchd /tmp/hc-ready-2" > "$STATE/herdr-server"; fi\n' +
+    // Herdr, as measured: the launch applies a staged bundle (1s later, in
+    // the background). STUB_HERDR_RESTART=server restarts the --hc-launchd
+    // broker (what the real launch does), hold restarts the holder, nobroker
+    // ends the broker and starts none. STUB_HERDR_DETACH=1 ends the terminal
+    // `herdr-core connect` client.
+    'if [ "$id" = dev.herdr.app ]; then\n' +
+    '  [ -e "$STATE/herdr-swap" ] && "$REAL/fakeapp" "herdrswap:1:$APP_UPDATE_APPS" "herdr swapper" > /dev/null\n' +
+    '  case "${STUB_HERDR_RESTART:-}" in\n' +
+    '  hold) kill "$(cat "$STATE/herdr-hold")"; "$REAL/fakeapp" app "$HOME/.local/bin/herdr-core hold --socket /tmp/holder-2.sock" > "$STATE/herdr-hold" ;;\n' +
+    '  server) kill "$(cat "$STATE/herdr-server")"; "$REAL/fakeapp" app "$HOME/.local/bin/herdr-core --hc-launchd /tmp/hc-ready-2" > "$STATE/herdr-server" ;;\n' +
+    '  nobroker) kill "$(cat "$STATE/herdr-server")" ;;\n' +
+    '  esac\n' +
+    '  [ -n "${STUB_HERDR_DETACH:-}" ] && kill "$(cat "$STATE/herdr-client")"\n' +
+    'fi\n' +
     'case " ${STUB_NOAPP:-} " in *" $id "*) exit 0 ;; esac\n' +
-    '"$REAL/fakeapp" app "$(cat "$STATE/title/$id")" > "$STATE/apps/$id"\n',
+    '"$REAL/fakeapp" app "$(cat "$STATE/title/$id")" > "$STATE/apps/$id"\n' +
+    // STUB_HERDR_DIES=<seconds>: the new Herdr.app exits that long after it started.
+    'if [ "$id" = dev.herdr.app ] && [ -n "${STUB_HERDR_DIES:-}" ]; then p=$(cat "$STATE/apps/$id"); (sleep "$STUB_HERDR_DIES"; kill "$p") > /dev/null 2>&1 & fi\n',
   // plutil -extract <key> raw -o - <file>; the fake Info.plist holds key=value lines.
   plutil:
     '#!/bin/sh\n' + LOG +
@@ -308,7 +333,7 @@ function sandbox({ installed = Object.keys(APPS) } = {}) {
       const title = readFileSync(join(state, 'title', a.id), 'utf8')
       const helper = mode.startsWith('chrome:')
         ? join(apps, a.bundle, `Contents/Frameworks/Google Chrome Framework.framework/Versions/${mode.slice(7)}/Helpers/Google Chrome Helper.app/Contents/MacOS/Google Chrome Helper --type=renderer`)
-        : undefined
+        : mode === 'with-connect' ? `${home}/.local/bin/herdr-core connect` : undefined
       const pid = fake(mode, title, helper)
       writeFileSync(join(state, 'apps', a.id), String(pid))
       return pid
@@ -316,15 +341,15 @@ function sandbox({ installed = Object.keys(APPS) } = {}) {
     // stage <app> [new version] [{ swap }]: an update waits. Squirrel apps get
     // a ShipItState.plist whose updateBundleURL names an update bundle (in a
     // directory with a space, so the URL holds %20), and that bundle. Herdr
-    // gets Herdr.app.new.noindex with that version and, when Herdr runs and
-    // swap is not false, a swapper that moves it into place after the quit.
-    // A Squirrel app's new version lands at the next `open`.
+    // gets Herdr.app.new.noindex with that version, which the next `open`
+    // moves into place unless swap is false. A Squirrel app's new version
+    // lands at the next `open`.
     stage(k, version, { swap = true } = {}) {
       const a = APPS[k]
       if (k === 'herdr') {
         writePlist(join(apps, 'Herdr.app.new.noindex', 'Contents', 'Info.plist'), a, version ?? '0.1.15')
         writeFileSync(join(apps, 'Herdr.app.new.json.noindex'), `{"version":"${version ?? '0.1.15'}"}`)
-        if (swap && existsSync(join(state, 'apps', a.id))) fake(`herdrswap:1:${apps}:${sb.pidOf(k)}`, 'herdr swapper')
+        if (swap) writeFileSync(join(state, 'herdr-swap'), '')
         return
       }
       const upd = updateBundle(k)
@@ -343,14 +368,23 @@ function sandbox({ installed = Object.keys(APPS) } = {}) {
       const app = existsSync(join(state, 'apps', a.id)) ? readFileSync(join(state, 'apps', a.id), 'utf8').trim() : '999999'
       return fake(`shipit:${seconds}:${join(updateBundle(k), '..')}:${app}`, `${join(apps, a.bundle)}/Contents/Frameworks/Squirrel.framework/Resources/ShipIt ${a.id}.ShipIt ${shipitState(k)}`)
     },
-    // The herdr-core session server and holder: their own session leaders,
-    // outside Herdr.app's process group, as measured.
-    herdrCore() {
+    // The herdr-core broker (--hc-launchd) and holder: their own session
+    // leaders, outside Herdr.app's process group, as measured. The holder
+    // owns the agent shells.
+    herdrCore({ hold: withHold = true } = {}) {
       const server = fake('app', `${home}/.local/bin/herdr-core --hc-launchd /tmp/hc-launchd-1/ready`)
-      const hold = fake('app', `${home}/.local/bin/herdr-core hold --socket ${home}/.local/state/herdr-core/default/default.holder.1.sock`)
       writeFileSync(join(state, 'herdr-server'), String(server))
+      if (!withHold) return { server }
+      const hold = fake('app', `${home}/.local/bin/herdr-core hold --socket ${home}/.local/state/herdr-core/default/default.holder.1.sock`)
       writeFileSync(join(state, 'herdr-hold'), String(hold))
       return { server, hold }
+    },
+    // herdrClient(): a `herdr-core connect` client in a terminal (its parent
+    // is not Herdr.app).
+    herdrClient() {
+      const client = fake('app', `${home}/.local/bin/herdr-core connect`)
+      writeFileSync(join(state, 'herdr-client'), String(client))
+      return client
     },
     // claudeFiles([recent]): Claude Desktop's session dirs and VM disk, all
     // last changed 2 hours ago, except <recent> (a path under them), changed now.
@@ -673,47 +707,126 @@ test('no-op night: apps that are not installed are skipped quietly', () =>
 
 // --- Herdr -----------------------------------------------------------------------
 
-test('Herdr staged: SIGTERM to Herdr.app only, relaunched, 0.1.13 -> 0.1.15, herdr-core PIDs unchanged', () =>
+const HOLD_ARGS = (sb) => `${sb.home}/.local/bin/herdr-core hold --socket ${sb.home}/.local/state/herdr-core/default/default.holder.1.sock`
+
+test('Herdr staged: SIGTERM to Herdr.app only, relaunched, 0.1.13 -> 0.1.15, hold unchanged; Herdr.app\'s own client and an attached terminal client are not mailed', () =>
   withSandbox({}, (sb) => {
     const { server, hold } = sb.herdrCore()
-    const old = sb.start('herdr')
+    const client = sb.herdrClient()
+    const old = sb.start('herdr', 'with-connect')
     sb.stage('herdr')
     const r = sb.run()
     assert.equal(r.status, 0, r.stdout + r.stderr)
     assert.deepEqual(sb.signals(), [`TERM ${join(sb.apps, 'Herdr.app/Contents/MacOS/Herdr')}`])
     assert.deepEqual(opens(sb), ['dev.herdr.app'])
     assert.notEqual(sb.pidOf('herdr'), old)
-    assert.ok(alive(server) && alive(hold), 'herdr-core was touched')
-    assert.match(r.stdout, new RegExp(`herdr-core before: hc-launchd:${server} hold:${hold}`))
+    assert.ok(alive(server) && alive(hold) && alive(client), 'herdr-core was touched')
+    assert.equal(existsSync(join(sb.apps, 'Herdr.app.new.noindex')), false)
+    assert.ok(r.stdout.includes(`Herdr: herdr-core hold before: ${hold} ${HOLD_ARGS(sb)}\n`), r.stdout)
+    assert.ok(r.stdout.includes(`Herdr: herdr-core --hc-launchd before: ${server}; connect clients outside Herdr.app: ${client}\n`), r.stdout)
+    assert.ok(r.stdout.includes(`Herdr: herdr-core hold after: ${hold} ${HOLD_ARGS(sb)}\n`), r.stdout)
+    assert.doesNotMatch(r.stdout, /detached/)
     const m = sb.mails()
     assert.equal(m.length, 1)
     assert.equal(subject(m[0]), 'App updates on testhost')
-    assert.match(m[0], /\nUpdated or relaunched:\n- Herdr updated and relaunched, 0\.1\.13 -> 0\.1\.15\n/)
+    assert.match(m[0], /\nUpdated or relaunched:\n- Herdr updated and relaunched, 0\.1\.13 -> 0\.1\.15\n\nLog:/)
     assert.equal(existsSync(sb.marker), false)
   }))
 
-test('Herdr: a herdr-core server PID that changes across the relaunch is FAILED: "herdr-core restarted, sessions lost"', () =>
+// The case measured on the homelab Mac: the launch restarts the broker, and
+// the holder keeps its PID and socket.
+test('Herdr: the --hc-launchd broker restarts with a new PID and hold survives: "updated and relaunched, 0.1.13 -> 0.1.15", no FAILED', () =>
+  withSandbox({}, (sb) => {
+    const { server, hold } = sb.herdrCore()
+    sb.start('herdr')
+    sb.stage('herdr')
+    const r = sb.run({ STUB_HERDR_RESTART: 'server' })
+    assert.equal(r.status, 0, r.stdout + r.stderr)
+    assert.ok(!alive(server) && alive(hold))
+    assert.match(r.stdout, new RegExp(`Herdr: herdr-core --hc-launchd restarted \\(${server} -> \\d+\\); expected, not a failure`))
+    assert.match(r.stdout, /changed: Herdr updated and relaunched, 0\.1\.13 -> 0\.1\.15/)
+    assert.doesNotMatch(r.stdout, /FAILED/)
+    assert.equal(existsSync(sb.marker), false)
+    assert.doesNotMatch(sb.mails()[0], /Failed:/)
+  }))
+
+test('Herdr: a herdr-core hold that restarts across the relaunch is FAILED: "hold ended, sessions lost"', () =>
+  withSandbox({}, (sb) => {
+    const { hold } = sb.herdrCore()
+    sb.start('herdr')
+    sb.stage('herdr')
+    const r = sb.run({ STUB_HERDR_RESTART: 'hold' })
+    assert.equal(r.status, 1, r.stdout + r.stderr)
+    assertMarker(sb, new RegExp(`Herdr: herdr-core hold ended, sessions lost \\(before: ${hold} `))
+    assert.match(r.stdout, /Herdr: herdr-core hold after: \d+ \S+ hold --socket \/tmp\/holder-2\.sock\n/)
+    const m = sb.mails()[0]
+    assert.equal(subject(m), 'App updates on testhost: FAILED')
+    assert.match(m, /\nFailed:\n- Herdr: herdr-core hold ended, sessions lost/)
+  }))
+
+test('Herdr: no herdr-core --hc-launchd after the relaunch is FAILED', () =>
   withSandbox({}, (sb) => {
     sb.herdrCore()
     sb.start('herdr')
     sb.stage('herdr')
-    const r = sb.run({ STUB_HERDR_RESTART: '1' })
+    const r = sb.run({ STUB_HERDR_RESTART: 'nobroker' })
     assert.equal(r.status, 1, r.stdout + r.stderr)
-    assertMarker(sb, /Herdr: herdr-core restarted, sessions lost \(before: hc-launchd:\d+ hold:\d+; after: hc-launchd:\d+ hold:\d+\)/)
-    const m = sb.mails()[0]
-    assert.equal(subject(m), 'App updates on testhost: FAILED')
-    assert.match(m, /\nFailed:\n- Herdr: herdr-core restarted, sessions lost/)
+    assertMarker(sb, /Herdr: no herdr-core --hc-launchd server after the relaunch; sessions unreachable until it starts/)
+    assert.doesNotMatch(r.stdout, /hold ended/)
   }))
 
-test('Herdr: no herdr-core server found: not relaunched, reported for a relaunch by hand', () =>
+test('Herdr: the staged bundle is never applied: FAILED "did not apply", the app runs, no second "version is unchanged" line', () =>
   withSandbox({}, (sb) => {
+    const { server, hold } = sb.herdrCore()
+    sb.start('herdr')
+    sb.stage('herdr', '0.1.15', { swap: false })
+    const r = sb.run()
+    assert.equal(r.status, 1, r.stdout + r.stderr)
+    assert.deepEqual(opens(sb), ['dev.herdr.app'])
+    assert.ok(alive(sb.pidOf('herdr')), 'Herdr was left down')
+    assert.ok(alive(server) && alive(hold))
+    assertMarker(sb, /Herdr: relaunched, but the staged update did not apply \(still at Herdr\.app\.new\.noindex after 3s\) \(see/)
+    assert.doesNotMatch(r.stdout, /version is unchanged|started anyway/)
+    assert.doesNotMatch(sb.mails()[0], /version is unchanged|Updated or relaunched:/)
+  }))
+
+test('Herdr: a terminal herdr-core connect client that the relaunch ends is mailed for a reattach, not FAILED', () =>
+  withSandbox({}, (sb) => {
+    sb.herdrCore()
+    const client = sb.herdrClient()
+    sb.start('herdr', 'with-connect')
+    sb.stage('herdr')
+    const r = sb.run({ STUB_HERDR_RESTART: 'server', STUB_HERDR_DETACH: '1' })
+    assert.equal(r.status, 0, r.stdout + r.stderr)
+    assert.equal(existsSync(sb.marker), false)
+    const m = sb.mails()[0]
+    assert.match(m, /\nUpdated or relaunched:\n- Herdr updated and relaunched, 0\.1\.13 -> 0\.1\.15\n/)
+    assert.ok(m.includes(`\nRelaunch by hand:\n- Herdr: terminal clients attached with herdr-core connect were detached (PIDs ${client}); sessions survive in hold; reattach\n`), m)
+  }))
+
+test('Herdr: Herdr.app exits again during the broker wait: FAILED, left down, no "updated" line', () =>
+  withSandbox({}, (sb) => {
+    const { hold } = sb.herdrCore()
+    sb.start('herdr')
+    sb.stage('herdr')
+    const r = sb.run({ STUB_HERDR_DIES: '2' })
+    assert.equal(r.status, 1, r.stdout + r.stderr)
+    assert.ok(alive(hold))
+    assertMarker(sb, /Herdr: relaunched, but the app was not running 3s later/)
+    assert.match(readFileSync(join(sb.logs, 'app-update.down'), 'utf8'), /^dev\.herdr\.app \d{4}-\d{2}-\d{2} \d{2}:\d{2}\n$/)
+    assert.doesNotMatch(r.stdout, /changed: Herdr/)
+  }))
+
+test('Herdr: no herdr-core hold found (only the broker runs): not relaunched, reported for a relaunch by hand', () =>
+  withSandbox({}, (sb) => {
+    sb.herdrCore({ hold: false })
     sb.start('herdr')
     sb.stage('herdr')
     const r = sb.run()
     assert.equal(r.status, 0, r.stdout + r.stderr)
     assert.deepEqual(sb.signals(), [])
     assert.deepEqual(called(sb, 'open'), [])
-    assert.match(sb.mails()[0], /Relaunch by hand:\n- Herdr: update staged; not relaunched: no herdr-core --hc-launchd server found/)
+    assert.match(sb.mails()[0], /Relaunch by hand:\n- Herdr: update staged; not relaunched: no herdr-core hold found, so the job cannot prove the sessions survive; relaunch by hand\n/)
   }))
 
 test('Herdr: nothing staged: not touched', () =>
@@ -735,29 +848,19 @@ test('Herdr: staged but Herdr.app not running: not started, and mailed for a sta
     assert.match(sb.mails()[0], /\nRelaunch by hand:\n- Herdr: update staged \(0\.1\.15\), but Herdr\.app is not running; not started; start it by hand\n/)
   }))
 
-test('Herdr: the staged update stays after the quit: `open` runs anyway after the wait, FAILED', () =>
-  withSandbox({}, (sb) => {
-    const { server, hold } = sb.herdrCore()
-    sb.start('herdr')
-    sb.stage('herdr', '0.1.15', { swap: false })
-    const r = sb.run()
-    assert.equal(r.status, 1, r.stdout + r.stderr)
-    assert.deepEqual(opens(sb), ['dev.herdr.app'])
-    assert.ok(alive(sb.pidOf('herdr')), 'Herdr was left down')
-    assert.ok(alive(server) && alive(hold))
-    assertMarker(sb, /Herdr: the staged update was still at Herdr\.app\.new\.noindex 3s after the quit; started anyway/)
-    assert.match(sb.mails()[0], /- Herdr relaunched, but the version is unchanged \(0\.1\.13\)/)
-  }))
-
-// The two switches at the top of the script: each is one line to change.
+// A copy of the script in its own dir, with lib/text.sh next to it as the
+// loader needs, and <from> replaced by <to>.
 function scriptWith(sb, from, to) {
   const src = read('dot_cron/executable_app-update.sh')
   assert.equal(src.split(from).length, 2, `the script has no single line ${from}`)
+  mkdirSync(join(sb.base, 'lib'), { recursive: true })
+  copyFileSync(new URL('dot_cron/lib/text.sh', ROOT), join(sb.base, 'lib', 'text.sh'))
   const copy = join(sb.base, 'app-update.sh')
   writeFileSync(copy, src.replace(from, to))
   return copy
 }
 
+// The switch at the top of the script: one line to change.
 test('Herdr switch: herdr_class=report: a staged update is mailed, Herdr is never signalled', () =>
   withSandbox({}, (sb) => {
     sb.herdrCore()
@@ -770,16 +873,25 @@ test('Herdr switch: herdr_class=report: a staged update is mailed, Herdr is neve
     assert.match(sb.mails()[0], /- Herdr: update staged \(0\.1\.15\); relaunch by hand\n/)
   }))
 
-for (const [watch, restart, failed] of [['hc-launchd hold', 'hold', true], ['hc-launchd', 'hold', false], ['hc-launchd', 'server', true]]) {
-  test(`Herdr switch: herdr_watch="${watch}": a restarted ${restart} is ${failed ? '' : 'not '}FAILED`, () =>
+// --- The shared text lib ---------------------------------------------------------
+
+for (const libCase of ['missing', 'syntax']) {
+  test(`lib: a ${libCase} lib/text.sh writes app-update.FAILED ("cannot load") and exits 1 before any probe`, () =>
     withSandbox({}, (sb) => {
-      sb.herdrCore()
-      sb.start('herdr')
-      sb.stage('herdr')
-      const r = sb.run({ STUB_HERDR_RESTART: restart }, { script: scriptWith(sb, '\nherdr_watch="hc-launchd hold"\n', `\nherdr_watch="${watch}"\n`) })
-      assert.equal(r.status, failed ? 1 : 0, r.stdout + r.stderr)
-      assert.equal(/herdr-core restarted, sessions lost/.test(r.stdout), failed, r.stdout)
-      assert.match(r.stdout, /changed: Herdr updated and relaunched, 0\.1\.13 -> 0\.1\.15/)
+      const dir = join(sb.base, 'nolib')
+      mkdirSync(dir)
+      const copy = join(dir, 'app-update.sh')
+      writeFileSync(copy, read('dot_cron/executable_app-update.sh'))
+      if (libCase === 'syntax') {
+        mkdirSync(join(dir, 'lib'))
+        writeFileSync(join(dir, 'lib', 'text.sh'), 'oneline() {\n    printf "%s" "$1"\n')
+      }
+      const r = sb.run({}, { script: copy })
+      assert.equal(r.status, 1, r.stdout + r.stderr)
+      assert.match(r.stdout, /^app-update: cannot load .*\/lib\/text\.sh$/m)
+      assert.match(readFileSync(sb.marker, 'utf8'), /^\d{4}-\d{2}-\d{2} \d{2}:\d{2} app-update: cannot load ~\/\.cron\/lib\/text\.sh; run chezmoi apply\n$/)
+      assert.deepEqual(called(sb, 'net'), [])
+      assertNoAction(sb)
     }))
 }
 
@@ -1335,7 +1447,7 @@ test('without timeout/gtimeout on PATH it still runs, unbounded', () =>
   withSandbox({}, (sb) => {
     const tools = join(sb.base, 'tools')
     mkdirSync(tools)
-    for (const t of ['bash', 'sh', 'mkdir', 'cat', 'sed', 'tr', 'cut', 'sleep', 'rm', 'touch', 'head', 'tail', 'wc', 'mv', 'ls', 'grep', 'find', 'sort', 'awk', 'ps', 'basename']) {
+    for (const t of ['bash', 'sh', 'mkdir', 'cat', 'sed', 'tr', 'cut', 'sleep', 'rm', 'touch', 'head', 'tail', 'wc', 'mv', 'ls', 'grep', 'find', 'sort', 'awk', 'ps', 'basename', 'dirname']) {
       symlinkSync(which(t), join(tools, t))
     }
     const PATH = `${sb.bin}:${tools}`
@@ -1611,7 +1723,7 @@ test('Claude Desktop: helpers with spaces in their paths, a claude-code process,
   }))
 
 for (const [name, setup, args, re] of [
-  ['Herdr: ps cannot list the herdr-core processes', (sb) => { sb.herdrCore(); sb.start('herdr'); sb.stage('herdr') }, '-A -o pid= -o args=',
+  ['Herdr: ps cannot list the herdr-core processes', (sb) => { sb.herdrCore(); sb.start('herdr'); sb.stage('herdr') }, '-A -o pid= -o ppid= -o args=',
     /- Herdr: update staged; not relaunched: ps cannot list the herdr-core processes; relaunch by hand\n/],
   ['Claude Desktop: ps cannot list the process tree', (sb) => { sb.claudeFiles(); sb.start('claude'); sb.stage('claude', '5.1232.0'); sb.shipit('claude', 1) }, '-A -o pid= -o ppid= -o comm=',
     /- Claude Desktop: update staged; not relaunched: ps failed: ps: sysctl: Operation not permitted; relaunch by hand\n/],

@@ -175,7 +175,7 @@ the app runs.
 
 | App | What the job does |
 | --- | --- |
-| Herdr | Relaunches it when `/Applications/Herdr.app.new.noindex` exists. The sessions live in the `herdr-core` server, not in Herdr.app. `herdr-core --hc-launchd` runs as its own session leader (parent PID 1), outside the process group of Herdr.app, so a quit of Herdr.app does not stop it. The job records the `herdr-core` PIDs before the quit. If they change, the job writes FAILED ("herdr-core restarted, sessions lost"). After the quit, the job waits up to 60 seconds until `Herdr.app.new.noindex` is gone, then starts Herdr. If it stays, the job starts Herdr anyway and writes FAILED. Two lines at the top of the script set the Herdr mode: `herdr_class` (`relaunch` or `report`) and `herdr_watch` (the `herdr-core` roles whose PIDs must stay the same). |
+| Herdr | Relaunches it when `/Applications/Herdr.app.new.noindex` exists. The agent shells are children of `herdr-core hold`, not of Herdr.app. The hold process outlives the broker. After a relaunch, launchd is its parent, and its PID and socket stay the same. The launch of Herdr.app restarts `herdr-core --hc-launchd`, a broker that owns no shell. The launch also applies the staged bundle. The job records the PID and args (with `--socket`) of each hold before the quit, and starts Herdr as soon as it exits. After the relaunch, the job waits up to 60 seconds until `Herdr.app.new.noindex` is gone, then 15 seconds for the broker. If the bundle stays, or a hold is gone or has other args, or no broker runs, the job writes FAILED. A new broker PID is not a failure. If no hold runs before the quit, the job does not relaunch Herdr. If the relaunch ends a `herdr-core connect` client in a terminal, the mail tells you to attach it again. The `herdr_class` line at the top of the script sets the mode: `relaunch` or `report`. |
 | T3 Code, Fastmail, 1Password | Relaunch when `~/Library/Caches/<bundle id>.ShipIt/ShipItState.plist` exists and the update bundle that its `updateBundleURL` names also exists. Squirrel never deletes the plist. ShipIt moves or deletes the update bundle when it installs. After the quit, the job waits up to 120 seconds until no ShipIt for that app runs and the update bundle is gone. Then it starts the app. If the 120 seconds run out, the job waits up to 60 seconds more for ShipIt to stop, then starts the app anyway and writes FAILED. 1Password comes back locked, so `op` fails until you unlock it. On this Mac, the Squirrel probe has only been seen to fire for Claude Desktop. For T3 Code, Fastmail, and 1Password it is not measured. |
 | Claude Desktop | Same as above, but only when no `claude` process runs under it and its session files and VM disk did not change in the last hour. Otherwise the mail says "skipped: session active". |
 | Chrome | Report only, because a quit loses tabs. The mail tells you when the installed version differs from the running version. |
@@ -382,9 +382,10 @@ The only per-machine step is `cf auth login`. `cf` keeps its own credentials, ou
   `~/.agents/skills` belongs to the `skills` tool (`dot_agents/skills.txt`).
 - **herdr** — terminal multiplexer for AI agents. The Homebrew formula is the
   `herdr` CLI. `/Applications/Herdr.app` is not from Homebrew and has its own
-  updater. The `herdr-core` server hosts the sessions. `herdr-core --hc-launchd`
-  runs as its own session leader (parent PID 1), outside the process group of
-  Herdr.app, so a quit of Herdr.app does not end the sessions.
+  updater. The agent shells are children of `herdr-core hold`, which launchd
+  owns, so a quit of Herdr.app does not end the sessions. The launch of
+  Herdr.app restarts `herdr-core --hc-launchd`, a broker that owns no shell, and
+  applies a staged update.
 - **opencode** (`opencode`) — installed via Homebrew from homebrew-core.
   Not from upstream's `anomalyco/tap`: its `opencode` formula is still OpenCode 1, and its separate `opencode-v2` formula conflicts with core's.
   `~/.config/opencode/AGENTS.md` is rendered from `dot_claude/CLAUDE.md.tmpl`
