@@ -53,13 +53,15 @@ const CLI = [
   'echo "tailscale $*" >> "$CALLS"',
   'case "$*" in',
   '"status --json")',
+  '  [ -n "${STUB_STATUS_HANG:-}" ] && exec sleep 600',
   '  if [ -n "${STUB_STATUS_RAW+x}" ]; then printf \'%s\\n\' "$STUB_STATUS_RAW"; exit "${STUB_STATUS_RC:-0}"; fi',
   '  s=$(head -n 1 "$STATE/backend")',
   '  if [ "$(wc -l < "$STATE/backend")" -gt 1 ]; then tail -n +2 "$STATE/backend" > "$STATE/b.tmp"; mv "$STATE/b.tmp" "$STATE/backend"; fi',
   '  printf \'{\\n  "Version": "1.104.5-t788384763",\\n  "TUN": true,\\n  "BackendState": "%s",\\n  "HaveNodeKey": true,\\n  "Health": [\\n    "\\\\"BackendState\\\\": \\\\"Running\\\\" in a health message"\\n  ]\\n}\\n\' "$s"',
   '  exit "${STUB_STATUS_RC:-0}" ;;',
   '"debug prefs")',
-  '  if [ -n "${STUB_PREFS_RAW+x}" ]; then printf \'%s\\n\' "$STUB_PREFS_RAW"; exit 1; fi',
+  '  [ -n "${STUB_PREFS_HANG:-}" ] && exec sleep 600',
+  '  if [ -n "${STUB_PREFS_RAW+x}" ]; then printf \'%s\\n\' "$STUB_PREFS_RAW"; exit "${STUB_PREFS_RC:-1}"; fi',
   '  printf \'{\\n  "ControlURL": "https://controlplane.tailscale.com",\\n  "WantRunning": false,\\n  "LoggedOut": %s\\n}\\n\' "${STUB_LOGGED_OUT:-false}"',
   '  exit 0 ;;',
   'up)',
@@ -301,7 +303,9 @@ for (const st of ['NeedsLogin', 'NeedsMachineAuth', 'InUseOtherUser']) {
 test('still Starting after the wait: FAILED Starting', () =>
   withSandbox({ backend: 'Starting' }, (sb) => {
     const r = sb.run()
-    assert.ok(r.elapsed >= 2.5 && r.elapsed < 10, `took ${r.elapsed}s`)
+    // The deadline is whole seconds (`date +%s`), so a 3s wait really lasts
+    // between 2 and 3 seconds; 2.5 failed whenever the run began late in a second.
+    assert.ok(r.elapsed >= 2 && r.elapsed < 10, `took ${r.elapsed}s`)
     assertFailed(sb, r, /BackendState is still Starting after 3s/)
   }))
 
@@ -390,7 +394,9 @@ test('app not running, open fails: FAILED with the open error', () =>
 test('app not running, open succeeds but the app never shows up: FAILED after the wait', () =>
   withSandbox({ app: false }, (sb) => {
     const r = sb.run({ STUB_OPEN_NOAPP: '1' })
-    assert.ok(r.elapsed >= 2.5 && r.elapsed < 10, `took ${r.elapsed}s`)
+    // The deadline is whole seconds (`date +%s`), so a 3s wait really lasts
+    // between 2 and 3 seconds; 2.5 failed whenever the run began late in a second.
+    assert.ok(r.elapsed >= 2 && r.elapsed < 10, `took ${r.elapsed}s`)
     assertFailed(sb, r, /started io\.tailscale\.ipn\.macos, but the app was not running 3s later/)
   }))
 
@@ -532,3 +538,192 @@ test('script: no `tailscale up` with flags, no login, logout, or down anywhere',
   const runs = [...code.matchAll(/run \d+ "\$cli" ([^<)]*)/g)].map((m) => m[1].trim())
   assert.deepEqual([...new Set(runs)].sort(), ['debug prefs', 'status --json', 'up'])
 })
+
+// --- Real output shapes, bounds, and edge cases (tester additions) -----------------
+//
+// The two fixtures below copy the layout of the real Tailscale 1.104.6 Standalone
+// CLI (io.tailscale.ipn.macsys), read with `status --json` and `debug prefs` on a
+// Mac where it was Running: `status --json` indents with two spaces and has one
+// "BackendState" (at the top level; Self and Peer hold none), and `debug prefs`
+// indents with TABS and ends each value with a comma. Node IDs, keys, IPs, and
+// names are replaced with placeholders.
+
+const REAL_STATUS_RUNNING = [
+  '{',
+  '  "Version": "1.104.6-t3b273a64c-gdf9d2ed85",',
+  '  "TUN": true,',
+  '  "BackendState": "Running",',
+  '  "HaveNodeKey": true,',
+  '  "AuthURL": "",',
+  '  "TailscaleIPs": [',
+  '    "100.64.0.1",',
+  '    "fd7a:115c:a1e0::1"',
+  '  ],',
+  '  "Self": {',
+  '    "ID": "nPLACEHOLDER",',
+  '    "HostName": "homelab",',
+  '    "Online": true,',
+  '    "ExitNode": false',
+  '  },',
+  '  "Health": [],',
+  '  "Peer": {',
+  '    "nodekey:0000": {',
+  '      "HostName": "laptop",',
+  '      "Online": true',
+  '    }',
+  '  }',
+  '}',
+].join('\n')
+
+const realPrefs = (loggedOut) =>
+  ['{', '\t"ControlURL": "https://controlplane.tailscale.com",', '\t"RouteAll": false,', '\t"ExitNodeID": "",', '\t"CorpDNS": true,', '\t"RunSSH": false,', '\t"WantRunning": false,', `\t"LoggedOut": ${loggedOut},`, '\t"ShieldsUp": false,', '\t"AdvertiseTags": null,', '\t"AdvertiseRoutes": null', '}'].join('\n')
+
+test('real `status --json` shape (1.104.6, Running, exit 0): healthy, no mail', () =>
+  withSandbox({}, (sb) => {
+    const r = sb.run({ STUB_STATUS_RAW: REAL_STATUS_RUNNING, STUB_STATUS_RC: '0' })
+    assertHealthy(sb, r)
+    assert.deepEqual(sb.mails(), [])
+  }))
+
+test('real `debug prefs` shape (tabs, trailing comma, exit 0), Stopped and logged in: one `up`, recovered', () =>
+  withSandbox({ backend: 'Stopped' }, (sb) => {
+    const r = sb.run({ STUB_PREFS_RAW: realPrefs('false'), STUB_PREFS_RC: '0' })
+    assert.deepEqual(tsCalls(sb), ['status --json', 'debug prefs', 'up', 'status --json'])
+    assertHealthy(sb, r)
+    assert.equal(subject(sb.mails()[0]), 'Tailscale recovered on testhost')
+  }))
+
+test('real `debug prefs` shape, Stopped and logged out: no up, FAILED logged-out', () =>
+  withSandbox({ backend: 'Stopped' }, (sb) => {
+    const r = sb.run({ STUB_PREFS_RAW: realPrefs('true'), STUB_PREFS_RC: '0' })
+    assertFailed(sb, r, /logged out; log in by hand/)
+    assert.ok(!tsCalls(sb).includes('up'))
+  }))
+
+test('`debug prefs` with two LoggedOut values: cannot evaluate, no up', () =>
+  withSandbox({ backend: 'Stopped' }, (sb) => {
+    const r = sb.run({ STUB_PREFS_RAW: '{\n\t"LoggedOut": false,\n\t"Profile": {\n\t\t"LoggedOut": true\n\t}\n}', STUB_PREFS_RC: '0' })
+    assertFailed(sb, r, /LoggedOut cannot be read/)
+    assert.ok(!tsCalls(sb).includes('up'))
+  }))
+
+// The script's own contract: "Exactly one known value must appear in the JSON",
+// and a probe that cannot evaluate never counts as healthy. The multi-line case
+// is covered above; these put both values on ONE line (compact JSON), where the
+// greedy `sed 's/.*"BackendState": *"\(...\)".*/'` keeps only the last value
+// and so sees exactly one.
+test('compact JSON with two BackendState values (Stopped, then nested Running): never healthy', () =>
+  withSandbox({}, (sb) => {
+    const r = sb.run({ STUB_STATUS_RAW: '{"BackendState":"Stopped","Self":{"BackendState":"Running"}}', STUB_STATUS_RC: '0' })
+    assert.notEqual(r.status, 0, `an ambiguous status counted as healthy:\n${r.stdout}`)
+    assert.ok(!tsCalls(sb).includes('up'))
+  }))
+
+test('compact JSON with two BackendState values (Running, then nested Stopped): no `tailscale up`', () =>
+  withSandbox({}, (sb) => {
+    const r = sb.run({ STUB_STATUS_RAW: '{"BackendState":"Running","Self":{"BackendState":"Stopped"}}', STUB_STATUS_RC: '0' })
+    assert.ok(!tsCalls(sb).includes('up'), `an ambiguous status ran up: ${tsCalls(sb).join(',')}`)
+    assert.notEqual(r.status, 0, r.stdout)
+  }))
+
+// --- Bounds: a hung CLI cannot wedge the job ------------------------------------------
+
+test('a hung `status --json` is killed at 10s: cannot evaluate (exit 124), no up, well inside the 5-minute interval', () =>
+  withSandbox({}, (sb) => {
+    const r = sb.run({ STUB_STATUS_HANG: '1' })
+    assert.ok(r.elapsed >= 9 && r.elapsed < 20, `took ${r.elapsed}s`)
+    assertFailed(sb, r, /cannot read BackendState from `tailscale status --json` \(exit 124\)/)
+    assert.ok(!tsCalls(sb).includes('up'))
+    assert.equal(state(sb), 'cannot-evaluate')
+  }))
+
+test('a hung `debug prefs` is killed at 10s: cannot evaluate, no up', () =>
+  withSandbox({ backend: 'Stopped' }, (sb) => {
+    const r = sb.run({ STUB_PREFS_HANG: '1' })
+    assert.ok(r.elapsed >= 9 && r.elapsed < 20, `took ${r.elapsed}s`)
+    assertFailed(sb, r, /LoggedOut cannot be read from `tailscale debug prefs` \(exit 124\)/)
+    assert.ok(!tsCalls(sb).includes('up'))
+  }))
+
+// --- More states and transitions -------------------------------------------------------
+
+test('still NoState after the wait: FAILED NoState, no up', () =>
+  withSandbox({ backend: 'NoState' }, (sb) => {
+    assertFailed(sb, sb.run(), /BackendState is still NoState after 3s/)
+    assert.ok(!tsCalls(sb).includes('up'))
+    assert.equal(subject(sb.mails()[0]), 'Tailscale is down on testhost: NoState')
+  }))
+
+test('`tailscale up` succeeds, then the status cannot be read: FAILED not-running, "unreadable"', () =>
+  withSandbox({ backend: 'Stopped' }, (sb) => {
+    const r = sb.run({ STUB_AFTER_UP: 'Sleeping' })
+    assertFailed(sb, r, /`tailscale up` ran, but the state is unreadable 3s later/)
+    assert.equal(state(sb), 'not-running')
+  }))
+
+test('`tailscale up` succeeds but leaves NeedsLogin: FAILED not-running, `up` ran once', () =>
+  withSandbox({ backend: 'Stopped' }, (sb) => {
+    const r = sb.run({ STUB_AFTER_UP: 'NeedsLogin' })
+    assertFailed(sb, r, /the state is NeedsLogin 3s later/)
+    assert.deepEqual(tsCalls(sb).filter((c) => c === 'up'), ['up'])
+  }))
+
+test('an empty state file counts as no report: Running sends no mail', () =>
+  withSandbox({}, (sb) => {
+    mkdirSync(sb.logs, { recursive: true })
+    writeFileSync(sb.statefile, '')
+    assertHealthy(sb, sb.run())
+    assert.deepEqual(sb.mails(), [])
+  }))
+
+test('app started, then Running, but the recovery mail fails: state app-not-running, and the next run reports it', () =>
+  withSandbox({ app: false }, (sb) => {
+    const r = sb.run({ STUB_MAIL_RC: '1' })
+    assert.equal(r.status, 1, r.stdout + r.stderr)
+    assert.match(readFileSync(sb.marker, 'utf8'), /Running again \(the Tailscale app was not running; .*\), but the recovery mail failed/)
+    assert.equal(state(sb), 'app-not-running')
+    assertHealthy(sb, sb.run())
+    assert.deepEqual(sb.mails().map(subject), ['Tailscale recovered on testhost'])
+    assert.match(sb.mails()[0], /the last report was app-not-running/)
+  }))
+
+test('the same failure while the mail keeps failing: each run retries the mail, the marker stays one line', () =>
+  withSandbox({ backend: 'NeedsLogin' }, (sb) => {
+    for (let i = 0; i < 3; i++) assertFailed(sb, sb.run({ STUB_MAIL_RC: '1' }), /the alert mail failed too/)
+    assert.equal(sb.calls().filter((c) => c.startsWith('himalaya')).length, 3)
+    assert.equal(existsSync(sb.statefile), false)
+  }))
+
+// --- Hostile output text ---------------------------------------------------------------
+
+test('a 5000-character, many-line `up` error: one marker line, bounded, and a one-line mail subject', () =>
+  withSandbox({ backend: 'Stopped' }, (sb) => {
+    const err = Array.from({ length: 100 }, (_, i) => `line ${i} ` + 'e'.repeat(42)).join('\n')
+    const r = sb.run({ STUB_UP_RC: '1', STUB_UP_ERR: err })
+    const m = assertFailed(sb, r, /`tailscale up` failed/)
+    assert.ok(Buffer.byteLength(m) < 600, `marker is ${Buffer.byteLength(m)} bytes`)
+    const mail = sb.mails()[0]
+    assert.equal(subject(mail), 'Tailscale is down on testhost: up-failed')
+    assert.ok(!/line 99/.test(mail), 'the reason was not cut at 300 characters')
+  }))
+
+// Marker and mail text must stay valid UTF-8 when the CLI's own output is valid
+// UTF-8: the shell banner prints the marker, and himalaya takes the message as a
+// command-line argument. Under launchd there is no LANG, so `cut -c` counts bytes
+// (as GNU cut in this container always does) and can split a multi-byte character.
+test('a non-ASCII `up` error that crosses the 300-character cut: marker and mail stay valid UTF-8', () =>
+  withSandbox({ backend: 'Stopped' }, (sb) => {
+    const r = sb.run({ STUB_UP_RC: '1', STUB_UP_ERR: 'x'.repeat(299) + '☁ réseau indisponible' })
+    assert.equal(r.status, 1, r.stdout + r.stderr)
+    const strict = new TextDecoder('utf-8', { fatal: true })
+    assert.doesNotThrow(() => strict.decode(readFileSync(sb.marker)), 'marker is not valid UTF-8')
+    const mailFile = readdirSync(join(sb.base, 'state')).find((f) => f.startsWith('mail.'))
+    assert.doesNotThrow(() => strict.decode(readFileSync(join(sb.base, 'state', mailFile))), 'mail is not valid UTF-8')
+  }))
+
+test('hostname fails: the mail names "this Mac" instead', () =>
+  withSandbox({ backend: 'NeedsLogin' }, (sb) => {
+    writeFileSync(join(sb.bin, 'hostname'), '#!/bin/sh\nexit 1\n')
+    assertFailed(sb, sb.run(), /NeedsLogin/)
+    assert.equal(subject(sb.mails()[0]), 'Tailscale is down on this Mac: NeedsLogin')
+  }))

@@ -1030,3 +1030,64 @@ test('apply: homelab true -> false -> true: the watchdog is booted out (its plis
     sb.cleanup()
   }
 })
+
+// --- The homelab flag, from a real config file (tester additions) -------------------
+//
+// The tests above pass the flag with --override-data. These use the config file
+// that `chezmoi init` really writes, as every existing Mac has it.
+
+const promptOf = (key) => read('.chezmoi.toml.tmpl').match(new RegExp(`promptBoolOnce \\. "${key}" "([^"]+)"`))[1]
+
+function configHome(toml) {
+  const home = mkdtempSync(join(tmpdir(), 'launch-agents-cfg-'))
+  mkdirSync(join(home, '.config', 'chezmoi'), { recursive: true })
+  if (toml !== undefined) writeFileSync(join(home, '.config', 'chezmoi', 'chezmoi.toml'), toml)
+  return home
+}
+
+test('upgrade path: a config written before the flag (no homelab key) applies with exit 0, only a warning, and does not manage the watchdog', () => {
+  const home = configHome('[data]\n  work = false\n')
+  const src = mkdtempSync(join(tmpdir(), 'launch-agents-src-'))
+  try {
+    // Only the config template: apply has nothing else to run.
+    cpSync(join(SOURCE, '.chezmoi.toml.tmpl'), join(src, '.chezmoi.toml.tmpl'))
+    const env = { PATH: process.env.PATH, HOME: home }
+    const a = spawnSync('chezmoi', ['--source', src, '--destination', home, '--no-tty', 'apply'], { encoding: 'utf8', env })
+    assert.ifError(a.error)
+    assert.equal(a.status, 0, a.stderr)
+    assert.match(a.stderr, /config file template has changed/)
+
+    const m = spawnSync('chezmoi', ['--source', SOURCE, '--destination', home, 'managed', '--include=files'], { encoding: 'utf8', env })
+    assert.equal(m.status, 0, m.stderr)
+    const managed = m.stdout.split('\n')
+    assert.ok(managed.includes('.cron/chezmoi-update.sh'), 'control: the other cron scripts are managed')
+    assert.ok(!managed.includes('.cron/tailscale-watchdog.sh'), m.stdout)
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+    rmSync(src, { recursive: true, force: true })
+  }
+})
+
+for (const [answer, want] of [['true', 'true'], ['false', 'false']]) {
+  test(`chezmoi init on a Mac whose config has work = true and no homelab key: answering ${answer} writes homelab = ${want} and keeps work = true`, () => {
+    const home = configHome('[data]\n  work = true\n')
+    const src = mkdtempSync(join(tmpdir(), 'launch-agents-src-'))
+    try {
+      cpSync(join(SOURCE, '.chezmoi.toml.tmpl'), join(src, '.chezmoi.toml.tmpl'))
+      // promptBoolOnce asks only for the missing key; the work prompt is not answered.
+      const r = spawnSync('chezmoi', ['init', '--source', src, '--no-tty', '--promptBool', `${promptOf('homelab')}=${answer}`], {
+        encoding: 'utf8',
+        env: { PATH: process.env.PATH, HOME: home },
+        input: '',
+      })
+      assert.ifError(r.error)
+      assert.equal(r.status, 0, r.stderr)
+      const cfg = readFileSync(join(home, '.config', 'chezmoi', 'chezmoi.toml'), 'utf8')
+      assert.match(cfg, /^\[data\]\n {2}work = true\n {2}homelab = (true|false)$/m)
+      assert.equal(cfg.match(/^ {2}homelab = (\w+)$/m)[1], want)
+    } finally {
+      rmSync(home, { recursive: true, force: true })
+      rmSync(src, { recursive: true, force: true })
+    }
+  })
+}
