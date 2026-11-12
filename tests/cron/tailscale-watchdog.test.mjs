@@ -1004,3 +1004,131 @@ test('a state file without a trailing newline still reads', () =>
     sb.run()
     assert.deepEqual(sb.mails(), [])
   }))
+
+// --- Tester: state-file edge cases, macOS /bin/sh, and the no-lost-outage invariant ---
+
+// Real-data replay: the live homelab Mac's state file (read, never written) is
+// the one word `Running`, followed by a newline. The update must read it as healthy,
+// mail nothing, and keep the file as it is, on the first run and the second.
+test('replay of the live state file (`Running\\n`): two healthy runs, no mail, the file unchanged', () =>
+  withSandbox({}, (sb) => {
+    writeState(sb, 'Running')
+    for (let i = 0; i < 2; i++) {
+      assertHealthy(sb, sb.run())
+      assert.equal(readFileSync(sb.statefile, 'utf8'), 'Running\n')
+    }
+    assert.deepEqual(sb.mails(), [])
+  }))
+
+test('an empty state file reads as no state: an outage is mailed once, with a first-seen time', () =>
+  withSandbox({ backend: 'NeedsLogin' }, (sb) => {
+    writeFileSync((mkdirSync(sb.logs, { recursive: true }), sb.statefile), '')
+    assertFailed(sb, sb.run(), /NeedsLogin/)
+    assert.equal(sb.mails().length, 1)
+    assert.match(stateLine(sb), new RegExp(`^NeedsLogin mailed ${SINCE}$`))
+  }))
+
+test('a CRLF state line (`mailed\\r`) reads as unsent and sends one extra mail', () =>
+  withSandbox({ backend: 'NeedsLogin' }, (sb) => {
+    mkdirSync(sb.logs, { recursive: true })
+    writeFileSync(sb.statefile, 'NeedsLogin mailed\r\n')
+    assertFailed(sb, sb.run(), /NeedsLogin/)
+    assert.equal(sb.mails().length, 1)
+    // Either way, the run leaves a well-formed state line.
+    assert.match(stateLine(sb), /^NeedsLogin mailed \S+$/)
+  }))
+
+const BASH = spawnSync('sh', ['-c', 'command -v bash']).status === 0 ? false : 'bash not installed'
+
+test('[bash --posix] unsent alert, then recovery: one report that names the outage; then quiet', { skip: BASH }, () =>
+  withSandbox({ backend: 'NeedsLogin' }, (sb) => {
+    const bash = { shell: ['bash', '--posix'] }
+    writeState(sb, 'NeedsLogin unsent 2026-01-02T03:04')
+    assertFailed(sb, sb.run({ STUB_MAIL_RC: '1' }, bash), /not reported yet/)
+    assert.equal(stateLine(sb), 'NeedsLogin unsent 2026-01-02T03:04')
+    sb.setBackend('Running')
+    assertHealthy(sb, sb.run({}, bash))
+    assertHealthy(sb, sb.run({}, bash))
+    assert.equal(sb.mails().length, 1)
+    assert.match(sb.mails()[0], /an outage was never reported: NeedsLogin, first seen 2026-01-02T03:04, and the mail about it did not send\.$/)
+  }))
+
+test('[bash --posix] migration: a one-word key counts as mailed; a one-word `Running` is healthy', { skip: BASH }, () =>
+  withSandbox({ backend: 'NeedsLogin' }, (sb) => {
+    const bash = { shell: ['bash', '--posix'] }
+    writeState(sb, 'NeedsLogin')
+    assertFailed(sb, sb.run({}, bash), /NeedsLogin/)
+    assert.deepEqual(sb.mails(), [])
+    writeState(sb, 'Running')
+    sb.setBackend('Running')
+    assertHealthy(sb, sb.run({}, bash))
+    assert.deepEqual(sb.mails(), [])
+  }))
+
+// Property: random sequences of backend states and mail outcomes. The
+// invariants are the PR's own promises, independent of wording:
+//   - one run sends at most one mail;
+//   - the state file is always `Running` or `<key> <mailed|unsent> <since>`;
+//   - a failing run with working mail sends a mail unless the state already
+//     says `<same key> mailed`, and sends none when it does (no spam);
+//   - a healthy run (exit 0) after a non-Running state sends exactly one mail,
+//     and after `Running` with nothing fixed sends none;
+//   - no outage is lost: every episode (from the first run that fails or fixes
+//     something to the next exit 0) has sent at least one mail when it closes;
+//   - the first-seen time of an episode does not move while it lasts.
+function mulberry32(a) {
+  return () => {
+    a = (a + 0x6d2b79f5) | 0
+    let t = Math.imul(a ^ (a >>> 15), 1 | a)
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+  }
+}
+
+test('property: across random outages and mail failures, no outage is lost and no state is mailed twice', () => {
+  const STATES = ['Running', 'Running', 'NeedsLogin', 'NeedsMachineAuth', 'Stopped']
+  const LINE = new RegExp(`^(Running|[A-Za-z-]+ (mailed|unsent) (${SINCE}|-))$`)
+  for (let seed = 1; seed <= 30; seed++) {
+    const rnd = mulberry32(seed)
+    withSandbox({}, (sb) => {
+      let prev = null // previous state line, null = no file
+      let episodeMailsAtStart = null
+      let episodeSince = null
+      const trace = []
+      for (let i = 0; i < 10; i++) {
+        const backend = STATES[Math.floor(rnd() * STATES.length)]
+        const mailOk = rnd() < 0.5
+        sb.setBackend(backend)
+        const before = sb.mails().length
+        const r = sb.run(mailOk ? {} : { STUB_MAIL_RC: '1' })
+        const sent = sb.mails().length - before
+        const line = stateLine(sb)
+        trace.push(`${backend}/${mailOk ? 'mail' : 'nomail'} -> exit ${r.status}, sent ${sent}, state "${line}"`)
+        const ctx = `seed ${seed}:\n${trace.join('\n')}`
+        assert.ok(sent <= 1, ctx)
+        assert.match(line, LINE, ctx)
+        const prevKey = prev?.split(' ')[0]
+        const prevMailed = prev !== null && (prev.split(' ')[1] ?? 'mailed') === 'mailed'
+        if (r.status === 1 && episodeMailsAtStart === null) episodeMailsAtStart = before
+        if (backend !== 'Running' && backend !== 'Stopped') {
+          assert.equal(r.status, 1, ctx)
+          if (mailOk) assert.equal(sent, prevKey === backend && prevMailed ? 0 : 1, ctx)
+          else assert.equal(sent, 0, ctx)
+        }
+        if (r.status === 0) {
+          const quiet = backend === 'Running' && (prev === null || prev === 'Running')
+          assert.equal(sent, quiet ? 0 : 1, ctx)
+          if (episodeMailsAtStart !== null) assert.ok(sb.mails().length > episodeMailsAtStart, `outage lost\n${ctx}`)
+          assert.equal(line, 'Running', ctx)
+          episodeMailsAtStart = null
+          episodeSince = null
+        } else if (line !== 'Running') {
+          const since = line.split(' ')[2]
+          if (episodeSince === null) episodeSince = since
+          else assert.equal(since, episodeSince, `first-seen time moved\n${ctx}`)
+        }
+        prev = line
+      }
+    })
+  }
+})
