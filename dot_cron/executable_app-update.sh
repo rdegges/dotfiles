@@ -36,8 +36,8 @@
 #     broker restart. A hold that is gone or has other args is FAILED ("hold
 #     ended, sessions lost"), and so is no broker; a new broker PID is only
 #     logged. No hold found: not relaunched. A `herdr-core connect` client
-#     from outside Herdr.app (a terminal) that the relaunch ends is mailed for
-#     a reattach by hand.
+#     from outside Herdr.app (a terminal or an SSH session) that the relaunch
+#     ends is mailed for a reattach by hand.
 #   - T3 Code, Fastmail, 1Password (relaunch, Squirrel): pending =
 #     ~/Library/Caches/<bundle id>.ShipIt/ShipItState.plist exists and the
 #     update bundle that its updateBundleURL names exists. Squirrel never
@@ -94,8 +94,9 @@
 # APP_UPDATE_ANY_HOUR=1 skips the hour guard. APP_UPDATE_MAIL_ACCOUNT replaces
 # the himalaya account (default icloud), for a forced mail failure. For tests
 # only: APP_UPDATE_APPS replaces /Applications, and APP_UPDATE_WAIT replaces
-# the 60s, 120s, and 10 min waits (the 20 min bound on the Docker update
-# stays).
+# every bound() wait: the 15s broker wait, the 60s waits (staged bundle, new
+# PID, quit, ShipIt grace), the 120s ShipIt wait, and the 10 min wait (the 20
+# min bound on the Docker update stays).
 
 set -u
 
