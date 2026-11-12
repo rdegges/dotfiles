@@ -14,7 +14,8 @@
 #     last 20 min, the keyboard or mouse was used in the last 30 min (ioreg
 #     HIDIdleTime), or the 5-minute load average is over 4.
 # A skip writes app-update.FAILED and mails once when no pass has completed in
-# 7 days (app-update.ok older than 7 days, or missing).
+# 7 days. The 7 days count from the last pass (app-update.ok), or, when no
+# pass has ever completed, from the first skip (app-update.since).
 #
 # The pass. Each app is found by its exact bundle id: the Info.plist must name
 # it, and the PID comes from `lsappinfo info -app <bundle id>`, whose output
@@ -104,6 +105,7 @@ apps="${APP_UPDATE_APPS:-/Applications}"
 logs="$HOME/.cron/logs"
 marker="$logs/app-update.FAILED"
 stamp="$logs/app-update.ok"
+since="$logs/app-update.since"
 dstamp="$logs/app-update-docker.ok"
 down="$logs/app-update.down"
 reported="$logs/app-update.reported"
@@ -161,13 +163,20 @@ send_mail() { # send_mail <subject> <body>
 }
 
 # skip <reason>: no pass tonight. When no pass has completed in 7 days and no
-# marker shows yet, write one and mail once.
+# marker shows yet, write one and mail once. The 7 days count from the last
+# pass, or from the first skip when no pass has ever completed.
 skip() {
     say "skipped: $1"
-    if [ ! -e "$marker" ] && [ -z "$(find "$stamp" -mmin -10080 2>/dev/null)" ]; then
+    if [ ! -e "$stamp" ] && [ ! -e "$since" ] && touch "$since"; then
+        say "no pass has completed yet; the 7-day stale clock starts now"
+        exit 0
+    fi
+    clock=$stamp
+    [ -e "$stamp" ] || clock=$since
+    if [ ! -e "$marker" ] && [ -z "$(find "$clock" -mmin -10080 2>/dev/null)" ]; then
         why="no completed pass in the last 7 days; the last skip was: $(oneline "$1")"
         note=
-        send_mail "App updates stalled on $host" "The nightly app update on $host has not completed a pass in the last 7 days (~/.cron/logs/app-update.ok is older, or missing).
+        send_mail "App updates stalled on $host" "The nightly app update on $host has not completed a pass in the last 7 days (~/.cron/logs/app-update.ok is older than 7 days, or no pass has ever completed and the first skip, recorded in ~/.cron/logs/app-update.since, was 7 or more days ago).
 
 Last skip: $(oneline "$1")
 
@@ -673,6 +682,7 @@ appcast_app Ghostty com.mitchellh.ghostty Ghostty.app " (the job never quits Gho
 docker_app
 
 touch "$stamp"
+rm -f "$since"
 say "pass complete"
 
 if [ -z "$F$C" ]; then

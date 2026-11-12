@@ -325,6 +325,7 @@ function sandbox({ installed = Object.keys(APPS) } = {}) {
   const sb = {
     base, home, bin, logs, apps, stamp, dstamp,
     marker: join(logs, 'app-update.FAILED'),
+    since: join(logs, 'app-update.since'),
     plistOf,
     shipitState,
     // start <app> [mode]: the app runs; returns its PID.
@@ -645,13 +646,62 @@ test('stale: no pass in 7 days: a skip writes the marker and mails once; later s
     assert.equal(existsSync(sb.marker), false)
   }))
 
-test('stale: a catch-up run outside the window with no stamp at all (fresh install) alerts too', () =>
+test('stale: fresh install: the first skip starts the clock', () =>
   withSandbox({}, (sb) => {
     rmSync(sb.stamp)
     const r = sb.run({}, { hour: '09' })
     assert.equal(r.status, 0, r.stdout + r.stderr)
+    assert.match(r.stdout, /no pass has completed yet; the 7-day stale clock starts now/)
+    assert.equal(existsSync(sb.marker), false)
+    assert.deepEqual(sb.mails(), [])
+    assert.ok(existsSync(sb.since))
+  }))
+
+test('stale: no pass ever and the first skip 8 days ago: a skip writes the marker and mails once', () =>
+  withSandbox({}, (sb) => {
+    rmSync(sb.stamp)
+    writeFileSync(sb.since, '')
+    ago(sb.since, 8 * DAY)
+    const r = sb.run({}, { hour: '09' })
+    assert.equal(r.status, 0, r.stdout + r.stderr)
     assertMarker(sb, /no completed pass in the last 7 days; the last skip was: outside window/)
-    assert.equal(sb.mails().length, 1)
+    const m = sb.mails()
+    assert.equal(m.length, 1)
+    assert.match(m[0], /or no pass has ever completed and the first skip, recorded in ~\/\.cron\/logs\/app-update\.since, was 7 or more days ago\)/)
+  }))
+
+test('stale: no pass ever and the first skip 6 days ago is not stale', () =>
+  withSandbox({}, (sb) => {
+    rmSync(sb.stamp)
+    writeFileSync(sb.since, '')
+    ago(sb.since, 6 * DAY)
+    const r = sb.run({ STUB_LOAD5: '9.00' })
+    assert.equal(r.status, 0, r.stdout + r.stderr)
+    assert.equal(existsSync(sb.marker), false)
+    assert.deepEqual(sb.mails(), [])
+  }))
+
+test('stale: no pass ever and a marker already showing: the clock still starts, the marker is kept', () =>
+  withSandbox({}, (sb) => {
+    rmSync(sb.stamp)
+    writeFileSync(sb.marker, 'earlier failure\n')
+    const r = sb.run({}, { hour: '09' })
+    assert.equal(r.status, 0, r.stdout + r.stderr)
+    assert.ok(existsSync(sb.since))
+    assert.equal(readFileSync(sb.marker, 'utf8'), 'earlier failure\n')
+    assert.deepEqual(sb.mails(), [])
+  }))
+
+test('stale: a completed pass removes app-update.since', () =>
+  withSandbox({}, (sb) => {
+    rmSync(sb.stamp)
+    writeFileSync(sb.since, '')
+    ago(sb.since, 3 * DAY)
+    const r = sb.run()
+    assert.equal(r.status, 0, r.stdout + r.stderr)
+    assert.match(r.stdout, /pass complete/)
+    assert.ok(stampIsToday(sb))
+    assert.equal(existsSync(sb.since), false)
   }))
 
 test('stale: a pass 6 days ago is not stale', () =>
@@ -665,6 +715,8 @@ test('stale: a pass 6 days ago is not stale', () =>
 test('stale: the alert mail fails (APP_UPDATE_MAIL_ACCOUNT names no account): the marker says so, exit 1', () =>
   withSandbox({}, (sb) => {
     rmSync(sb.stamp)
+    writeFileSync(sb.since, '')
+    ago(sb.since, 8 * DAY)
     const r = sb.run({ APP_UPDATE_MAIL_ACCOUNT: 'no-such-account', STUB_IDLE_NS: '0' }, { hour: '14' })
     assert.equal(r.status, 1, r.stdout + r.stderr)
     assertMarker(sb, /no completed pass in the last 7 days.*; the alert mail failed too/)
@@ -1434,6 +1486,8 @@ test('mail and marker: non-ASCII, %, and backslashes in untrusted text arrive as
     assert.ok(m.includes('- T3 Code updated and relaunched, 0.1.7-%s\\n -> 0.1.8  100%\n'), JSON.stringify(m))
 
     rmSync(sb.stamp)
+    writeFileSync(sb.since, '')
+    ago(sb.since, 8 * DAY)
     r = sb.run({ STUB_NOW: 'garbag\u00e9 \u2601\ufe0f %s' })
     assert.equal(r.status, 0, r.stdout + r.stderr)
     const marker = assertMarker(sb, /cannot read the local time \(date printed: garbag  %s\)/)
@@ -1466,7 +1520,8 @@ test('HOME with spaces and non-ASCII: logs, stamp, and marker land in that HOME'
     mkdirSync(home)
     const r = sb.run({ HOME: home, STUB_LOAD5: '9.00' })
     assert.equal(r.status, 0, r.stdout + r.stderr)
-    assert.ok(existsSync(join(home, '.cron/logs/app-update.FAILED')), 'no stamp in a new HOME: the stale alert fires')
+    assert.ok(existsSync(join(home, '.cron/logs/app-update.since')), 'no stamp in a new HOME: the first skip starts the clock there')
+    assert.equal(existsSync(join(home, '.cron/logs/app-update.FAILED')), false)
   }))
 
 const CODE = read('dot_cron/executable_app-update.sh').split('\n').filter((l) => !l.trimStart().startsWith('#')).join('\n')
