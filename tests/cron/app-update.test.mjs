@@ -704,6 +704,127 @@ test('stale: a completed pass removes app-update.since', () =>
     assert.equal(existsSync(sb.since), false)
   }))
 
+// Every skip reason goes through skip(), so each one must start the clock on a
+// fresh install, not only the hour guard.
+for (const [name, env, opts, re] of [
+  ['the hour guard', {}, { hour: '09' }, /skipped: outside window/],
+  ['an unreadable date', { STUB_NOW: 'garbage' }, {}, /skipped: cannot read the local time/],
+  ['the network', { STUB_NET_RC: '1' }, {}, /skipped: network not up/],
+  ['a busy Mac', { STUB_LOAD5: '9.00' }, {}, /skipped: busy: /],
+]) {
+  test(`stale: fresh install: a skip by ${name} starts the clock, no alert`, () =>
+    withSandbox({}, (sb) => {
+      rmSync(sb.stamp)
+      const r = sb.run(env, opts)
+      assert.equal(r.status, 0, r.stdout + r.stderr)
+      assert.match(r.stdout, re)
+      assert.match(r.stdout, /the 7-day stale clock starts now/)
+      assert.ok(existsSync(sb.since))
+      assert.equal(existsSync(sb.marker), false)
+      assert.deepEqual(sb.mails(), [])
+      assertNoAction(sb)
+    }))
+}
+
+// The clock must start once: if a later skip touched app-update.since again,
+// a Mac that never passes would never reach 7 days and never alert.
+test('stale: a later skip does not move the clock that the first skip started', () =>
+  withSandbox({}, (sb) => {
+    rmSync(sb.stamp)
+    writeFileSync(sb.since, '')
+    ago(sb.since, 3 * DAY)
+    const before = statSync(sb.since).mtimeMs
+    for (const [env, opts] of [[{}, { hour: '09' }], [{ STUB_LOAD5: '9.00' }, {}], [{ STUB_NET_RC: '1' }, {}]]) {
+      const r = sb.run(env, opts)
+      assert.equal(r.status, 0, r.stdout + r.stderr)
+      assert.doesNotMatch(r.stdout, /stale clock starts now/)
+    }
+    assert.equal(statSync(sb.since).mtimeMs, before)
+    assert.equal(existsSync(sb.marker), false)
+    assert.deepEqual(sb.mails(), [])
+  }))
+
+test('stale: never passing: the first skip starts the clock, 7 days on a skip alerts once, a pass clears it all', () =>
+  withSandbox({}, (sb) => {
+    rmSync(sb.stamp)
+    let r = sb.run({ STUB_LOAD5: '9.00' })
+    assert.equal(r.status, 0, r.stdout + r.stderr)
+    assert.deepEqual(sb.mails(), [])
+    // A week of busy nights later.
+    ago(sb.since, 7 * DAY + 60)
+    r = sb.run({ STUB_LOAD5: '9.00' })
+    assert.equal(r.status, 0, r.stdout + r.stderr)
+    assertMarker(sb, /no completed pass in the last 7 days; the last skip was: busy: 5-minute load average is 9\.00/)
+    assert.equal(sb.mails().length, 1)
+    r = sb.run({}, { hour: '14' })
+    assert.equal(r.status, 0, r.stdout + r.stderr)
+    assert.equal(sb.mails().length, 1, 'the alert mails once')
+    r = sb.run()
+    assert.equal(r.status, 0, r.stdout + r.stderr)
+    assert.match(r.stdout, /pass complete/)
+    assert.equal(existsSync(sb.marker), false)
+    assert.equal(existsSync(sb.since), false)
+    // With a pass on record, the next skip does not start a new clock.
+    r = sb.run({}, { hour: '09' })
+    assert.equal(r.status, 0, r.stdout + r.stderr)
+    assert.doesNotMatch(r.stdout, /stale clock starts now/)
+    assert.equal(existsSync(sb.since), false)
+  }))
+
+// A leftover app-update.since (say, a pass that died between the touch and
+// the rm) must not hide a stale stamp, nor make a fresh stamp look stale.
+test('stale: app-update.ok wins over a leftover app-update.since: stamp 8 days, since 1 day: alerts', () =>
+  withSandbox({}, (sb) => {
+    ago(sb.stamp, 8 * DAY)
+    writeFileSync(sb.since, '')
+    ago(sb.since, DAY)
+    const r = sb.run({ STUB_LOAD5: '9.00' })
+    assert.equal(r.status, 0, r.stdout + r.stderr)
+    assert.doesNotMatch(r.stdout, /stale clock starts now/)
+    assertMarker(sb, /no completed pass in the last 7 days/)
+    assert.equal(sb.mails().length, 1)
+  }))
+
+test('stale: app-update.ok wins over a leftover app-update.since: stamp 1 day, since 30 days: no alert', () =>
+  withSandbox({}, (sb) => {
+    writeFileSync(sb.since, '')
+    ago(sb.since, 30 * DAY)
+    const r = sb.run({ STUB_LOAD5: '9.00' })
+    assert.equal(r.status, 0, r.stdout + r.stderr)
+    assert.equal(existsSync(sb.marker), false)
+    assert.deepEqual(sb.mails(), [])
+  }))
+
+// The PR states: when touch cannot record the first skip, the job alerts
+// rather than stay quiet (it cannot start a clock it could later read).
+test('stale: fresh install and app-update.since cannot be written: the skip alerts at once', () =>
+  withSandbox({}, (sb) => {
+    rmSync(sb.stamp)
+    writeFileSync(join(sb.bin, 'touch'), `#!/bin/sh\ncase "$*" in *app-update.since) echo "touch: denied" >&2; exit 1 ;; esac\nexec ${which('touch')} "$@"\n`)
+    chmodSync(join(sb.bin, 'touch'), 0o755)
+    const r = sb.run({}, { hour: '09' })
+    assert.equal(r.status, 0, r.stdout + r.stderr)
+    assert.doesNotMatch(r.stdout, /stale clock starts now/)
+    assert.equal(existsSync(sb.since), false)
+    assertMarker(sb, /no completed pass in the last 7 days; the last skip was: outside window/)
+    assert.equal(sb.mails().length, 1)
+  }))
+
+test('stale: a pass with a failure still removes app-update.since (app-update.ok is touched too)', () =>
+  withSandbox({}, (sb) => {
+    rmSync(sb.stamp)
+    writeFileSync(sb.since, '')
+    ago(sb.since, 3 * DAY)
+    sb.start('t3')
+    sb.stage('t3', '0.1.8')
+    sb.shipit('t3', 1)
+    const r = sb.run({ STUB_OPEN_FAIL: 'com.t3tools.t3code' })
+    assert.equal(r.status, 1, r.stdout + r.stderr)
+    assertMarker(sb, /T3 Code: quit, but `open .*` failed/)
+    assert.ok(stampIsToday(sb))
+    assert.equal(existsSync(sb.since), false)
+  }))
+
 test('stale: a pass 6 days ago is not stale', () =>
   withSandbox({}, (sb) => {
     ago(sb.stamp, 6 * DAY)
