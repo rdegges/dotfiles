@@ -494,18 +494,27 @@ test('mail: %, backslashes, and option-like text in the reason arrive literally 
     assert.ok(m[0].includes(`): ${err}\nDown since: `), JSON.stringify(m[0]))
   }))
 
-// Defect proof (pre-existing, not from the stdin change): the marker lines are
-// written with `echo`, and both dash and macOS /bin/sh (bash 3.2, xpg_echo on)
-// expand backslash escapes in echo: a literal \n in CLI output splits the
-// marker into two lines, and \c cuts the rest of it off, "(see ...log)" and the
-// final newline included. Invariant from this file's own header: each failure
-// writes one whole marker line.
-test.todo('PROPOSED CONTRACT: a `\\n` or `\\c` in the `up` error keeps the marker one whole line', () =>
+// Both dash and macOS /bin/sh (bash 3.2, xpg_echo on) expand backslash escapes
+// in `echo`: when the marker was written with echo, a literal \n in CLI output
+// split it into two lines, and \c cut off the rest, "(see ...log)" and the final
+// newline included. The script writes untrusted text with `printf '%s\n'`.
+// Invariant from this file's own header: each failure writes one whole marker line.
+test('a `\\n` or `\\c` in the `up` error keeps the marker one whole line', () =>
   withSandbox({ backend: 'Stopped' }, (sb) => {
     writeFileSync(sb.cliPath, rawUpErrCli())
     const r = sb.run({ STUB_UP_RC: '1', STUB_UP_ERR: 'parse error: "a\\nb" then \\c the rest' })
     const m = assertFailed(sb, r, /`tailscale up` failed/)
     assert.ok(m.includes('"a\\nb" then \\c the rest (see '), JSON.stringify(m))
+  }))
+
+test('a backslash in the state file is written back literally to the state file and the marker', () =>
+  withSandbox({ backend: 'NeedsLogin' }, (sb) => {
+    mkdirSync(sb.logs, { recursive: true })
+    writeFileSync(sb.statefile, 'NeedsLogin unsent 2026\\c-01\\n02\n')
+    const r = sb.run({ STUB_MAIL_RC: '1' })
+    const m = assertFailed(sb, r, /the alert mail failed too/)
+    assert.ok(m.includes('(down since 2026\\c-01\\n02, not reported yet; the next run tries again) (see '), JSON.stringify(m))
+    assert.equal(readFileSync(sb.statefile, 'utf8'), 'NeedsLogin unsent 2026\\c-01\\n02\n')
   }))
 
 // macOS /bin/sh is bash 3.2 in POSIX mode; the rest of this file runs under dash.
