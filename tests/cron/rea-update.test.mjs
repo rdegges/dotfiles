@@ -529,3 +529,92 @@ for (const [name, shell] of SHELLS) {
       assert.ok(r.stdout.endsWith('rea-update: ok: rea 9.9.9 \\c tail \\n end\n'), JSON.stringify(r.stdout))
     }))
 }
+
+// --- Tester additions: marker edges the hostile-text tests above leave open -----------
+//
+// Raw bytes a CLI can print that a JS string in the env cannot carry (invalid
+// UTF-8, an OSC title, a private-mode CSI, BEL), the 300-character boundary, a
+// failure step other than `rea --version`, the banner end to end, and macOS
+// tr in a UTF-8 locale.
+
+// A rea whose `--version` fails with raw bytes on stderr: invalid UTF-8 (\377),
+// an OSC window title ending in BEL, a private-mode CSI (\e[?25l), and a valid
+// multi-byte character.
+const RAW_REA = "#!/bin/sh\nprintf 'a\\377b\\033]0;title\\007c\\033[?25ld\\342\\230\\201e\\n' >&2\nexit 1\n"
+const reasonOf = (m) => m.slice(17).replace(/^rea update failed: /, '').replace(/ \(see ~\/\.cron\/logs\/rea\.log\)\n$/, '')
+
+for (const [name, shell] of SHELLS) {
+  test(`[${name}] raw bytes from \`rea --version\` (invalid UTF-8, OSC, private CSI, BEL): the marker is one printable-ASCII line`, () =>
+    withSandbox({}, (sb) => {
+      writeFileSync(join(sb.base, 'bin', 'rea'), RAW_REA)
+      const r = sb.run({}, { shell })
+      assert.equal(r.status, 1, r.stdout + r.stderr)
+      const m = readFileSync(sb.marker, 'latin1')
+      assert.match(m, /^[\x20-\x7e]*\n$/, JSON.stringify(m))
+      assert.match(m, / rea update failed: rea --version: ab.*cde \(see ~\/\.cron\/logs\/rea\.log\)\n$/, JSON.stringify(m))
+      assert.ok(!m.includes('[?25l'), `private-mode CSI left in the marker: ${JSON.stringify(m)}`)
+    }))
+
+  test(`[${name}] a backslash in REA_UPDATE_PACKAGE: the npm-install marker is literal and complete`, () =>
+    withSandbox({}, (sb) => {
+      const r = sb.run({ STUB_NPM_RC: '1', REA_UPDATE_PACKAGE: 'rea-agents@1 \\c cut' }, { shell })
+      assert.equal(r.status, 1, r.stdout + r.stderr)
+      const m = readFileSync(sb.marker, 'utf8')
+      assert.equal(m.slice(17), 'rea update failed: npm install --global rea-agents@1 \\c cut (see ~/.cron/logs/rea.log)\n')
+      assert.ok(r.stdout.includes('rea-update: FAILED: npm install --global rea-agents@1 \\c cut\n'), JSON.stringify(r.stdout))
+    }))
+}
+
+test('marker reason: exactly 300 characters is kept whole; 301 is cut to 300, and the log pointer stays', () => {
+  const prefix = 'rea --version: '
+  for (const [len, want] of [[300, 300], [301, 300], [299, 299]]) {
+    withSandbox({}, (sb) => {
+      const err = 'y'.repeat(len - prefix.length - 1) + 'Z'
+      writeFileSync(join(sb.base, 'bin', 'rea'), printfStub(STUBS.rea))
+      const r = sb.run({ STUB_REA_RC: '1', STUB_REA_ERR: err })
+      assert.equal(r.status, 1, r.stdout + r.stderr)
+      const m = readFileSync(sb.marker, 'utf8')
+      assert.match(m, / \(see ~\/\.cron\/logs\/rea\.log\)\n$/, JSON.stringify(m))
+      const reason = reasonOf(m)
+      assert.equal(reason.length, want, `input ${len}: ${JSON.stringify(reason)}`)
+      assert.equal(reason, (prefix + err).slice(0, 300))
+    })
+  }
+})
+
+test('end to end: a hostile `rea --version` failure shows as exactly one banner line; the next good run clears it', { skip: zskip }, () =>
+  withSandbox({}, (sb) => {
+    writeFileSync(join(sb.base, 'bin', 'rea'), printfStub(STUBS.rea))
+    sb.run({ STUB_REA_RC: '1', STUB_REA_ERR: HOSTILE })
+    const out = banner(sb.home).stdout
+    assert.equal(out.split('\n').filter(Boolean).length, 1, JSON.stringify(out))
+    assert.match(out, /^\x1b\[31mcron: \d{4}-\d{2}-\d{2} \d{2}:\d{2} rea update failed: rea --version: dyld: \\c cut/)
+    sb.run()
+    assert.equal(banner(sb.home).stdout, '')
+  }))
+
+// macOS tr (BSD) in a UTF-8 locale stops at the first invalid byte with
+// "tr: Illegal byte sequence" and exit 1 (measured on the gate host:
+// printf 'a\377b' | LANG=en_US.UTF-8 tr '\n' ' ' prints "a"). GNU tr in this
+// image is byte-based, so this wrapper does what BSD tr does: under a UTF-8
+// locale, on input that is not valid UTF-8, it passes on the valid prefix and
+// fails. Cron and launchd run with no LANG; `chezmoi apply` from a shell (the
+// run_onchange install) inherits LANG=en_US.UTF-8.
+const BSD_TR =
+  '#!/bin/sh\n' +
+  'case "${LC_ALL:-${LC_CTYPE:-${LANG:-}}}" in *[Uu][Tt][Ff]-8*|*[Uu][Tt][Ff]8*) ;; *) exec /usr/bin/tr "$@" ;; esac\n' +
+  't=$(mktemp); cat > "$t"\n' +
+  'if iconv -f UTF-8 -t UTF-8 "$t" >/dev/null 2>&1; then /usr/bin/tr "$@" < "$t"; rc=$?; rm -f "$t"; exit $rc; fi\n' +
+  'iconv -f UTF-8 -t UTF-8 "$t" 2>/dev/null | /usr/bin/tr "$@"; rm -f "$t"\n' +
+  'echo "tr: Illegal byte sequence" >&2; exit 1\n'
+
+test('macOS tr under LANG=en_US.UTF-8: an invalid byte in `rea --version` output does not cut the marker reason short', () =>
+  withSandbox({}, (sb) => {
+    writeFileSync(join(sb.base, 'bin', 'rea'), "#!/bin/sh\nprintf 'rea: bad \\377 byte, then the real error: EACCES\\n' >&2\nexit 1\n")
+    writeFileSync(join(sb.base, 'bin', 'tr'), BSD_TR)
+    chmodSync(join(sb.base, 'bin', 'tr'), 0o755)
+    const r = sb.run({ LANG: 'en_US.UTF-8' })
+    assert.equal(r.status, 1, r.stdout + r.stderr)
+    const reason = reasonOf(readFileSync(sb.marker, 'latin1'))
+    assert.equal(reason, 'rea --version: rea: bad  byte, then the real error: EACCES')
+  }))
