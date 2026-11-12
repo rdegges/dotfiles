@@ -34,6 +34,8 @@ Library/Application Support/com.vorssaint.utils
 {{ if not (index . "homelab") }}
 Library/LaunchAgents/com.rdegges.tailscale-watchdog.plist
 .cron/tailscale-watchdog.sh
+Library/LaunchAgents/com.rdegges.app-update.plist
+.cron/app-update.sh
 {{ end }}
 
 {{/* launchd agents are macOS-only, like the crontab installer they replace. */}}

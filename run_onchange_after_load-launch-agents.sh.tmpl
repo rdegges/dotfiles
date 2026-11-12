@@ -2,7 +2,7 @@
 {{- /* Agents for the homelab server Mac only. .chezmoiignore skips their plists
      under the same condition, so this list must match it; `index` reads a
      missing key as false. */ -}}
-{{- $homelabOnly := list "com.rdegges.tailscale-watchdog" -}}
+{{- $homelabOnly := list "com.rdegges.tailscale-watchdog" "com.rdegges.app-update" -}}
 {{- $agents := list -}}
 {{- range glob (joinPath .chezmoi.sourceDir "private_Library/LaunchAgents/*.plist.tmpl") -}}
 {{-   if or (index $ "homelab") (not (has (base . | trimSuffix ".plist.tmpl") $homelabOnly)) -}}

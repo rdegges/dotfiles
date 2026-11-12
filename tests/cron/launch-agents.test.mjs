@@ -26,8 +26,9 @@
 // launchd reports as running, or whose state launchctl print cannot read, is
 // neither booted out nor bootstrapped, and the run exits 1 (checked against
 // stub output; the real text was confirmed by hand on launchd). The
-// homelab-only agent (com.rdegges.tailscale-watchdog) renders to its own command
-// and a 5-minute schedule that skips :15 and :20. With `homelab` missing, false,
+// homelab-only agents render to their own commands: the Tailscale watchdog on a
+// 5-minute schedule that skips :15 and :20, and the nightly app update at 02:40,
+// 03:40, 04:40, and 05:40, on minutes no other job uses. With `homelab` missing, false,
 // and true, .chezmoiignore and the loader agree: a real `chezmoi apply` writes
 // exactly the plists the loader's label list names, and the loader bootstraps
 // those and only those, also across true -> false -> true. With a stub
@@ -78,10 +79,15 @@ const LABELS = Object.keys(OLD_CRONTAB).map((j) => `com.rdegges.${j}`).sort()
 // are homelab-only: .chezmoiignore and the loader skip them unless `homelab` is
 // true, so LABELS above stays the set every other Mac manages.
 const WATCHDOG_MINUTES = [2, 7, 12, 17, 22, 27, 32, 37, 42, 47, 52, 57]
+const APP_UPDATE_HOURS = [2, 3, 4, 5]
 const HOMELAB_AGENTS = {
   'tailscale-watchdog': {
     schedule: WATCHDOG_MINUTES.map((m) => ({ Minute: m })),
     command: '{ date; $HOME/.cron/tailscale-watchdog.sh; } > $HOME/.cron/logs/tailscale-watchdog.log 2>&1',
+  },
+  'app-update': {
+    schedule: APP_UPDATE_HOURS.map((h) => ({ Hour: h, Minute: 40 })),
+    command: '{ date; $HOME/.cron/app-update.sh; } > $HOME/.cron/logs/app-update.log 2>&1',
   },
 }
 const HOMELAB_LABELS = Object.keys(HOMELAB_AGENTS).map((j) => `com.rdegges.${j}`).sort()
@@ -264,6 +270,15 @@ test('agents: the Tailscale watchdog runs every 5 minutes and never at :15 or :2
   assert.ok(!minutes.includes(15) && !minutes.includes(20), minutes.join(','))
 })
 
+test('agents: the app update runs at 02:40-05:40, inside its own 02:00-05:59 window, on a minute no other job uses', () => {
+  const p = parsePlist(execTemplate(read(`${AGENTS_DIR}/com.rdegges.app-update.plist.tmpl`)))
+  assert.deepEqual(p.StartCalendarInterval.map((e) => [e.Hour, e.Minute]), [[2, 40], [3, 40], [4, 40], [5, 40]])
+  // The script's hour guard passes only 02-05; each run must fall inside it.
+  assert.match(read('dot_cron/executable_app-update.sh'), /^ {8}02 \| 03 \| 04 \| 05\) ;;$/m)
+  const others = Object.entries(AGENTS).filter(([j]) => j !== 'app-update').flatMap(([, a]) => a.schedule.map((e) => e.Minute))
+  assert.ok(!others.includes(40), `another job runs at :40: ${others.join(',')}`)
+})
+
 test('agents: each job file keeps its job comment and only calls the shared template', () => {
   for (const label of ALL_LABELS) {
     const src = read(`${AGENTS_DIR}/${label}.plist.tmpl`)
@@ -288,6 +303,8 @@ const isHomelab = (extra) => extra.homelab === true
 const HOMELAB_PATHS = [
   'Library/LaunchAgents/com.rdegges.tailscale-watchdog.plist',
   '.cron/tailscale-watchdog.sh',
+  'Library/LaunchAgents/com.rdegges.app-update.plist',
+  '.cron/app-update.sh',
 ]
 
 test('chezmoi.toml.tmpl: homelab is asked once with promptBoolOnce, default false, next to work', () => {
@@ -302,7 +319,7 @@ for (const [name, extra] of HOMELAB_CASES) {
     for (const path of HOMELAB_PATHS) assert.equal(lines.includes(path), !isHomelab(extra), path)
   })
 
-  test(`full source: homelab ${name}: chezmoi ${isHomelab(extra) ? 'manages' : 'does not manage'} the watchdog plist and script`, () => {
+  test(`full source: homelab ${name}: chezmoi ${isHomelab(extra) ? 'manages' : 'does not manage'} the homelab plists and scripts`, () => {
     const home = mkdtempSync(join(tmpdir(), 'launch-agents-'))
     try {
       const data = JSON.stringify({ work: false, chezmoi: { os: 'darwin' }, ...extra })
@@ -1017,6 +1034,7 @@ test('apply: homelab true -> false -> true: the watchdog is booted out (its plis
     assert.equal(r.status, 0, r.stdout + r.stderr)
     assert.deepEqual(sb.loaded(), LABELS)
     assert.match(r.stdout, /launch-agents: booting out com\.rdegges\.tailscale-watchdog \(no managed plist\)/)
+    assert.match(r.stdout, /launch-agents: booting out com\.rdegges\.app-update \(no managed plist\)/)
     // chezmoi does not delete an ignored target, and launchd loads every plist
     // in ~/Library/LaunchAgents at login: hence the README's manual rm.
     assert.ok(existsSync(join(sb.agents, `${watchdog}.plist`)), 'the plist file was removed')
@@ -1062,6 +1080,7 @@ test('upgrade path: a config written before the flag (no homelab key) applies wi
     const managed = m.stdout.split('\n')
     assert.ok(managed.includes('.cron/chezmoi-update.sh'), 'control: the other cron scripts are managed')
     assert.ok(!managed.includes('.cron/tailscale-watchdog.sh'), m.stdout)
+    assert.ok(!managed.includes('.cron/app-update.sh'), m.stdout)
   } finally {
     rmSync(home, { recursive: true, force: true })
     rmSync(src, { recursive: true, force: true })

@@ -1,0 +1,16 @@
+{{- /* Homelab server Mac only (.chezmoiignore, and the loader's homelab list).
+     Nightly app updates: relaunch the apps that have an update staged when
+     the Mac is idle, report the ones that need a relaunch by hand, and update
+     Docker Desktop once a week. On failure the script writes
+     ~/.cron/logs/app-update.FAILED, which every new shell prints, and mails.
+     At 02:40, 03:40, 04:40, and 05:40; the first run that finds the Mac idle
+     does the pass, and the later ones see the day's stamp and exit. :40 is
+     clear of the hourly `chezmoi update` (:15), codex (:20), and the
+     Tailscale watchdog (:37 and :42). A pass with a Docker update can last
+     about an hour, so it can still be running at :15; then the loader leaves
+     the job alone, sets chezmoi.FAILED, and the next apply retries. */ -}}
+{{ template "launchagent.plist" (dict
+	"label" "com.rdegges.app-update"
+	"schedule" (list (dict "Hour" 2 "Minute" 40) (dict "Hour" 3 "Minute" 40) (dict "Hour" 4 "Minute" 40) (dict "Hour" 5 "Minute" 40))
+	"command" `{ date; $HOME/.cron/app-update.sh; } > $HOME/.cron/logs/app-update.log 2>&1`
+	"home" .chezmoi.homeDir) -}}
