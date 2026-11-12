@@ -76,7 +76,11 @@ oneline() { printf '%s' "$1" | tr '\n\t' '  ' | LC_ALL=C tr -cd '\11\12\15\40-\1
 
 send_mail() { # send_mail <subject> <body>
     msg=$(printf 'From: %s\nTo: %s\nSubject: %s\n\n%s\n' "$rcpt" "$rcpt" "$1" "$2")
-    if out=$(run 60 himalaya message send -a "$account" "$msg" < /dev/null 2>&1); then
+    # The message goes on stdin, never as an argument. himalaya 1.2.0 reads
+    # stdin whenever it is not a TTY and ignores the argument, so under launchd
+    # `himalaya message send "$msg" < /dev/null` panicked on the empty input
+    # (exit 101, "index out of bounds" in mail-parser) and sent nothing.
+    if out=$(printf '%s' "$msg" | run 60 himalaya message send -a "$account" 2>&1); then
         echo "tailscale-watchdog: mailed: $1"
         return 0
     fi
