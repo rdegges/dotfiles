@@ -169,7 +169,12 @@ function withSandbox(opts, fn) {
 
 const subject = (mail) => mail.match(/^Subject: (.*)$/m)[1]
 const tsCalls = (sb) => sb.calls().filter((c) => c.startsWith('tailscale ')).map((c) => c.slice('tailscale '.length))
-const state = (sb) => readFileSync(sb.statefile, 'utf8').trim()
+// The state file is one line: `Running`, or `<key> <mailed|unsent> <since>`.
+// state() is the key; stateLine() is the whole line.
+const stateLine = (sb) => readFileSync(sb.statefile, 'utf8').trim()
+const state = (sb) => stateLine(sb).split(' ')[0]
+const SINCE = '\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}'
+const unsentLine = (key) => new RegExp(`^${key} unsent ${SINCE}$`)
 
 function assertHealthy(sb, r) {
   assert.equal(r.status, 0, r.stdout + r.stderr)
@@ -426,7 +431,8 @@ test('mail: account icloud, From and To r@rdegges.com, the whole message on stdi
       m,
       'From: r@rdegges.com\nTo: r@rdegges.com\nSubject: Tailscale is down on testhost: NeedsLogin\n\n' +
         'Tailscale on testhost is not up, and the watchdog could not fix it.\n\n' +
-        'Reason: BackendState is NeedsLogin; this needs a person (the watchdog never re-authenticates)\n\n' +
+        'Reason: BackendState is NeedsLogin; this needs a person (the watchdog never re-authenticates)\n' +
+        `Down since: ${stateLine(sb).split(' ')[2]}\n\n` +
         'The watchdog mails again only when this changes. The reason stays in ~/.cron/logs/tailscale-watchdog.FAILED until a run finds Tailscale Running.',
     )
     assert.equal(state(sb), 'NeedsLogin')
@@ -446,7 +452,8 @@ test('mail: a himalaya panic (empty stdin, exit 101) is a failed send: marker, e
     const r = sb.run()
     assertFailed(sb, r, /the alert mail failed too/)
     assert.match(r.stdout, /mail failed: The application panicked \(crashed\)\. Message:  index out of bounds/)
-    assert.equal(existsSync(sb.statefile), false)
+    // The outage is recorded as not reported yet, so a later run still mails it.
+    assert.match(stateLine(sb), unsentLine('NeedsLogin'))
     assert.deepEqual(sb.mails(), [])
   }))
 
@@ -484,7 +491,7 @@ test('mail: %, backslashes, and option-like text in the reason arrive literally 
     assert.deepEqual(sb.calls().filter((c) => c.startsWith('himalaya')), ['himalaya message send -a icloud (4 args)'])
     const m = sb.mails()
     assert.equal(m.length, 1)
-    assert.ok(m[0].includes(`): ${err}\n\n`), JSON.stringify(m[0]))
+    assert.ok(m[0].includes(`): ${err}\nDown since: `), JSON.stringify(m[0]))
   }))
 
 // Defect proof (pre-existing, not from the stdin change): the marker lines are
@@ -548,7 +555,7 @@ test('failure mail cannot be sent: the marker says so, exit 1, and the next run 
     const r = sb.run({ STUB_MAIL_RC: '1' })
     assertFailed(sb, r, /NeedsLogin.*; the alert mail failed too/)
     assert.match(r.stdout, /mail failed: cannot send message: smtp connection refused/)
-    assert.equal(existsSync(sb.statefile), false, 'state recorded although nothing was mailed')
+    assert.match(stateLine(sb), unsentLine('NeedsLogin'), 'the unsent alert is not recorded')
     assert.deepEqual(sb.mails(), [])
     const r2 = sb.run()
     const m = assertFailed(sb, r2, /NeedsLogin/)
@@ -576,10 +583,11 @@ test('a fix whose mail cannot be sent is still reported by the next run', () =>
     const r = sb.run({ STUB_MAIL_RC: '1' })
     assert.equal(r.status, 1, r.stdout + r.stderr)
     assert.match(readFileSync(sb.marker, 'utf8'), /Running again \(BackendState was Stopped while logged in; .*\), but the recovery mail failed/)
-    assert.equal(state(sb), 'Stopped')
+    assert.match(stateLine(sb), unsentLine('Stopped'))
     assertHealthy(sb, sb.run())
     assert.deepEqual(sb.mails().map(subject), ['Tailscale recovered on testhost'])
-    assert.match(sb.mails()[0], /the last report was Stopped/)
+    // Nothing about Stopped was ever mailed, so the mail says so.
+    assert.match(sb.mails()[0], new RegExp(`an outage was never reported: Stopped, first seen ${SINCE}, and the mail about it did not send`))
   }))
 
 test('himalaya missing: a failure still writes the marker, with the mail failure', () =>
@@ -615,7 +623,7 @@ test('HOME with spaces and non-ASCII: marker and state land in that HOME', () =>
     const r = sb.run({ HOME: home })
     assert.equal(r.status, 1, r.stdout + r.stderr)
     assert.ok(existsSync(join(home, '.cron/logs/tailscale-watchdog.FAILED')))
-    assert.equal(readFileSync(join(home, '.cron/logs/tailscale-watchdog.state'), 'utf8'), 'NeedsLogin\n')
+    assert.match(readFileSync(join(home, '.cron/logs/tailscale-watchdog.state'), 'utf8'), new RegExp(`^NeedsLogin mailed ${SINCE}\n$`))
   }))
 
 test('the stamp is fresh after a healthy run and untouched by a failure', () =>
@@ -787,17 +795,17 @@ test('app started, then Running, but the recovery mail fails: state app-not-runn
     const r = sb.run({ STUB_MAIL_RC: '1' })
     assert.equal(r.status, 1, r.stdout + r.stderr)
     assert.match(readFileSync(sb.marker, 'utf8'), /Running again \(the Tailscale app was not running; .*\), but the recovery mail failed/)
-    assert.equal(state(sb), 'app-not-running')
+    assert.match(stateLine(sb), unsentLine('app-not-running'))
     assertHealthy(sb, sb.run())
     assert.deepEqual(sb.mails().map(subject), ['Tailscale recovered on testhost'])
-    assert.match(sb.mails()[0], /the last report was app-not-running/)
+    assert.match(sb.mails()[0], /an outage was never reported: app-not-running, first seen /)
   }))
 
 test('the same failure while the mail keeps failing: each run retries the mail, the marker stays one line', () =>
   withSandbox({ backend: 'NeedsLogin' }, (sb) => {
     for (let i = 0; i < 3; i++) assertFailed(sb, sb.run({ STUB_MAIL_RC: '1' }), /the alert mail failed too/)
     assert.equal(sb.calls().filter((c) => c.startsWith('himalaya')).length, 3)
-    assert.equal(existsSync(sb.statefile), false)
+    assert.match(stateLine(sb), unsentLine('NeedsLogin'))
   }))
 
 // --- Hostile output text ---------------------------------------------------------------
@@ -833,3 +841,294 @@ test('hostname fails: the mail names "this Mac" instead', () =>
     assertFailed(sb, sb.run(), /NeedsLogin/)
     assert.equal(subject(sb.mails()[0]), 'Tailscale is down on this Mac: NeedsLogin')
   }))
+
+// --- An outage whose alert cannot be sent is still reported ---------------------------
+//
+// The down alert goes out at least once: while the key stays the same and its
+// alert has not gone out, each run sends it again; a recovery before that
+// mails one report that names the outage, when it was first seen, and that
+// its alert did not send. Once a state is mailed, it is not mailed again.
+
+const writeState = (sb, line) => {
+  mkdirSync(sb.logs, { recursive: true })
+  writeFileSync(sb.statefile, line + '\n')
+}
+
+test('down alert fails, then Tailscale recovers: exactly one mail goes out across the outage', () =>
+  withSandbox({}, (sb) => {
+    sb.run()
+    sb.setBackend('NeedsLogin')
+    sb.run({ STUB_MAIL_RC: '1' })
+    sb.setBackend('Running')
+    sb.run()
+    assert.equal(sb.mails().length, 1, `mails sent across the outage: ${sb.mails().length}`)
+  }))
+
+test('down alert fails, then Tailscale recovers: one mail that reports the outage, its first-seen time, and the unsent alert', () =>
+  withSandbox({}, (sb) => {
+    assertHealthy(sb, sb.run())
+    sb.setBackend('NeedsLogin')
+    assertFailed(sb, sb.run({ STUB_MAIL_RC: '1' }), /the alert mail failed too \(down since .*, not reported yet; the next run tries again\)/)
+    const since = stateLine(sb).split(' ')[2]
+    assert.match(since, new RegExp(`^${SINCE}$`))
+    sb.setBackend('Running')
+    assertHealthy(sb, sb.run())
+    const mails = sb.mails()
+    assert.equal(mails.length, 1, 'the outage was never reported')
+    assert.equal(subject(mails[0]), 'Tailscale recovered on testhost')
+    assert.match(mails[0], new RegExp(`What happened: an outage was never reported: NeedsLogin, first seen ${since}, and the mail about it did not send\\.$`))
+    // Reported now: the next healthy run is quiet.
+    assertHealthy(sb, sb.run())
+    assert.equal(sb.mails().length, 1)
+  }))
+
+test('down alert fails, then the watchdog fixes a Stopped client: one mail with the unsent outage and the fix', () =>
+  withSandbox({}, (sb) => {
+    sb.run()
+    sb.setBackend('NeedsLogin')
+    sb.run({ STUB_MAIL_RC: '1' })
+    sb.setBackend('Stopped')
+    assertHealthy(sb, sb.run())
+    const mails = sb.mails()
+    assert.equal(mails.length, 1)
+    assert.match(mails[0], /an outage was never reported: NeedsLogin, first seen .*, and the mail about it did not send; this run: BackendState was Stopped while logged in; the watchdog ran `tailscale up`\./)
+  }))
+
+test('retry until sent: the alert goes out on the first run whose mail works, with the first-seen time of the first run', () =>
+  withSandbox({ backend: 'NeedsLogin' }, (sb) => {
+    // The outage was first seen at a known time by a run whose alert failed.
+    writeState(sb, 'NeedsLogin unsent 2026-01-02T03:04')
+    assertFailed(sb, sb.run({ STUB_MAIL_RC: '1' }), /the alert mail failed too \(down since 2026-01-02T03:04, not reported yet/)
+    assert.equal(stateLine(sb), 'NeedsLogin unsent 2026-01-02T03:04', 'a retry moved the first-seen time')
+    const m = assertFailed(sb, sb.run(), /NeedsLogin/)
+    assert.doesNotMatch(m, /mail failed|not reported/)
+    const mails = sb.mails()
+    assert.equal(mails.length, 1)
+    assert.equal(subject(mails[0]), 'Tailscale is down on testhost: NeedsLogin')
+    assert.match(mails[0], /\nDown since: 2026-01-02T03:04\n/)
+    assert.equal(stateLine(sb), 'NeedsLogin mailed 2026-01-02T03:04')
+    // Mailed: the same outage sends nothing more.
+    sb.run()
+    sb.run()
+    assert.equal(sb.mails().length, 1)
+  }))
+
+test('retry until sent, from Running: two failed sends, then one alert with the time of the first failed run', () =>
+  withSandbox({}, (sb) => {
+    sb.run()
+    sb.setBackend('NeedsLogin')
+    sb.run({ STUB_MAIL_RC: '1' })
+    const first = stateLine(sb)
+    assert.match(first, unsentLine('NeedsLogin'))
+    sb.run({ STUB_MAIL_RC: '1' })
+    assert.equal(stateLine(sb), first)
+    sb.run()
+    sb.run()
+    assert.equal(sb.mails().length, 1)
+    assert.match(sb.mails()[0], new RegExp(`\\nDown since: ${first.split(' ')[2]}\\n`))
+  }))
+
+test('an unsent alert, then a different failure: the new alert says the earlier one did not send, and keeps the outage start', () =>
+  withSandbox({ backend: 'NeedsMachineAuth' }, (sb) => {
+    writeState(sb, 'NeedsLogin unsent 2026-01-02T03:04')
+    sb.run()
+    const mails = sb.mails()
+    assert.equal(mails.length, 1)
+    assert.equal(subject(mails[0]), 'Tailscale is down on testhost: NeedsMachineAuth')
+    assert.match(mails[0], /\nDown since: 2026-01-02T03:04\nAn earlier alert, for NeedsLogin, did not send\.\n/)
+    assert.equal(stateLine(sb), 'NeedsMachineAuth mailed 2026-01-02T03:04')
+  }))
+
+test('a mailed outage, then a different failure: one new alert, the outage start kept, no "earlier alert" line', () =>
+  withSandbox({ backend: 'NeedsMachineAuth' }, (sb) => {
+    writeState(sb, 'NeedsLogin mailed 2026-01-02T03:04')
+    sb.run()
+    assert.equal(sb.mails().length, 1)
+    assert.match(sb.mails()[0], /\nDown since: 2026-01-02T03:04\n\n/)
+    assert.doesNotMatch(sb.mails()[0], /earlier alert/)
+  }))
+
+test('recovery mail fails after an unsent outage: the state stays, and the next run sends the one report', () =>
+  withSandbox({ backend: 'Running' }, (sb) => {
+    writeState(sb, 'NeedsLogin unsent 2026-01-02T03:04')
+    const r = sb.run({ STUB_MAIL_RC: '1' })
+    assert.equal(r.status, 1, r.stdout + r.stderr)
+    assert.match(readFileSync(sb.marker, 'utf8'), /Running again \(an outage was never reported: NeedsLogin, first seen 2026-01-02T03:04, .*\), but the recovery mail failed; the next run tries again/)
+    assert.equal(stateLine(sb), 'NeedsLogin unsent 2026-01-02T03:04')
+    assertHealthy(sb, sb.run())
+    assert.equal(sb.mails().length, 1)
+    assert.match(sb.mails()[0], /first seen 2026-01-02T03:04/)
+  }))
+
+// The state file before this format was one word: `Running`, or the key last mailed.
+test('migration: an old one-word `Running` file, then an outage: one alert, the new format written', () =>
+  withSandbox({ backend: 'NeedsLogin' }, (sb) => {
+    writeState(sb, 'Running')
+    sb.run()
+    assert.equal(sb.mails().length, 1)
+    assert.match(stateLine(sb), new RegExp(`^NeedsLogin mailed ${SINCE}$`))
+  }))
+
+test('migration: an old one-word failure key counts as mailed: no repeat alert, and the recovery mail names it', () =>
+  withSandbox({ backend: 'NeedsLogin' }, (sb) => {
+    writeState(sb, 'NeedsLogin')
+    assertFailed(sb, sb.run(), /NeedsLogin/)
+    assert.deepEqual(sb.mails(), [])
+    assert.equal(stateLine(sb), 'NeedsLogin', 'an already-mailed state was rewritten')
+    sb.setBackend('Running')
+    assertHealthy(sb, sb.run())
+    assert.equal(sb.mails().length, 1)
+    assert.match(sb.mails()[0], /the last report was NeedsLogin, and this run found Tailscale Running/)
+  }))
+
+test('migration: an old one-word failure key, then a different failure: the alert says "Down since: unknown"', () =>
+  withSandbox({ backend: 'NeedsMachineAuth' }, (sb) => {
+    writeState(sb, 'NeedsLogin')
+    sb.run()
+    assert.match(sb.mails()[0], /\nDown since: unknown\n/)
+    assert.equal(stateLine(sb), 'NeedsMachineAuth mailed -')
+  }))
+
+test('an unknown status word counts as unsent: the alert is sent rather than lost', () =>
+  withSandbox({ backend: 'NeedsLogin' }, (sb) => {
+    writeState(sb, 'NeedsLogin pending 2026-01-02T03:04')
+    sb.run()
+    assert.equal(sb.mails().length, 1)
+    assert.equal(stateLine(sb), 'NeedsLogin mailed 2026-01-02T03:04')
+  }))
+
+test('a state file without a trailing newline still reads', () =>
+  withSandbox({ backend: 'NeedsLogin' }, (sb) => {
+    mkdirSync(sb.logs, { recursive: true })
+    writeFileSync(sb.statefile, 'NeedsLogin mailed 2026-01-02T03:04')
+    sb.run()
+    assert.deepEqual(sb.mails(), [])
+  }))
+
+// --- Tester: state-file edge cases, macOS /bin/sh, and the no-lost-outage invariant ---
+
+// Real-data replay: the live homelab Mac's state file (read, never written) is
+// the one word `Running`, followed by a newline. The update must read it as healthy,
+// mail nothing, and keep the file as it is, on the first run and the second.
+test('replay of the live state file (`Running\\n`): two healthy runs, no mail, the file unchanged', () =>
+  withSandbox({}, (sb) => {
+    writeState(sb, 'Running')
+    for (let i = 0; i < 2; i++) {
+      assertHealthy(sb, sb.run())
+      assert.equal(readFileSync(sb.statefile, 'utf8'), 'Running\n')
+    }
+    assert.deepEqual(sb.mails(), [])
+  }))
+
+test('an empty state file reads as no state: an outage is mailed once, with a first-seen time', () =>
+  withSandbox({ backend: 'NeedsLogin' }, (sb) => {
+    writeFileSync((mkdirSync(sb.logs, { recursive: true }), sb.statefile), '')
+    assertFailed(sb, sb.run(), /NeedsLogin/)
+    assert.equal(sb.mails().length, 1)
+    assert.match(stateLine(sb), new RegExp(`^NeedsLogin mailed ${SINCE}$`))
+  }))
+
+test('a CRLF state line (`mailed\\r`) reads as unsent and sends one extra mail', () =>
+  withSandbox({ backend: 'NeedsLogin' }, (sb) => {
+    mkdirSync(sb.logs, { recursive: true })
+    writeFileSync(sb.statefile, 'NeedsLogin mailed\r\n')
+    assertFailed(sb, sb.run(), /NeedsLogin/)
+    assert.equal(sb.mails().length, 1)
+    // Either way, the run leaves a well-formed state line.
+    assert.match(stateLine(sb), /^NeedsLogin mailed \S+$/)
+  }))
+
+const BASH = spawnSync('sh', ['-c', 'command -v bash']).status === 0 ? false : 'bash not installed'
+
+test('[bash --posix] unsent alert, then recovery: one report that names the outage; then quiet', { skip: BASH }, () =>
+  withSandbox({ backend: 'NeedsLogin' }, (sb) => {
+    const bash = { shell: ['bash', '--posix'] }
+    writeState(sb, 'NeedsLogin unsent 2026-01-02T03:04')
+    assertFailed(sb, sb.run({ STUB_MAIL_RC: '1' }, bash), /not reported yet/)
+    assert.equal(stateLine(sb), 'NeedsLogin unsent 2026-01-02T03:04')
+    sb.setBackend('Running')
+    assertHealthy(sb, sb.run({}, bash))
+    assertHealthy(sb, sb.run({}, bash))
+    assert.equal(sb.mails().length, 1)
+    assert.match(sb.mails()[0], /an outage was never reported: NeedsLogin, first seen 2026-01-02T03:04, and the mail about it did not send\.$/)
+  }))
+
+test('[bash --posix] migration: a one-word key counts as mailed; a one-word `Running` is healthy', { skip: BASH }, () =>
+  withSandbox({ backend: 'NeedsLogin' }, (sb) => {
+    const bash = { shell: ['bash', '--posix'] }
+    writeState(sb, 'NeedsLogin')
+    assertFailed(sb, sb.run({}, bash), /NeedsLogin/)
+    assert.deepEqual(sb.mails(), [])
+    writeState(sb, 'Running')
+    sb.setBackend('Running')
+    assertHealthy(sb, sb.run({}, bash))
+    assert.deepEqual(sb.mails(), [])
+  }))
+
+// Property: random sequences of backend states and mail outcomes. The
+// invariants are the PR's own promises, independent of wording:
+//   - one run sends at most one mail;
+//   - the state file is always `Running` or `<key> <mailed|unsent> <since>`;
+//   - a failing run with working mail sends a mail unless the state already
+//     says `<same key> mailed`, and sends none when it does (no spam);
+//   - a healthy run (exit 0) after a non-Running state sends exactly one mail,
+//     and after `Running` with nothing fixed sends none;
+//   - no outage is lost: every episode (from the first run that fails or fixes
+//     something to the next exit 0) has sent at least one mail when it closes;
+//   - the first-seen time of an episode does not move while it lasts.
+function mulberry32(a) {
+  return () => {
+    a = (a + 0x6d2b79f5) | 0
+    let t = Math.imul(a ^ (a >>> 15), 1 | a)
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+  }
+}
+
+test('property: across random outages and mail failures, no outage is lost and no state is mailed twice', () => {
+  const STATES = ['Running', 'Running', 'NeedsLogin', 'NeedsMachineAuth', 'Stopped']
+  const LINE = new RegExp(`^(Running|[A-Za-z-]+ (mailed|unsent) (${SINCE}|-))$`)
+  for (let seed = 1; seed <= 30; seed++) {
+    const rnd = mulberry32(seed)
+    withSandbox({}, (sb) => {
+      let prev = null // previous state line, null = no file
+      let episodeMailsAtStart = null
+      let episodeSince = null
+      const trace = []
+      for (let i = 0; i < 10; i++) {
+        const backend = STATES[Math.floor(rnd() * STATES.length)]
+        const mailOk = rnd() < 0.5
+        sb.setBackend(backend)
+        const before = sb.mails().length
+        const r = sb.run(mailOk ? {} : { STUB_MAIL_RC: '1' })
+        const sent = sb.mails().length - before
+        const line = stateLine(sb)
+        trace.push(`${backend}/${mailOk ? 'mail' : 'nomail'} -> exit ${r.status}, sent ${sent}, state "${line}"`)
+        const ctx = `seed ${seed}:\n${trace.join('\n')}`
+        assert.ok(sent <= 1, ctx)
+        assert.match(line, LINE, ctx)
+        const prevKey = prev?.split(' ')[0]
+        const prevMailed = prev !== null && (prev.split(' ')[1] ?? 'mailed') === 'mailed'
+        if (r.status === 1 && episodeMailsAtStart === null) episodeMailsAtStart = before
+        if (backend !== 'Running' && backend !== 'Stopped') {
+          assert.equal(r.status, 1, ctx)
+          if (mailOk) assert.equal(sent, prevKey === backend && prevMailed ? 0 : 1, ctx)
+          else assert.equal(sent, 0, ctx)
+        }
+        if (r.status === 0) {
+          const quiet = backend === 'Running' && (prev === null || prev === 'Running')
+          assert.equal(sent, quiet ? 0 : 1, ctx)
+          if (episodeMailsAtStart !== null) assert.ok(sb.mails().length > episodeMailsAtStart, `outage lost\n${ctx}`)
+          assert.equal(line, 'Running', ctx)
+          episodeMailsAtStart = null
+          episodeSince = null
+        } else if (line !== 'Running') {
+          const since = line.split(' ')[2]
+          if (episodeSince === null) episodeSince = since
+          else assert.equal(since, episodeSince, `first-seen time moved\n${ctx}`)
+        }
+        prev = line
+      }
+    })
+  }
+})

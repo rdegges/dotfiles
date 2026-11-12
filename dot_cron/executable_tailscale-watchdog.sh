@@ -35,11 +35,20 @@
 # the marker and the mail carry the reason.
 #
 # Mail goes out only when the state changes, so an outage sends one mail, not
-# one every 5 minutes. tailscale-watchdog.state holds the last state that was
-# mailed (or seen, when nothing needed mail): Running, or a failure key. A run
-# that fixed something mails what it did. A mail that cannot be sent writes the
-# marker and exits non-zero, and the state file keeps a value that makes the
-# next run try again.
+# one every 5 minutes. A run that fixed something mails what it did. Every
+# outage is mailed at least once, even when its alert cannot be sent at first:
+# tailscale-watchdog.state is one line, `Running`, or `<key> <mailed|unsent>
+# <since>` for an outage, where <since> is when the outage was first seen
+# (%FT%R, local time, or `-` when not known). `unsent` means the user has not
+# been told: a failure run sends the alert again on each run until it goes
+# out, and a recovery mail says that the outage was never reported, with its
+# key and first-seen time. A mail that cannot be sent writes the marker, says so
+# in it, and exits non-zero.
+#
+# The state file used to be one word: `Running`, or the key that was last
+# mailed. That reads as `<key> mailed -`, so an update sends no repeat mail.
+# Any status other than `mailed` reads as `unsent`: an extra mail is better
+# than a lost one.
 #
 # TAILSCALE_CLI overrides the CLI path, for a forced failure or a test; a stub
 # must answer `status --json`, `debug prefs`, and `up`. TAILSCALE_WATCHDOG_WAIT
@@ -61,7 +70,14 @@ account=icloud
 rcpt=r@rdegges.com
 
 mkdir -p "$logs"
-prev=$(cat "$statefile" 2>/dev/null)
+pkey= pstatus= psince=
+[ -f "$statefile" ] && read -r pkey pstatus psince < "$statefile"
+case "$pstatus" in '' | mailed) pstatus=mailed ;; *) pstatus=unsent ;; esac
+[ -n "$psince" ] || psince=-
+now=$(date '+%FT%R')
+# An outage that is still going on keeps the time it was first seen.
+if [ -n "$pkey" ] && [ "$pkey" != Running ]; then since=$psince; else since=$now; fi
+[ "$since" = - ] && since_txt=unknown || since_txt=$since
 host=$(hostname -s 2>/dev/null) || host="this Mac"
 
 # The loader's pattern: bounded when coreutils' timeout is installed, unbounded
@@ -88,20 +104,27 @@ send_mail() { # send_mail <subject> <body>
     return 1
 }
 
-# fail <key> <reason>: write the marker, mail when the key differs from the
-# last one mailed, exit 1.
+# fail <key> <reason>: write the marker, mail unless this key was already
+# mailed, record the key as mailed or unsent, exit 1.
 fail() {
     echo "tailscale-watchdog: FAILED: $2"
     note=
-    if [ "$prev" != "$1" ]; then
+    if [ "$pkey" != "$1" ] || [ "$pstatus" != mailed ]; then
+        earlier=
+        if [ -n "$pkey" ] && [ "$pkey" != Running ] && [ "$pkey" != "$1" ] && [ "$pstatus" = unsent ]; then
+            earlier="
+An earlier alert, for $pkey, did not send."
+        fi
         if send_mail "Tailscale is down on $host: $1" "Tailscale on $host is not up, and the watchdog could not fix it.
 
 Reason: $2
+Down since: $since_txt$earlier
 
 The watchdog mails again only when this changes. The reason stays in ~/.cron/logs/tailscale-watchdog.FAILED until a run finds Tailscale Running."; then
-            echo "$1" > "$statefile"
+            echo "$1 mailed $since" > "$statefile"
         else
-            note="; the alert mail failed too"
+            echo "$1 unsent $since" > "$statefile"
+            note="; the alert mail failed too (down since $since_txt, not reported yet; the next run tries again)"
         fi
     fi
     echo "$(date '+%F %R') tailscale-watchdog: $2$note (see ~/.cron/logs/tailscale-watchdog.log)" > "$marker"
@@ -110,15 +133,23 @@ The watchdog mails again only when this changes. The reason stays in ~/.cron/log
 
 # ok <what this run fixed, or empty> <state key before the fix>: healthy.
 ok() {
-    if [ -n "$1" ] || { [ -n "$prev" ] && [ "$prev" != Running ]; }; then
-        what=${1:-"the last report was $prev, and this run found Tailscale Running"}
+    if [ -n "$1" ] || { [ -n "$pkey" ] && [ "$pkey" != Running ]; }; then
+        what=$1
+        if [ -n "$pkey" ] && [ "$pkey" != Running ]; then
+            if [ "$pstatus" = unsent ]; then
+                what="an outage was never reported: $pkey, first seen $since_txt, and the mail about it did not send${1:+; this run: $1}"
+            else
+                what="the last report was $pkey, and this run found Tailscale Running${1:+; this run: $1}"
+            fi
+        fi
         if ! send_mail "Tailscale recovered on $host" "Tailscale on $host is Running again.
 
 What happened: $what."; then
-            # A fix that the mail could not report must still be reported:
-            # record the state before the fix, so the next run mails again.
-            if [ -z "$prev" ] || [ "$prev" = Running ]; then echo "$2" > "$statefile"; fi
-            echo "$(date '+%F %R') tailscale-watchdog: Tailscale is Running again ($what), but the recovery mail failed (see ~/.cron/logs/tailscale-watchdog.log)" > "$marker"
+            # The user must still hear about this: an outage already in the
+            # state file stays as it is, and a fix with no earlier outage is
+            # recorded as an unsent outage, so the next run mails again.
+            if [ -z "$pkey" ] || [ "$pkey" = Running ]; then echo "$2 unsent $now" > "$statefile"; fi
+            echo "$(date '+%F %R') tailscale-watchdog: Tailscale is Running again ($what), but the recovery mail failed; the next run tries again (see ~/.cron/logs/tailscale-watchdog.log)" > "$marker"
             exit 1
         fi
     fi

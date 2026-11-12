@@ -115,10 +115,27 @@ up:
 
 A failure writes `~/.cron/logs/tailscale-watchdog.FAILED`, and every new shell
 prints it. The job also sends mail to r@rdegges.com through the himalaya
-account `icloud`. Mail goes out only when the state changes, and
-`~/.cron/logs/tailscale-watchdog.state` records the last state. A fix or a
+account `icloud`. Mail goes out only when the state changes. A fix or a
 recovery sends one mail. The job does not wait for the network, because an
 outage is what it reports.
+
+Every outage is mailed at least once, also when its first alert cannot be
+sent. `~/.cron/logs/tailscale-watchdog.state` is one line:
+
+- `Running` when Tailscale is up.
+- `<key> mailed <since>` when the alert for the outage went out.
+- `<key> unsent <since>` when the alert did not go out yet.
+
+`<key>` is the failure, for example `NeedsLogin`. `<since>` is the local time
+when the job first saw the outage (`2026-11-11T17:12`), or `-` when that time
+is not known. While the state is `unsent`, each run sends the alert again.
+If Tailscale recovers first, the recovery mail says that the outage was never
+reported, with its key and its first-seen time. The FAILED marker says when an
+alert is still unsent.
+
+The older state file held one word: `Running`, or the key of the last mail.
+The job reads such a word as `<key> mailed -`, so the update sends no repeat
+mail.
 
 A deliberate `tailscale down` on the homelab Mac is undone within 5 minutes,
 and each fix sends one "recovered" mail. To keep Tailscale down on purpose,
