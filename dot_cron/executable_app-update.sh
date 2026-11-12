@@ -129,8 +129,8 @@ if [ -r "$lib" ] && sh -n "$lib" 2>/dev/null && command . "$lib" && command -v o
     exit 1
 fi
 
-# The launchd plist PATH has no /usr/sbin, and macOS ships ioreg and sysctl
-# only there.
+# The launchd plist PATH has /usr/sbin and /sbin; this keeps ioreg and sysctl
+# reachable when the job is run by hand with a reduced PATH.
 PATH="$PATH:/usr/sbin:/sbin"
 
 mkdir -p "$logs"
