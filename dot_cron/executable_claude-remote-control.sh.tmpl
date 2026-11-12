@@ -1,0 +1,189 @@
+#!/bin/sh
+# An always-on Claude Code Remote Control server for this Mac (personal Macs
+# only: work = false; see .chezmoiignore). launchd runs this for
+# com.rdegges.claude-remote-control (KeepAlive) and starts it again whenever it
+# exits, at most once a minute (ThrottleInterval 60).
+#
+# The server shows in claude.ai/code under this Mac's LocalHostName, not its
+# ComputerName: macOS adds a Bonjour conflict suffix such as " (3)" to the
+# ComputerName, and the LocalHostName keeps the plain name.
+#
+# It starts in ~/Code, not ~. Claude Code never writes the trust of the home
+# folder to disk ("trust acceptance is held for the current session only and is
+# not written to disk", https://code.claude.com/docs/en/security), and the
+# server has no terminal to ask on, so it can never start in ~. ~/Code holds
+# the repos and is not a git repo itself, hence --spawn same-dir.
+#
+# Each start:
+#   - Preflight, failing closed: claude is on PATH, LocalHostName is a plain
+#     host name, ~/Code exists, and ~/.claude.json says that ~/Code is trusted.
+#     The trust is read with plutil and never written; a file or format that the
+#     check cannot read is a failure.
+#   - The log (~/.cron/logs/claude-remote-control.log, which the plist's
+#     redirect appends to) is emptied first when it is over 10 MB.
+#   - Then it starts `claude remote-control` in the background and waits on it.
+#     A TERM or INT (launchctl bootout, a restart) goes on to claude; when claude
+#     has exited, this exits 0 and does not touch the marker. If claude still
+#     runs 300 seconds after the start, the marker is removed and
+#     claude-remote-control.ok is touched. Any other exit of claude is a
+#     failure: the marker gets claude's exit code and the last 20 log lines, and
+#     this exits with claude's code, so launchd starts it again.
+#
+# --permission-mode is explicit and must equal permissions.defaultMode in
+# dot_claude/settings.json (tests/cron/claude-remote-control.test.mjs checks
+# this). Without the flag, the Claude Code 2.1.322 server starts its sessions
+# with --settings {"permissions":{"defaultMode":"auto"}}, which wins over the
+# user settings, so they would not inherit bypass mode. launchd does not source
+# ~/.zshenv, so CLAUDE_CODE_EVEN_MORE_DANGEROUSLY_SKIP_PERMISSIONS is not set,
+# and these sessions keep the `rm -rf ~` guard, by choice.
+#
+# A failure writes ~/.cron/logs/claude-remote-control.FAILED (replaced, never
+# appended), which every new shell prints (dot_zshrc). On the homelab server
+# Mac only, it also mails once when the server goes down and once when it is
+# back. claude-remote-control.state holds the last state mailed (up or down), so
+# a crash loop sends one mail, not one a minute. A mail that cannot be sent
+# writes the marker, and the state keeps the value that makes the next change
+# try again.
+#
+# CLAUDE_REMOTE_CONTROL_SETTLE overrides the 300 seconds, for a test.
+
+set -u
+
+# 1 on the homelab server Mac (rendered from the chezmoi `homelab` flag).
+mail={{ if index . "homelab" }}1{{ else }}0{{ end }}
+settle="${CLAUDE_REMOTE_CONTROL_SETTLE:-300}"
+dir="$HOME/Code"
+logs="$HOME/.cron/logs"
+log="$logs/claude-remote-control.log"
+marker="$logs/claude-remote-control.FAILED"
+stamp="$logs/claude-remote-control.ok"
+statefile="$logs/claude-remote-control.state"
+# The himalaya account "icloud" is the Fastmail-backed r@rdegges.com account;
+# the name is historical (see dot_config/himalaya/config.toml.tmpl).
+account=icloud
+rcpt=r@rdegges.com
+
+mkdir -p "$logs"
+size=$(wc -c < "$log" 2>/dev/null | tr -d ' ')
+if [ "${size:-0}" -gt 10485760 ] 2>/dev/null; then
+    : > "$log"
+    echo "claude-remote-control: the log was over 10 MB; emptied it"
+fi
+echo "$(date '+%F %T') claude-remote-control: starting (pid $$)"
+
+# The loader's pattern: bounded when coreutils' timeout is installed, unbounded
+# otherwise. run <seconds> <cmd...>
+TO=$(command -v gtimeout || command -v timeout || true)
+run() { s=$1; shift; if [ -n "$TO" ]; then "$TO" -k 5 "$s" "$@"; else "$@"; fi; }
+
+# One line, at most 300 characters, for the marker and the mail. Printable
+# ASCII only, before the cut: under launchd there is no LANG, so cut counts
+# bytes and could split a multi-byte character into invalid UTF-8.
+oneline() { printf '%s' "$1" | tr '\n\t' '  ' | LC_ALL=C tr -cd '\11\12\15\40-\176' | cut -c1-300; }
+
+host=$(run 10 scutil --get LocalHostName 2>/dev/null)
+where=$(oneline "$host")
+[ -n "$where" ] || where="this Mac"
+lastlines=
+
+send_mail() { # send_mail <subject> <body>
+    msg=$(printf 'From: %s\nTo: %s\nSubject: %s\n\n%s\n' "$rcpt" "$rcpt" "$1" "$2")
+    # The message goes on stdin, never as an argument: himalaya 1.2.0 reads
+    # stdin whenever it is not a TTY, and panics on an empty one (exit 101).
+    if out=$(printf '%s' "$msg" | run 60 himalaya message send -a "$account" 2>&1); then
+        echo "claude-remote-control: mailed: $1"
+        return 0
+    fi
+    echo "claude-remote-control: mail failed: $(oneline "$out")"
+    return 1
+}
+
+# fail <reason> [<exit code>]: mail on the change to down (homelab only), write
+# the marker (with $lastlines after the first line, when set), and exit.
+fail() {
+    printf '%s\n' "claude-remote-control: FAILED: $1"
+    note=
+    if [ "$mail" = 1 ] && [ "$(cat "$statefile" 2>/dev/null)" != down ]; then
+        if send_mail "Claude Remote Control is down on $where" "The Claude Code Remote Control server on $where is not running.
+
+Reason: $(oneline "$1")
+${lastlines:+
+Last log lines:
+$lastlines
+}
+launchd starts it again at most once a minute. You get one more mail when it has run for ${settle}s again. Until then the reason stays in ~/.cron/logs/claude-remote-control.FAILED."; then
+            echo down > "$statefile"
+        else
+            note="; the alert mail failed too"
+        fi
+    fi
+    {
+        printf '%s\n' "$(date '+%F %R') claude-remote-control: $(oneline "$1")$note (see ~/.cron/logs/claude-remote-control.log)"
+        [ -z "$lastlines" ] || printf '%s\n' "$lastlines"
+    } > "$marker"
+    exit "${2:-1}"
+}
+
+# healthy: the server has run for $settle seconds. Mail on the change to up
+# (homelab only), then clear the marker.
+healthy() {
+    if [ "$mail" = 1 ]; then
+        if [ "$(cat "$statefile" 2>/dev/null)" = down ]; then
+            if ! send_mail "Claude Remote Control is back on $where" "The Claude Code Remote Control server on $where has run for ${settle}s again."; then
+                printf '%s\n' "$(date '+%F %R') claude-remote-control: the server runs again, but the recovery mail failed (see ~/.cron/logs/claude-remote-control.log)" > "$marker"
+                return
+            fi
+        fi
+        echo up > "$statefile"
+    fi
+    rm -f "$marker"
+    touch "$stamp"
+    echo "$(date '+%F %T') claude-remote-control: ok: running for ${settle}s"
+}
+
+command -v claude > /dev/null 2>&1 || fail "claude is not on PATH ($PATH); install Claude Code"
+case "$host" in
+'' | *[!A-Za-z0-9-]*) fail "\`scutil --get LocalHostName\` gave '$where', not a plain host name; set Local hostname in System Settings > General > Sharing" ;;
+esac
+[ -d "$dir" ] || fail "$dir is missing: create it, then run \`claude\` in ~/Code once and accept the trust prompt"
+# plutil reads a dot in the key path as a separator, so such a path cannot be checked.
+case "$dir" in *.*) fail "cannot check the trust of $dir: the path has a dot" ;; esac
+trust=$(run 10 plutil -extract "projects.$dir.hasTrustDialogAccepted" raw -o - "$HOME/.claude.json" 2>&1)
+[ "$trust" = true ] || fail "run \`claude\` in ~/Code once and accept the trust prompt, or the trust check cannot read ~/.claude.json (plutil: $(oneline "$trust"))"
+cd "$dir" || fail "cannot cd to $dir"
+
+# The supervisor. Each trap sets $trapped, so the loop can tell a wait that a
+# signal cut short from a wait that returned claude's exit code.
+stopping=0 settled=0 cleared=0 child=
+trap 'trapped=1 stopping=1; [ -z "$child" ] || kill -TERM "$child" 2>/dev/null' TERM INT
+trap 'trapped=1 settled=1' USR1
+claude remote-control --name "$host" --spawn same-dir --permission-mode bypassPermissions &
+child=$!
+[ "$stopping" = 0 ] || kill -TERM "$child" 2>/dev/null
+echo "claude-remote-control: started claude remote-control (pid $child) in $dir as $host"
+( sleep "$settle" < /dev/null > /dev/null 2>&1; kill -USR1 $$ 2>/dev/null ) &
+timer=$!
+
+rc=
+until [ -n "$rc" ]; do
+    trapped=0
+    wait "$child"; r=$?
+    if [ "$trapped" = 0 ]; then
+        rc=$r
+    elif kill -0 "$child" 2>/dev/null; then
+        if [ "$settled" = 1 ] && [ "$cleared" = 0 ] && [ "$stopping" = 0 ]; then
+            cleared=1
+            healthy
+        fi
+    else
+        wait "$child"; rc=$?
+    fi
+done
+kill "$timer" 2>/dev/null
+
+if [ "$stopping" = 1 ]; then
+    echo "$(date '+%F %T') claude-remote-control: stopped (claude exit $rc)"
+    exit 0
+fi
+lastlines=$(tail -n 20 "$log" 2>/dev/null | LC_ALL=C tr -cd '\11\12\40-\176' | cut -c1-300 | sed 's/^/  | /')
+fail "claude remote-control exited (exit $rc)" "$rc"

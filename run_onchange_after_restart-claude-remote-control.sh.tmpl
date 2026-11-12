@@ -1,0 +1,91 @@
+{{- if and (eq .chezmoi.os "darwin") (not (index . "work")) -}}
+#!/bin/bash
+# com.rdegges.claude-remote-control.plist.tmpl hash: {{ include "private_Library/LaunchAgents/com.rdegges.claude-remote-control.plist.tmpl" | sha256sum }}
+# launchagent.plist hash: {{ include ".chezmoitemplates/launchagent.plist" | sha256sum }}
+# claude-remote-control.sh (rendered) hash: {{ includeTemplate "dot_cron/executable_claude-remote-control.sh.tmpl" . | sha256sum }}
+#
+# Restart the Remote Control server (com.rdegges.claude-remote-control) when its
+# agent, the shared plist template, or its wrapper changes: a running server
+# keeps the old ones until it restarts, and the loader never reloads a loaded
+# service. The wrapper hash is of its render, so a change of the `homelab`
+# flag (mail on or off) restarts it too. Personal Macs only: this renders empty
+# when `work` is true, like the gate in .chezmoiignore. It runs after the
+# loader (after_ scripts run in name order), so a server that was not loaded
+# yet has just been bootstrapped, and this restarts it once more.
+#
+# A restart drops the sessions that the server runs. So it is deferred while a
+# session in ~/Code is active: when any file under the ~/Code transcript folder
+# (~/.claude/projects/<~/Code with each character that is not a letter or a
+# digit changed to "-">, the name Claude Code gives it) changed in the last 20
+# minutes. A probe that cannot evaluate counts as active. A deferred restart
+# exits 1, so chezmoi runs this again on the next apply (the hourly job too),
+# and writes ~/.cron/logs/claude-remote-control-restart.FAILED, which every new
+# shell prints. A server that `launchctl disable` turned off is not restarted.
+# This never restarts the server from inside one of its own sessions.
+set -uo pipefail
+
+label=com.rdegges.claude-remote-control
+plist="$HOME/Library/LaunchAgents/$label.plist"
+marker="$HOME/.cron/logs/claude-remote-control-restart.FAILED"
+mkdir -p "$HOME/.cron/logs"
+
+# The loader's bounded helpers (run_onchange_after_load-launch-agents.sh.tmpl).
+TO=$(command -v gtimeout || command -v timeout || true)
+run() { if [ -n "$TO" ]; then "$TO" -k 5 30 "$@"; else "$@"; fi; }
+
+domain="gui/$(id -u)"
+
+bootout() {
+    local deadline=$((SECONDS + 10))
+    run launchctl bootout "$domain/$1" >/dev/null 2>&1 || true
+    while run launchctl print "$domain/$1" >/dev/null 2>&1; do
+        if [ "$SECONDS" -ge "$deadline" ]; then
+            echo "claude-remote-control: ERROR: $1 still loaded 10s after bootout" >&2
+            return 1
+        fi
+        sleep 0.2
+    done
+}
+
+# fail <reason>: write the marker and exit 1, so the next apply tries again.
+fail() {
+    echo "claude-remote-control: $1" >&2
+    printf '%s\n' "$(date '+%F %R') claude-remote-control: $1" > "$marker"
+    exit 1
+}
+
+if [ "$label" = "${XPC_SERVICE_NAME:-}" ]; then
+    fail "restart deferred, this apply runs inside the server (run 'chezmoi apply' in a terminal)"
+fi
+
+if ! disabled=$(run launchctl print-disabled "$domain" 2>&1); then
+    fail "restart failed, launchctl print-disabled $domain failed (retries on the next apply)"
+fi
+if grep -qF -e "\"$label\" => disabled" -e "\"$label\" => true" <<<"$disabled"; then
+    echo "claude-remote-control: $label is disabled; not restarted"
+    rm -f "$marker"
+    exit 0
+fi
+
+code="$HOME/Code"
+slug=$(printf '%s' "$code" | LC_ALL=C sed 's/[^A-Za-z0-9]/-/g')
+projects="$HOME/.claude/projects/$slug"
+# Claude Code changes each UTF-16 unit, not each byte, and cuts names over 200
+# characters with a hash: for those paths this name would be wrong.
+if LC_ALL=C grep -q '[^ -~]' <<<"$code" || [ "${#slug}" -gt 200 ]; then
+    fail "restart deferred, cannot tell whether a session in ~/Code is active: no transcript folder name for $code (retries on the next apply)"
+fi
+if [ -e "$projects" ]; then
+    recent=$(find "$projects" -mmin -20 -print 2>&1); frc=$?
+    if [ "$frc" -ne 0 ]; then
+        fail "restart deferred, cannot tell whether a session in ~/Code is active: find failed (exit $frc) (retries on the next apply)"
+    elif [ -n "$recent" ]; then
+        fail "restart deferred, a session in ~/Code is active (retries on the next apply)"
+    fi
+fi
+
+bootout "$label" || fail "restart failed, $label still loaded 10s after bootout (retries on the next apply)"
+run launchctl bootstrap "$domain" "$plist" || fail "restart failed, launchctl bootstrap $domain $label failed (retries on the next apply)"
+rm -f "$marker"
+echo "claude-remote-control: restarted $label"
+{{ end -}}
