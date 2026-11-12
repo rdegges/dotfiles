@@ -63,8 +63,9 @@ changes, `run_onchange_after_load-launch-agents.sh.tmpl` loads the agents again.
 Each job still writes its log to `~/.cron/logs/<job>.log`.
 
 Jobs print with `printf '%s\n'`, never `echo`. A job that puts CLI output in a
-marker or mail cleans it with `oneline` from `~/.cron/lib/text.sh`. The shell
-banner removes control characters. `tests/cron/text-lib.test.mjs` enforces
+marker or mail cleans it with a function from `~/.cron/lib/text.sh`: `oneline`
+for one line, or `lines` for more than one line. The shell banner removes
+control characters. `tests/cron/text-lib.test.mjs` enforces
 this.
 
 If the Mac sleeps through a job's time, launchd runs the job once when the Mac
@@ -218,6 +219,95 @@ The jobs used to run from cron. `run_onchange_after_retire-crontab.sh.tmpl`
 removes the old crontab. If it cannot (from cron, `crontab` hangs on a macOS
 privacy prompt), it writes `~/.cron/logs/crontab.FAILED`. Then run
 `crontab -r && rm -f ~/.cron/logs/crontab.FAILED` once by hand.
+
+### Remote Control server (personal Macs)
+
+On each personal Mac (`work = false`), launchd keeps a Claude Code Remote
+Control server running all the time. The server shows in claude.ai/code under
+the name of the Mac. When the Mac is online, you can start a session on it from
+claude.ai/code or the Claude app, also when no `claude` session is open on it.
+This is in addition to `remoteControlAtStartup`, which registers each
+interactive session (see [AI coding tools](#ai-coding-tools)).
+
+- The agent is `com.rdegges.claude-remote-control`. It uses the shared plist
+  template with `service` set to true: `RunAtLoad` and `KeepAlive` are true, and
+  `ThrottleInterval` is 60. Thus launchd starts the server at login and again
+  each time that it stops, at most once a minute.
+- The name is `scutil --get LocalHostName`, not the ComputerName. macOS can add
+  a suffix such as " (3)" to the ComputerName when it finds a name conflict on
+  the network. The LocalHostName keeps the plain name. To remove the suffix
+  from the ComputerName, change the name in System Settings > General > Sharing.
+- The server starts in `~/Code`, with `--spawn same-dir`. It does not start in
+  `~`, because Claude Code never stores the trust of the home folder. The
+  [security docs](https://code.claude.com/docs/en/security) say: "When you
+  start Claude Code directly in your home directory, trust acceptance is held
+  for the current session only and is not written to disk, so the prompt
+  reappears on each launch." The server has no terminal for that prompt.
+- `~/.cron/claude-remote-control.sh` starts the server. First, it makes sure
+  that `claude` is on PATH, that the LocalHostName is a plain host name, that
+  `~/Code` exists, and that `~/.claude.json` marks `~/Code` as trusted. It
+  reads that file and never writes it.
+- If a check fails, or if the server stops for a reason other than a stop
+  command, the script writes `~/.cron/logs/claude-remote-control.FAILED`. When
+  the server stops, the marker also gets the last 20 lines of the log, cleaned
+  with `lines`. Every new shell prints the marker. When the server runs for 5 minutes, the script removes
+  the marker. On the homelab Mac, the script also sends one mail when the server
+  stops and one mail when it runs again.
+- The log is `~/.cron/logs/claude-remote-control.log`. The script empties it at
+  start when it is more than 10 MB.
+
+Each Mac needs one step by hand before the server can start. Do these steps
+once:
+
+1. Run `cd ~/Code && claude`.
+2. Accept the trust prompt.
+3. Exit `claude`.
+
+Until you do these steps, the marker tells you to do them, and launchd tries
+again each minute.
+
+The load script never reloads this agent while it runs, because a reload stops
+the sessions on it. Instead,
+`run_onchange_after_zz-restart-claude-remote-control.sh.tmpl` restarts the server
+when its plist, the shared template, or its script changes. If a file in the
+`~/Code` transcript folder (`~/.claude/projects/-Users-<you>-Code`) changed in
+the last 20 minutes, the restart waits. It then writes
+`~/.cron/logs/claude-remote-control-restart.FAILED`, and the next apply (the
+hourly job too) tries again. A running server keeps its Claude Code version
+until it restarts, for example at the next login.
+
+To stop the server on one Mac, run both commands. A `bootout` alone comes back
+at the next login, or at the next apply that changes a launch agent.
+
+```bash
+launchctl disable gui/$UID/com.rdegges.claude-remote-control
+launchctl bootout gui/$UID/com.rdegges.claude-remote-control
+```
+
+To start it again, run `launchctl enable gui/$UID/com.rdegges.claude-remote-control`,
+then `launchctl bootstrap gui/$UID ~/Library/LaunchAgents/com.rdegges.claude-remote-control.plist`.
+A plain `chezmoi apply` does not start it, because the load script runs only
+when a launch agent changes.
+
+**Security.** Each session that starts from my claude.ai account runs on every
+online personal Mac in `bypassPermissions` mode. This is the
+`permissions.defaultMode` of `dot_claude/settings.json`. The script gives the
+mode with `--permission-mode`, because without the flag the server starts its
+sessions in `auto` mode (as measured in Claude Code 2.1.322). A test makes sure
+that the flag and the settings file have the same mode. launchd does not read
+`dot_zshenv`, so `CLAUDE_CODE_EVEN_MORE_DANGEROUSLY_SKIP_PERMISSIONS` is not
+set. Thus these sessions keep the guard that blocks commands such as
+`rm -rf ~`. Anyone who controls the claude.ai account can start a session on
+each of these Macs at any time.
+
+The work laptop (`work = true`) gets no server: `.chezmoiignore` skips the plist
+and the script, and the load script skips the label. If `work` changes to true
+on a Mac that had the server, the load script unloads it. chezmoi does not
+delete the files of an ignored target, so also delete them by hand:
+
+```bash
+rm -f ~/Library/LaunchAgents/com.rdegges.claude-remote-control.plist ~/.cron/claude-remote-control.sh
+```
 
 
 ## Bootstrap
@@ -455,7 +545,9 @@ It also sets `remoteControlAtStartup` to `true`, so every interactive `claude`
 session starts the Remote Control bridge and I can drive it from my claude.ai
 account. The `vault-agent-settings.json` profile sets it to `true` too, by
 choice. As of Claude Code 2.1.322 the key does nothing for `claude -p` runs, so
-scheduled print-mode runs do not start Remote Control.
+scheduled print-mode runs do not start Remote Control. Each personal Mac also
+runs a [Remote Control server](#remote-control-server-personal-macs) all the
+time.
 
 `dot_zshenv` exports `CLAUDE_CODE_EVEN_MORE_DANGEROUSLY_SKIP_PERMISSIONS=1`.
 Bypass mode still blocks a few destructive commands such as `rm -rf ~`; this

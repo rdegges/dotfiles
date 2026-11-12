@@ -3,10 +3,19 @@
      under the same condition, so this list must match it; `index` reads a
      missing key as false. */ -}}
 {{- $homelabOnly := list "com.rdegges.tailscale-watchdog" "com.rdegges.app-update" -}}
+{{- /* Agents for personal Macs only, skipped when `work` is true (a missing key
+     counts as false). .chezmoiignore skips their plists under the same
+     condition; keep the two lists equal. */ -}}
+{{- $notWork := list "com.rdegges.claude-remote-control" -}}
+{{- /* Always-on services (KeepAlive). The loader never reloads a loaded one;
+     each has its own run_onchange_after_zz-restart-<job>.sh.tmpl. */ -}}
+{{- $services := list "com.rdegges.claude-remote-control" -}}
 {{- $agents := list -}}
 {{- range glob (joinPath .chezmoi.sourceDir "private_Library/LaunchAgents/*.plist.tmpl") -}}
 {{-   if or (index $ "homelab") (not (has (base . | trimSuffix ".plist.tmpl") $homelabOnly)) -}}
-{{-     $agents = append $agents . -}}
+{{-     if not (and (index $ "work") (has (base . | trimSuffix ".plist.tmpl") $notWork)) -}}
+{{-       $agents = append $agents . -}}
+{{-     end -}}
 {{-   end -}}
 {{- end -}}
 #!/bin/bash
@@ -22,8 +31,12 @@
 # .chezmoiremove; any loaded com.rdegges.* label not managed here is booted out.
 # Homelab-only agents are not managed here unless `homelab` is true, so turning
 # the flag off boots them out (their plist files stay; see the README).
+# Personal-only agents are not managed here when `work` is true, in the same way.
 # A managed job that is running, or whose state cannot be read, is left alone
 # and the run fails, so the next apply reloads it.
+# A service (always running) is never reloaded here: a loaded one, or one that
+# `launchctl disable` turned off, is left alone and the run does not fail; one
+# that is not loaded is bootstrapped. Its own restart script applies a change.
 #
 # Every launchctl call is bounded with a timeout, like the old crontab
 # installer: this runs from the hourly `chezmoi update` job, where nobody can
@@ -34,6 +47,11 @@ set -uo pipefail
 labels=(
 {{- range $agents }}
     {{ base . | trimSuffix ".plist.tmpl" | squote }}
+{{- end }}
+)
+services=(
+{{- range $services }}
+    {{ . | squote }}
 {{- end }}
 )
 
@@ -62,7 +80,43 @@ bootout() {
     done
 }
 
+# load_service <label>: bootstrap a service that is not loaded, unless it is
+# disabled. A loaded one is left alone, also when this apply runs inside it (a
+# session that the service started).
+load_service() {
+    local prc disabled
+    if [ "$1" = "${XPC_SERVICE_NAME:-}" ]; then
+        echo "launch-agents: $1 runs this apply; left alone"
+        return
+    fi
+    run launchctl print "$domain/$1" >/dev/null 2>&1; prc=$?
+    if [ "$prc" -eq 0 ]; then
+        echo "launch-agents: $1 is loaded; left alone (its restart script applies changes)"
+        return
+    elif [ "$prc" -ne 113 ]; then
+        echo "launch-agents: ERROR: launchctl print $domain/$1 failed (exit $prc); not loaded" >&2
+        rc=1
+        return
+    fi
+    if ! disabled=$(run launchctl print-disabled "$domain" 2>&1); then
+        echo "launch-agents: ERROR: launchctl print-disabled $domain failed; $1 not loaded" >&2
+        rc=1
+        return
+    fi
+    if grep -qF -e "\"$1\" => disabled" -e "\"$1\" => true" <<<"$disabled"; then
+        echo "launch-agents: $1 is disabled; not loaded"
+        return
+    fi
+    if run launchctl bootstrap "$domain" "$HOME/Library/LaunchAgents/$1.plist"; then
+        echo "launch-agents: loaded $1"
+    else
+        echo "launch-agents: ERROR: launchctl bootstrap $domain $1 failed" >&2
+        rc=1
+    fi
+}
+
 for label in "${labels[@]}"; do
+    case " ${services[*]} " in *" $label "*) load_service "$label"; continue ;; esac
     # Booting out the job that runs this apply (the hourly chezmoi job) would
     # kill this script half way through. Load everything else, then fail so the
     # banner asks for an interactive apply.

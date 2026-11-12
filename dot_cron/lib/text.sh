@@ -1,10 +1,10 @@
 # Shared text cleaning for the ~/.cron jobs. Sourced, never run: each job that
-# calls oneline loads it right after its variables, with a loader that writes
-# the job's FAILED marker and exits 1 when this file is missing, unreadable,
-# does not parse, or does not define oneline.
+# calls oneline or lines loads it right after its variables, with a loader that
+# writes the job's FAILED marker and exits 1 when this file is missing,
+# unreadable, does not parse, or does not define oneline.
 #
-# This file only sets esc and bel and defines oneline. It runs no other
-# command and changes no `set` option.
+# This file only sets esc and bel and defines oneline and lines. It runs no
+# other command and changes no `set` option.
 #
 # Every job used to carry its own copy of oneline, and each copy had its own
 # bug: a multi-byte character cut in half, BSD tr stopping at an invalid byte,
@@ -48,5 +48,26 @@ oneline() {
             -e "s|${esc}][^${bel}${esc}]*${esc}\\\\||g" \
             -e "s|${esc}[ -/]*[0-~]||g" \
         | LC_ALL=C tr -cd '\40-\176' \
+        | LC_ALL=C cut -c1-300
+}
+
+# lines <text>: oneline for text of more than one line, such as the last log
+# lines under a FAILED marker or in a mail. Each line of <text> becomes one
+# line of printable ASCII, at most 300 bytes; the newlines stay.
+#
+# The stages of oneline, but newline stays: tab and CR become spaces, the same
+# four sed expressions remove escape sequences, tr keeps newline and printable
+# ASCII, and cut cuts each line at 300 bytes. sed reads one line at a time, so
+# an escape sequence that a newline splits is not removed as one: its ESC goes,
+# and the rest of its bytes stay as text.
+lines() {
+    printf '%s' "$1" \
+        | LC_ALL=C tr '\t\r' '  ' \
+        | LC_ALL=C sed \
+            -e "s|${esc}\[[0-?]*[ -/]*[@-~]||g" \
+            -e "s|${esc}][^${bel}${esc}]*${bel}||g" \
+            -e "s|${esc}][^${bel}${esc}]*${esc}\\\\||g" \
+            -e "s|${esc}[ -/]*[0-~]||g" \
+        | LC_ALL=C tr -cd '\12\40-\176' \
         | LC_ALL=C cut -c1-300
 }

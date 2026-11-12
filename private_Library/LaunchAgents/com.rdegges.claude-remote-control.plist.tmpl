@@ -1,0 +1,16 @@
+{{- /* Personal Macs only (work = false; .chezmoiignore, and the loader's work list).
+     An always-on Claude Code Remote Control server named after this Mac's
+     LocalHostName, so claude.ai/code can start sessions in ~/Code on every
+     personal Mac that is online. launchd starts it at load and again whenever
+     it exits (at most once a minute). The wrapper checks claude, the name, and
+     the ~/Code trust, then supervises the server; on failure it writes
+     ~/.cron/logs/claude-remote-control.FAILED, which every new shell prints.
+     `exec` makes the wrapper launchd's process, so a bootout's TERM reaches it
+     and it stops the server cleanly. The loader never reloads this service;
+     run_onchange_after_zz-restart-claude-remote-control.sh.tmpl restarts it when
+     it changes. */ -}}
+{{ template "launchagent.plist" (dict
+	"label" "com.rdegges.claude-remote-control"
+	"service" true
+	"command" `exec "$HOME/.cron/claude-remote-control.sh" >> "$HOME/.cron/logs/claude-remote-control.log" 2>&1`
+	"home" .chezmoi.homeDir) -}}

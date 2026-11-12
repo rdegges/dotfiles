@@ -31,7 +31,15 @@
 // 03:40, 04:40, and 05:40, on minutes no other job uses. With `homelab` missing, false,
 // and true, .chezmoiignore and the loader agree: a real `chezmoi apply` writes
 // exactly the plists the loader's label list names, and the loader bootstraps
-// those and only those, also across true -> false -> true. With a stub
+// those and only those, also across true -> false -> true. Every scheduled
+// agent renders byte for byte as before the template's `service` key; the
+// service agent (com.rdegges.claude-remote-control) renders RunAtLoad,
+// KeepAlive, ThrottleInterval 60, Interactive, and no schedule; the loader's
+// services list is exactly the agents with KeepAlive. The loader leaves a
+// loaded or disabled service alone with exit 0, bootstraps one that is not
+// loaded, and fails when the state or the disabled list cannot be read. For
+// all four combinations of `work` and `homelab`, a real `chezmoi apply` writes
+// exactly the plists the loader names and the loader loads those. With a stub
 // crontab, the retire script clears crontab.FAILED when `crontab -l` is empty
 // or absent, otherwise tries `crontab -r` once (also after a hung `crontab -l`
 // is killed at 30s), writes the marker when that fails, and always exits 0. It says
@@ -93,8 +101,21 @@ const HOMELAB_AGENTS = {
   },
 }
 const HOMELAB_LABELS = Object.keys(HOMELAB_AGENTS).map((j) => `com.rdegges.${j}`).sort()
-const ALL_LABELS = [...LABELS, ...HOMELAB_LABELS].sort()
-// What each agent must render to: the old crontab line, or the HOMELAB_AGENTS entry.
+// Always-on services (`service` true in the shared template), for personal
+// Macs only: .chezmoiignore and the loader skip them when `work` is true.
+const SERVICE_AGENTS = {
+  'claude-remote-control': {
+    command: 'exec "$HOME/.cron/claude-remote-control.sh" >> "$HOME/.cron/logs/claude-remote-control.log" 2>&1',
+  },
+}
+const SERVICE_LABELS = Object.keys(SERVICE_AGENTS).map((j) => `com.rdegges.${j}`).sort()
+const ALL_LABELS = [...LABELS, ...HOMELAB_LABELS, ...SERVICE_LABELS].sort()
+// What a personal Mac that is not the homelab manages: the default render.
+const MANAGED = [...LABELS, ...SERVICE_LABELS].sort()
+// The labels a Mac manages, by its flags (a missing key is false).
+const managedFor = ({ work, homelab } = {}) =>
+  [...LABELS, ...(homelab === true ? HOMELAB_LABELS : []), ...(work === true ? [] : SERVICE_LABELS)].sort()
+// What each scheduled agent must render to: the old crontab line, or the HOMELAB_AGENTS entry.
 const AGENTS = {
   ...Object.fromEntries(Object.entries(OLD_CRONTAB).map(([j, line]) => [j, parseCron(line)])),
   ...HOMELAB_AGENTS,
@@ -192,6 +213,109 @@ for (const job of Object.keys(AGENTS)) {
     }
   })
 }
+
+// The exact XML each scheduled agent rendered to before the template got its
+// `service` key (the template at that time, written out in JS), so adding the
+// key changed no existing agent and reloaded no job with a new plist.
+const xmlEscape = (s) => s.replace(/&/g, '&amp;').replace(/'/g, '&#39;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&#34;')
+function scheduledXml(label, { command, schedule }, home) {
+  const entries = schedule
+    .map((e) => '\n\t\t<dict>' + Object.keys(e).sort().map((k) => `\n\t\t\t<key>${k}</key>\n\t\t\t<integer>${e[k]}</integer>`).join('') + '\n\t\t</dict>')
+    .join('')
+  const h = xmlEscape(home)
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Managed by chezmoi (source: private_Library/LaunchAgents/${label}.plist.tmpl). Do not edit in place. -->
+<plist version="1.0">
+<dict>
+\t<key>Label</key>
+\t<string>${label}</string>
+\t<key>ProgramArguments</key>
+\t<array>
+\t\t<string>/bin/sh</string>
+\t\t<string>-c</string>
+\t\t<string>${xmlEscape(command)}</string>
+\t</array>
+\t<key>StartCalendarInterval</key>
+\t<array>${entries}
+\t</array>
+\t<key>EnvironmentVariables</key>
+\t<dict>
+\t\t<key>PATH</key>
+\t\t<string>${h}/.asdf/shims:${h}/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+\t\t<key>HOMEBREW_NO_ENV_HINTS</key>
+\t\t<string>1</string>
+\t\t<key>HOMEBREW_NO_AUTO_UPDATE</key>
+\t\t<string>1</string>
+\t\t<key>HOMEBREW_NO_ASK</key>
+\t\t<string>1</string>
+\t</dict>
+\t<key>RunAtLoad</key>
+\t<false/>
+\t<key>ProcessType</key>
+\t<string>Background</string>
+</dict>
+</plist>
+`
+}
+
+test('agents: every scheduled agent renders byte for byte as before the `service` key (also for a hostile HOME)', () => {
+  const { base, home } = hostileHome()
+  try {
+    for (const job of Object.keys(AGENTS)) {
+      const label = `com.rdegges.${job}`
+      const xml = execTemplate(read(`${AGENTS_DIR}/${label}.plist.tmpl`), { home })
+      assert.equal(xml, scheduledXml(label, AGENTS[job], home), label)
+      assert.doesNotMatch(xml, /KeepAlive|ThrottleInterval|Interactive/, label)
+    }
+  } finally {
+    rmSync(base, { recursive: true, force: true })
+  }
+})
+
+for (const job of Object.keys(SERVICE_AGENTS)) {
+  const label = `com.rdegges.${job}`
+  test(`service ${label}: valid plist, always on (RunAtLoad, KeepAlive, ThrottleInterval 60, Interactive), no schedule, appended log`, () => {
+    const { base, home } = hostileHome()
+    try {
+      const xml = execTemplate(read(`${AGENTS_DIR}/${label}.plist.tmpl`), { home })
+      assert.ok(xml.startsWith('<?xml version="1.0" encoding="UTF-8"?>\n'), 'XML declaration is not at byte 0')
+      const p = parsePlist(xml)
+      const want = SERVICE_AGENTS[job]
+      assert.equal(p.Label, label)
+      assert.deepEqual(p.ProgramArguments, ['/bin/sh', '-c', want.command])
+      assert.equal(Buffer.compare(Buffer.from(p.ProgramArguments[2]), Buffer.from(want.command)), 0)
+      // exec: the wrapper is launchd's process, so a bootout's TERM reaches it.
+      // >>: a long-lived process appends; a truncating > would lose the history.
+      assert.match(want.command, new RegExp(`^exec "\\$HOME/\\.cron/${job}\\.sh" >> "\\$HOME/\\.cron/logs/${job}\\.log" 2>&1$`))
+      assert.equal(p.RunAtLoad, true)
+      assert.equal(p.KeepAlive, true)
+      assert.equal(p.ThrottleInterval, 60)
+      assert.equal(p.ProcessType, 'Interactive')
+      assert.deepEqual(p.EnvironmentVariables, {
+        PATH: `${home}/.asdf/shims:${home}/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin`,
+        HOMEBREW_NO_ENV_HINTS: '1',
+        HOMEBREW_NO_AUTO_UPDATE: '1',
+        HOMEBREW_NO_ASK: '1',
+      })
+      assert.deepEqual(Object.keys(p).sort(), [
+        'EnvironmentVariables', 'KeepAlive', 'Label', 'ProcessType', 'ProgramArguments', 'RunAtLoad', 'ThrottleInterval',
+      ])
+    } finally {
+      rmSync(base, { recursive: true, force: true })
+    }
+  })
+}
+
+test('loader: its services list is exactly the agents whose plist sets KeepAlive', () => {
+  const keepAlive = readdirSync(join(SOURCE, AGENTS_DIR))
+    .filter((f) => parsePlist(execTemplate(read(`${AGENTS_DIR}/${f}`))).KeepAlive === true)
+    .map((f) => f.replace(/\.plist\.tmpl$/, ''))
+    .sort()
+  assert.deepEqual(keepAlive, SERVICE_LABELS)
+  const list = renderLoader().match(/^services=\(\n([\s\S]*?)\n\)$/m)[1]
+  assert.deepEqual(list.split('\n').map((l) => l.trim().replace(/^'|'$/g, '')).sort(), SERVICE_LABELS)
+})
 
 // `codex update` runs https://chatgpt.com/codex/install.sh. Its add_to_path()
 // appends a `# >>> Codex installer >>>` block to ~/.zprofile unless
@@ -364,9 +488,9 @@ test('loader: renders only on darwin; the darwin render parses under bash -n', (
 test('loader: the hash header names the shared template and every agent; the label list is every agent', () => {
   const s = renderLoader()
   const hashes = [...s.matchAll(/^# (\S+) hash: ([0-9a-f]{64})$/gm)].map((m) => m[1])
-  assert.deepEqual(hashes, ['launchagent.plist', ...LABELS.map((l) => `${l}.plist.tmpl`).sort()])
+  assert.deepEqual(hashes, ['launchagent.plist', ...MANAGED.map((l) => `${l}.plist.tmpl`).sort()])
   const list = s.match(/^labels=\(\n([\s\S]*?)\n\)$/m)[1]
-  assert.deepEqual(list.split('\n').map((l) => l.trim()).sort(), LABELS.map((l) => `'${l}'`))
+  assert.deepEqual(list.split('\n').map((l) => l.trim()).sort(), MANAGED.map((l) => `'${l}'`))
 })
 
 const loaderLabels = (script) => script.match(/^labels=\(\n([\s\S]*?)\n\)$/m)[1].split('\n').map((l) => l.trim().replace(/^'|'$/g, '')).sort()
@@ -374,7 +498,7 @@ const loaderLabels = (script) => script.match(/^labels=\(\n([\s\S]*?)\n\)$/m)[1]
 for (const [name, extra] of HOMELAB_CASES) {
   test(`loader: homelab ${name}: renders, and its labels and hash header are ${isHomelab(extra) ? 'every agent' : 'every agent but the homelab-only ones'}`, () => {
     const s = renderLoader({ data: JSON.stringify({ chezmoi: { os: 'darwin' }, ...extra }) })
-    const want = isHomelab(extra) ? ALL_LABELS : LABELS
+    const want = isHomelab(extra) ? ALL_LABELS : MANAGED
     assert.deepEqual(loaderLabels(s), want)
     const hashes = [...s.matchAll(/^# (\S+) hash: ([0-9a-f]{64})$/gm)].map((m) => m[1])
     assert.deepEqual(hashes, ['launchagent.plist', ...want.map((l) => `${l}.plist.tmpl`).sort()])
@@ -415,6 +539,9 @@ test('loader: changing only the shared template, or only one agent, changes the 
 // `state = running` for STUB_RUNNING labels (a job that is running right now);
 // for STUB_PRINT_FAIL labels it fails with an error other than "not found"
 // (launchd busy or a bad request), so the job's state is unknown.
+// `print-disabled gui/<uid>` lists STUB_DISABLED labels as `=> disabled` and
+// STUB_ENABLED labels as `=> enabled`, in the real format; it fails when
+// STUB_PRINT_DISABLED_FAIL is set.
 const LAUNCHCTL =
   '#!/bin/sh\n' +
   'echo "$*" >> "$CALLS"\n' +
@@ -440,6 +567,13 @@ const LAUNCHCTL =
   '    rm -f "$STATE/linger/$l" "$STATE/loaded/$l"; echo "Could not find service" >&2; exit 113\n' +
   '  fi\n' +
   '  exit 0 ;;\n' +
+  'print-disabled)\n' +
+  '  [ "$2" = "$dom" ] || exit 64\n' +
+  '  [ -n "${STUB_PRINT_DISABLED_FAIL:-}" ] && { echo "Bad request." >&2; exit 1; }\n' +
+  '  printf "\\tdisabled services = {\\n"\n' +
+  '  for d in ${STUB_ENABLED:-}; do printf "\\t\\t\\"%s\\" => enabled\\n" "$d"; done\n' +
+  '  for d in ${STUB_DISABLED:-}; do printf "\\t\\t\\"%s\\" => disabled\\n" "$d"; done\n' +
+  '  printf "\\t}\\n"; exit 0 ;;\n' +
   'bootout)\n' +
   '  l=${2#"$dom"/}; [ "$l" != "$2" ] || exit 64\n' +
   '  [ -e "$STATE/loaded/$l" ] || { echo "Boot-out failed: 3: No such process" >&2; exit 3; }\n' +
@@ -459,7 +593,7 @@ const LAUNCHCTL =
 
 const LOADER_SCRIPT = renderLoader()
 
-function loaderSandbox({ loaded = [], plists = LABELS } = {}) {
+function loaderSandbox({ loaded = [], plists = MANAGED } = {}) {
   const base = mkdtempSync(join(tmpdir(), 'launch-agents-run-'))
   const home = join(base, 'home dir')
   const bin = join(base, 'bin')
@@ -511,27 +645,28 @@ test('loader: fresh machine: bootstraps every agent from ~/Library/LaunchAgents,
   withLoader({}, (sb) => {
     const r = sb.run()
     assert.equal(r.status, 0, r.stdout + r.stderr)
-    assert.deepEqual(sb.loaded(), LABELS)
-    for (const l of LABELS) {
+    assert.deepEqual(sb.loaded(), MANAGED)
+    for (const l of MANAGED) {
       assert.ok(sb.calls().includes(`bootstrap ${sb.dom} ${join(sb.agents, `${l}.plist`)}`), l)
       assert.match(r.stdout, new RegExp(`^launch-agents: loaded ${l.replace(/\./g, '\\.')}$`, 'm'))
     }
     assert.ok(existsSync(join(sb.home, '.cron', 'logs')))
   }))
 
-test('loader: already loaded: each label is booted out, confirmed gone, then bootstrapped', () =>
-  withLoader({ loaded: LABELS }, (sb) => {
+test('loader: already loaded: each scheduled label is booted out, confirmed gone, then bootstrapped; a service is left alone', () =>
+  withLoader({ loaded: MANAGED }, (sb) => {
     const r = sb.run()
     assert.equal(r.status, 0, r.stdout + r.stderr)
-    assert.deepEqual(sb.loaded(), LABELS)
+    assert.deepEqual(sb.loaded(), MANAGED)
     for (const l of LABELS) assert.deepEqual(callsFor(sb, l), ['print', 'bootout', 'print', 'bootstrap'], l)
+    for (const l of SERVICE_LABELS) assert.deepEqual(callsFor(sb, l), ['print'], l)
   }))
 
 test('loader: a slow bootout is waited out before the bootstrap', () =>
   withLoader({ loaded: LABELS }, (sb) => {
     const r = sb.run({ STUB_SLOW: 'com.rdegges.brew com.rdegges.chezmoi' })
     assert.equal(r.status, 0, r.stdout + r.stderr)
-    assert.deepEqual(sb.loaded(), LABELS)
+    assert.deepEqual(sb.loaded(), MANAGED)
     for (const l of ['com.rdegges.brew', 'com.rdegges.chezmoi'])
       assert.deepEqual(callsFor(sb, l), ['print', 'bootout', 'print', 'print', 'print', 'print', 'bootstrap'], l)
   }))
@@ -553,22 +688,22 @@ test('loader: one failed bootstrap still loads the rest and exits non-zero', () 
     const r = sb.run({ STUB_BOOTSTRAP_FAIL: 'com.rdegges.cf' })
     assert.equal(r.status, 1, r.stdout + r.stderr)
     assert.match(r.stderr, /ERROR: launchctl bootstrap gui\/\d+ com\.rdegges\.cf failed/)
-    assert.deepEqual(sb.loaded(), LABELS.filter((l) => l !== 'com.rdegges.cf'))
+    assert.deepEqual(sb.loaded(), MANAGED.filter((l) => l !== 'com.rdegges.cf'))
   }))
 
 test('loader: a managed plist missing from ~/Library/LaunchAgents fails the run', () =>
-  withLoader({ plists: LABELS.filter((l) => l !== 'com.rdegges.rea') }, (sb) => {
+  withLoader({ plists: MANAGED.filter((l) => l !== 'com.rdegges.rea') }, (sb) => {
     const r = sb.run()
     assert.equal(r.status, 1, r.stdout + r.stderr)
-    assert.deepEqual(sb.loaded(), LABELS.filter((l) => l !== 'com.rdegges.rea'))
+    assert.deepEqual(sb.loaded(), MANAGED.filter((l) => l !== 'com.rdegges.rea'))
   }))
 
 test('loader: boots out orphaned com.rdegges.* labels only, even when their plist file is still there', () =>
-  withLoader({ loaded: ['com.rdegges.old-job', 'com.apple.keep', 'org.other.rdegges'], plists: [...LABELS, 'com.rdegges.old-job'] }, (sb) => {
+  withLoader({ loaded: ['com.rdegges.old-job', 'com.apple.keep', 'org.other.rdegges'], plists: [...MANAGED, 'com.rdegges.old-job'] }, (sb) => {
     const r = sb.run()
     assert.equal(r.status, 0, r.stdout + r.stderr)
     assert.deepEqual(callsFor(sb, 'com.rdegges.old-job'), ['bootout', 'print'])
-    assert.deepEqual(sb.loaded(), [...LABELS, 'com.apple.keep', 'org.other.rdegges'].sort())
+    assert.deepEqual(sb.loaded(), [...MANAGED, 'com.apple.keep', 'org.other.rdegges'].sort())
     assert.ok(!sb.calls().some((c) => c.includes('com.apple.keep') || c.includes('org.other.rdegges')), sb.calls().join('\n'))
   }))
 
@@ -576,7 +711,7 @@ test('loader: an orphan that will not go away fails the run', () =>
   withLoader({ loaded: ['com.rdegges.old-job'] }, (sb) => {
     const r = sb.run({ STUB_STICKY: 'com.rdegges.old-job' })
     assert.equal(r.status, 1, r.stdout + r.stderr)
-    assert.deepEqual(sb.loaded(), [...LABELS, 'com.rdegges.old-job'].sort())
+    assert.deepEqual(sb.loaded(), [...MANAGED, 'com.rdegges.old-job'].sort())
   }))
 
 test('loader: when the domain cannot be listed, orphans are not checked and the run fails', () =>
@@ -584,7 +719,7 @@ test('loader: when the domain cannot be listed, orphans are not checked and the 
     const r = sb.run({ STUB_PRINT_DOMAIN_FAIL: '1' })
     assert.equal(r.status, 1, r.stdout + r.stderr)
     assert.match(r.stderr, /orphaned agents not checked/)
-    assert.deepEqual(sb.loaded(), LABELS)
+    assert.deepEqual(sb.loaded(), MANAGED)
   }))
 
 test('loader: inside com.rdegges.chezmoi it never touches that label, loads the other ten, and exits 1', () =>
@@ -595,7 +730,7 @@ test('loader: inside com.rdegges.chezmoi it never touches that label, loads the 
     const others = LABELS.filter((l) => l !== 'com.rdegges.chezmoi')
     assert.equal(others.length, 10)
     for (const l of others) assert.deepEqual(callsFor(sb, l), ['print', 'bootout', 'print', 'bootstrap'], l)
-    assert.deepEqual(sb.loaded(), LABELS, 'the running job was unloaded')
+    assert.deepEqual(sb.loaded(), MANAGED, 'the running job was unloaded')
     assert.equal(
       r.stderr,
       "launch-agents: com.rdegges.chezmoi not reloaded from inside itself; run 'chezmoi apply' interactively\n",
@@ -610,7 +745,7 @@ test('loader: a managed job that is running now is not booted out; the other ten
     const others = LABELS.filter((l) => l !== 'com.rdegges.brew')
     assert.equal(others.length, 10)
     for (const l of others) assert.deepEqual(callsFor(sb, l), ['print', 'bootout', 'print', 'bootstrap'], l)
-    assert.deepEqual(sb.loaded(), LABELS, 'the running job was unloaded')
+    assert.deepEqual(sb.loaded(), MANAGED, 'the running job was unloaded')
     assert.match(r.stderr, /^launch-agents: com\.rdegges\.brew is running; not reloaded/m)
   }))
 
@@ -626,7 +761,7 @@ test('loader: a job skipped while running is reloaded by the next apply once it 
     assert.match(r.stdout, /^launch-agents: loaded com\.rdegges\.codex$/m)
     const second = sb.calls().slice(before).filter((c) => c.endsWith('/com.rdegges.codex') || c.endsWith('/com.rdegges.codex.plist'))
     assert.deepEqual(second.map((c) => c.split(' ')[0]), ['print', 'bootout', 'print', 'bootstrap'])
-    assert.deepEqual(sb.loaded(), LABELS)
+    assert.deepEqual(sb.loaded(), MANAGED)
   }))
 
 test('loader: several running jobs are each skipped and reported; orphans are still cleaned up', () =>
@@ -640,7 +775,7 @@ test('loader: several running jobs are each skipped and reported; orphans are st
     }
     for (const l of LABELS.filter((x) => !running.includes(x))) assert.deepEqual(callsFor(sb, l), ['print', 'bootout', 'print', 'bootstrap'], l)
     assert.deepEqual(callsFor(sb, 'com.rdegges.old-job'), ['bootout', 'print'])
-    assert.deepEqual(sb.loaded(), LABELS)
+    assert.deepEqual(sb.loaded(), MANAGED)
   }))
 
 test('loader: inside com.rdegges.chezmoi, which is running, the self rule wins: no launchctl call names it', () =>
@@ -652,7 +787,7 @@ test('loader: inside com.rdegges.chezmoi, which is running, the self rule wins: 
     assert.doesNotMatch(r.stderr, /com\.rdegges\.chezmoi is running/)
     assert.match(r.stderr, /com\.rdegges\.chezmoi not reloaded from inside itself/)
     assert.match(r.stderr, /com\.rdegges\.rea is running; not reloaded/)
-    assert.deepEqual(sb.loaded(), LABELS)
+    assert.deepEqual(sb.loaded(), MANAGED)
   }))
 
 test('loader: a "state = not running" job is not mistaken for a running one', () =>
@@ -692,11 +827,11 @@ test('loader: A->B->A: interactive apply, then the hourly job, then interactive 
     assert.equal(r.status, 0, r.stdout + r.stderr)
     r = sb.run({ XPC_SERVICE_NAME: 'com.rdegges.chezmoi' })
     assert.equal(r.status, 1, r.stdout + r.stderr)
-    assert.deepEqual(sb.loaded(), LABELS)
+    assert.deepEqual(sb.loaded(), MANAGED)
     r = sb.run()
     assert.equal(r.status, 0, r.stdout + r.stderr)
     assert.equal(r.stderr, '')
-    assert.deepEqual(sb.loaded(), LABELS)
+    assert.deepEqual(sb.loaded(), MANAGED)
   }))
 
 // A PATH dir with only the tools the scripts and stubs need, and no
@@ -719,7 +854,7 @@ test('loader: without timeout/gtimeout on PATH it still loads every agent unboun
     assert.notEqual(spawnSync('sh', ['-c', 'command -v timeout || command -v gtimeout'], { env: { PATH } }).status, 0, 'timeout leaked onto PATH')
     const r = sb.run({ PATH, STUB_SLOW: 'com.rdegges.pipx' })
     assert.equal(r.status, 0, r.stdout + r.stderr)
-    assert.deepEqual(sb.loaded(), LABELS)
+    assert.deepEqual(sb.loaded(), MANAGED)
     assert.deepEqual(callsFor(sb, 'com.rdegges.pipx'), ['print', 'bootout', 'print', 'print', 'print', 'print', 'bootstrap'])
   }))
 
@@ -729,16 +864,114 @@ test('loader: a hung bootstrap is killed at 30s; the other agents still load and
     assert.equal(r.status, 1, r.stdout + r.stderr)
     assert.ok(r.elapsed >= 29 && r.elapsed < 45, `took ${r.elapsed}s`)
     assert.match(r.stderr, /ERROR: launchctl bootstrap gui\/\d+ com\.rdegges\.docker-prune failed/)
-    assert.deepEqual(sb.loaded(), LABELS.filter((l) => l !== 'com.rdegges.docker-prune'))
+    assert.deepEqual(sb.loaded(), MANAGED.filter((l) => l !== 'com.rdegges.docker-prune'))
   }))
 
 test('loader: a com.rdegges.* label listed only under "disabled services" does not fail the run', () =>
   withLoader({ loaded: LABELS }, (sb) => {
     const r = sb.run({ STUB_DISABLED: 'com.rdegges.gone com.rdegges.brew' })
     assert.equal(r.status, 0, r.stdout + r.stderr)
-    assert.deepEqual(sb.loaded(), LABELS)
+    assert.deepEqual(sb.loaded(), MANAGED)
     // A disabled managed label is still a managed label: never treated as an orphan.
     assert.doesNotMatch(r.stdout, /booting out com\.rdegges\.brew /)
+  }))
+
+// --- Loader: services (always on; never reloaded here) ------------------------------
+
+const SERVICE = 'com.rdegges.claude-remote-control'
+const printDisabledCalls = (sb) => sb.calls().filter((c) => c.startsWith('print-disabled '))
+
+for (const running of [false, true]) {
+  test(`loader: a loaded service (${running ? 'running' : 'not running'}) is left alone and the run does not fail`, () =>
+    withLoader({ loaded: MANAGED }, (sb) => {
+      const r = sb.run(running ? { STUB_RUNNING: SERVICE } : {})
+      assert.equal(r.status, 0, r.stdout + r.stderr)
+      assert.equal(r.stderr, '')
+      assert.deepEqual(callsFor(sb, SERVICE), ['print'])
+      assert.match(r.stdout, /^launch-agents: com\.rdegges\.claude-remote-control is loaded; left alone/m)
+      assert.deepEqual(sb.loaded(), MANAGED)
+    }))
+}
+
+test('loader: a service that is not loaded is bootstrapped (after a disabled check that names a look-alike label)', () =>
+  withLoader({ loaded: LABELS }, (sb) => {
+    const r = sb.run({ STUB_ENABLED: SERVICE, STUB_DISABLED: `${SERVICE}-old com.rdegges.claude-remote` })
+    assert.equal(r.status, 0, r.stdout + r.stderr)
+    assert.deepEqual(callsFor(sb, SERVICE), ['print', 'bootstrap'])
+    assert.equal(printDisabledCalls(sb).length, 1)
+    assert.deepEqual(sb.loaded(), MANAGED)
+  }))
+
+test('loader: a disabled service that is not loaded is skipped, and the run does not fail', () =>
+  withLoader({ loaded: LABELS }, (sb) => {
+    const r = sb.run({ STUB_DISABLED: SERVICE })
+    assert.equal(r.status, 0, r.stdout + r.stderr)
+    assert.equal(r.stderr, '')
+    assert.deepEqual(callsFor(sb, SERVICE), ['print'])
+    assert.match(r.stdout, /^launch-agents: com\.rdegges\.claude-remote-control is disabled; not loaded$/m)
+    assert.deepEqual(sb.loaded(), LABELS)
+    // A disabled managed service is not an orphan either.
+    assert.doesNotMatch(r.stdout, /booting out com\.rdegges\.claude-remote-control/)
+  }))
+
+test('loader: a disabled service that is still loaded is left alone', () =>
+  withLoader({ loaded: MANAGED }, (sb) => {
+    const r = sb.run({ STUB_DISABLED: SERVICE })
+    assert.equal(r.status, 0, r.stdout + r.stderr)
+    assert.deepEqual(callsFor(sb, SERVICE), ['print'])
+    assert.deepEqual(sb.loaded(), MANAGED)
+  }))
+
+test('loader: when the disabled list cannot be read, a service that is not loaded is not bootstrapped and the run fails', () =>
+  withLoader({ loaded: LABELS }, (sb) => {
+    const r = sb.run({ STUB_PRINT_DISABLED_FAIL: '1' })
+    assert.equal(r.status, 1, r.stdout + r.stderr)
+    assert.deepEqual(callsFor(sb, SERVICE), ['print'])
+    assert.match(r.stderr, /ERROR: launchctl print-disabled gui\/\d+ failed; com\.rdegges\.claude-remote-control not loaded/)
+    assert.deepEqual(sb.loaded(), LABELS)
+    // The scheduled jobs still reload.
+    for (const l of LABELS) assert.deepEqual(callsFor(sb, l), ['print', 'bootout', 'print', 'bootstrap'], l)
+  }))
+
+test('loader: a service whose state cannot be read is neither booted out nor bootstrapped, and the run fails', () =>
+  withLoader({ loaded: MANAGED }, (sb) => {
+    const r = sb.run({ STUB_PRINT_FAIL: SERVICE })
+    assert.equal(r.status, 1, r.stdout + r.stderr)
+    assert.deepEqual(callsFor(sb, SERVICE), ['print'])
+    assert.match(r.stderr, /launchctl print gui\/\d+\/com\.rdegges\.claude-remote-control failed \(exit 1\); not loaded/)
+  }))
+
+test('loader: a failed service bootstrap fails the run', () =>
+  withLoader({ loaded: LABELS }, (sb) => {
+    const r = sb.run({ STUB_BOOTSTRAP_FAIL: SERVICE })
+    assert.equal(r.status, 1, r.stdout + r.stderr)
+    assert.match(r.stderr, /ERROR: launchctl bootstrap gui\/\d+ com\.rdegges\.claude-remote-control failed/)
+  }))
+
+test('loader: run from a session the service started (XPC_SERVICE_NAME is the service), no launchctl call names it and the run does not fail', () =>
+  withLoader({ loaded: MANAGED }, (sb) => {
+    const r = sb.run({ XPC_SERVICE_NAME: SERVICE, STUB_RUNNING: SERVICE })
+    assert.equal(r.status, 0, r.stdout + r.stderr)
+    assert.deepEqual(callsFor(sb, SERVICE), [])
+    for (const l of LABELS) assert.deepEqual(callsFor(sb, l), ['print', 'bootout', 'print', 'bootstrap'], l)
+    assert.deepEqual(sb.loaded(), MANAGED)
+  }))
+
+test('loader: A->B->A: service loaded and left alone, then gone (booted out by hand) and bootstrapped, then left alone again', () =>
+  withLoader({ loaded: MANAGED }, (sb) => {
+    let r = sb.run({ STUB_RUNNING: SERVICE })
+    assert.equal(r.status, 0, r.stdout + r.stderr)
+    assert.deepEqual(callsFor(sb, SERVICE), ['print'])
+    rmSync(join(sb.home, '..', 'state', 'loaded', SERVICE))
+    const n = sb.calls().length
+    r = sb.run()
+    assert.equal(r.status, 0, r.stdout + r.stderr)
+    assert.deepEqual(sb.calls().slice(n).filter((c) => c.includes(SERVICE)).map((c) => c.split(' ')[0]), ['print', 'bootstrap'])
+    const m = sb.calls().length
+    r = sb.run({ STUB_RUNNING: SERVICE })
+    assert.equal(r.status, 0, r.stdout + r.stderr)
+    assert.deepEqual(sb.calls().slice(m).filter((c) => c.includes(SERVICE)).map((c) => c.split(' ')[0]), ['print'])
+    assert.deepEqual(sb.loaded(), MANAGED)
   }))
 
 // --- Retire crontab ---------------------------------------------------------------
@@ -955,7 +1188,7 @@ test('apply: every agent lands at the path the loader bootstraps, not group/worl
       assert.equal(parsePlist(readFileSync(f, 'utf8')).Label, l)
     }
     assert.equal(statSync(join(sb.home, 'Library')).mode & 0o077, 0, '~/Library is not private')
-    assert.deepEqual(sb.loaded(), LABELS)
+    assert.deepEqual(sb.loaded(), MANAGED)
   } finally {
     sb.cleanup()
   }
@@ -971,22 +1204,25 @@ test('apply: loader then retire, in that order; a self-run failure is retried by
       for (const i of idx(calls, /^crontab /)) assert.ok(i > lastLaunchctl, `crontab ran before the loader finished:\n${calls.join('\n')}`)
     }
 
-    // 1. The hourly job (inside com.rdegges.chezmoi): the other ten load, apply fails.
+    // 1. The hourly job (inside com.rdegges.chezmoi): the other ten scheduled
+    // jobs and the service load, apply fails.
     let r = sb.apply({ XPC_SERVICE_NAME: 'com.rdegges.chezmoi' })
     assert.notEqual(r.status, 0, 'a self-run must fail the apply so the banner shows: ' + r.stdout + r.stderr)
-    assert.equal(idx(sb.calls(), /^bootstrap /).length, 10, sb.calls().join('\n'))
-    assert.deepEqual(sb.loaded(), LABELS.filter((l) => l !== 'com.rdegges.chezmoi'))
+    assert.equal(idx(sb.calls(), /^bootstrap /).length, 11, sb.calls().join('\n'))
+    assert.deepEqual(sb.loaded(), MANAGED.filter((l) => l !== 'com.rdegges.chezmoi'))
 
     assertRetireAfterLoader(sb.calls())
     const retiredInStep1 = idx(sb.calls(), /^crontab -l$/).length
 
-    // 2. Interactive apply: the failed loader is not recorded as done, so it runs again.
+    // 2. Interactive apply: the failed loader is not recorded as done, so it
+    // runs again: the eleven scheduled jobs reload, the loaded service does not.
     sb.resetCalls()
     r = sb.apply()
     assert.equal(r.status, 0, r.stdout + r.stderr)
     let calls = sb.calls()
     assert.equal(idx(calls, /^bootstrap /).length, 11, calls.join('\n'))
-    assert.deepEqual(sb.loaded(), LABELS)
+    assert.ok(!calls.some((c) => /^(bootout|bootstrap) .*claude-remote-control/.test(c)), calls.join('\n'))
+    assert.deepEqual(sb.loaded(), MANAGED)
     // Retire ran in step 1 or here, exactly once overall, and only after the loader.
     assertRetireAfterLoader(calls)
     assert.equal(retiredInStep1 + idx(calls, /^crontab -l$/).length, 1, 'retire must run exactly once')
@@ -997,7 +1233,7 @@ test('apply: loader then retire, in that order; a self-run failure is retried by
     assert.equal(r.status, 0, r.stdout + r.stderr)
     assert.deepEqual(sb.calls(), [])
 
-    // 4. One agent changes: the loader reloads everything; retire stays done.
+    // 4. One agent changes: the loader reloads every scheduled job; retire stays done.
     appendFileSync(join(sb.src, AGENTS_DIR, 'com.rdegges.pipx.plist.tmpl'), '\n')
     r = sb.apply()
     assert.equal(r.status, 0, r.stdout + r.stderr)
@@ -1016,7 +1252,7 @@ for (const [name, extra] of HOMELAB_CASES) {
       const r = sb.apply()
       assert.equal(r.status, 0, r.stdout + r.stderr)
       const labels = loaderLabels(renderLoader({ data: JSON.stringify({ chezmoi: { os: 'darwin' }, ...extra }) }))
-      assert.deepEqual(labels, isHomelab(extra) ? ALL_LABELS : LABELS)
+      assert.deepEqual(labels, isHomelab(extra) ? ALL_LABELS : MANAGED)
       assert.deepEqual(readdirSync(sb.agents).sort(), labels.map((l) => `${l}.plist`).sort())
       assert.deepEqual(sb.loaded(), labels)
     } finally {
@@ -1036,7 +1272,7 @@ test('apply: homelab true -> false -> true: the watchdog is booted out (its plis
     sb.resetCalls()
     r = sb.apply({}, { homelab: false })
     assert.equal(r.status, 0, r.stdout + r.stderr)
-    assert.deepEqual(sb.loaded(), LABELS)
+    assert.deepEqual(sb.loaded(), MANAGED)
     assert.match(r.stdout, /launch-agents: booting out com\.rdegges\.tailscale-watchdog \(no managed plist\)/)
     assert.match(r.stdout, /launch-agents: booting out com\.rdegges\.app-update \(no managed plist\)/)
     // chezmoi does not delete an ignored target, and launchd loads every plist
@@ -1048,6 +1284,46 @@ test('apply: homelab true -> false -> true: the watchdog is booted out (its plis
     assert.equal(r.status, 0, r.stdout + r.stderr)
     assert.deepEqual(sb.loaded(), ALL_LABELS)
     assert.ok(sb.calls().includes(`bootstrap gui/${process.getuid()} ${join(sb.agents, `${watchdog}.plist`)}`), sb.calls().join('\n'))
+  } finally {
+    sb.cleanup()
+  }
+})
+
+// The four combinations of `work` and `homelab`, each true or false: what
+// .chezmoiignore lets chezmoi write, the loader's label list, and what the loader
+// loads are the same set.
+const FLAG_CASES = [false, true].flatMap((work) => [false, true].map((homelab) => ({ work, homelab })))
+
+for (const flags of FLAG_CASES) {
+  test(`apply: work ${flags.work}, homelab ${flags.homelab}: chezmoi writes exactly the plists the loader names, and the loader loads exactly those`, () => {
+    const sb = applySandbox(flags)
+    try {
+      const r = sb.apply()
+      assert.equal(r.status, 0, r.stdout + r.stderr)
+      const labels = loaderLabels(renderLoader({ data: JSON.stringify({ chezmoi: { os: 'darwin' }, ...flags }) }))
+      assert.deepEqual(labels, managedFor(flags))
+      assert.deepEqual(readdirSync(sb.agents).sort(), labels.map((l) => `${l}.plist`).sort())
+      assert.deepEqual(sb.loaded(), labels)
+      assert.equal(labels.includes(SERVICE), !flags.work)
+    } finally {
+      sb.cleanup()
+    }
+  })
+}
+
+test('apply: work false -> true -> false: the server is booted out on the work flag (its plist file stays) and loaded again', () => {
+  const sb = applySandbox()
+  try {
+    let r = sb.apply({}, { work: false })
+    assert.equal(r.status, 0, r.stdout + r.stderr)
+    assert.deepEqual(sb.loaded(), MANAGED)
+    r = sb.apply({}, { work: true })
+    assert.equal(r.status, 0, r.stdout + r.stderr)
+    assert.deepEqual(sb.loaded(), LABELS)
+    assert.match(r.stdout, /launch-agents: booting out com\.rdegges\.claude-remote-control \(no managed plist\)/)
+    r = sb.apply({}, { work: false })
+    assert.equal(r.status, 0, r.stdout + r.stderr)
+    assert.deepEqual(sb.loaded(), MANAGED)
   } finally {
     sb.cleanup()
   }

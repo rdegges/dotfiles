@@ -38,6 +38,15 @@ Library/LaunchAgents/com.rdegges.app-update.plist
 .cron/app-update.sh
 {{ end }}
 
+{{/* The always-on Remote Control server is for personal Macs only. `index`
+     reads a missing `work` key as false, so such a Mac gets the server. The
+     loader (run_onchange_after_load-launch-agents.sh.tmpl) skips the same
+     label under the same condition; keep the two lists equal. */}}
+{{ if index . "work" }}
+Library/LaunchAgents/com.rdegges.claude-remote-control.plist
+.cron/claude-remote-control.sh
+{{ end }}
+
 {{/* launchd agents are macOS-only, like the crontab installer they replace. */}}
 {{ if ne .chezmoi.os "darwin" }}
 Library/LaunchAgents
