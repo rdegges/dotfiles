@@ -86,6 +86,38 @@ changes an agent, the load script loads the other agents and then fails. As a
 result, `chezmoi.FAILED` shows. `chezmoi.log` tells you to run `chezmoi apply`
 by hand.
 
+### Tailscale watchdog (homelab only)
+
+On the homelab server Mac (`homelab = true`, see
+[Work vs. personal machines](#work-vs-personal-machines)), launchd runs
+`~/.cron/tailscale-watchdog.sh` every 5 minutes, at :02, :07, and so on to :57.
+The schedule never uses :15 or :20. Thus the hourly chezmoi apply at :15 does
+not find the job running, which would fail the agent load.
+
+Tailscale updates stay with the App Store (or the updater of the Standalone
+build). The watchdog does not update the app. It makes sure that the client is
+up:
+
+- If the Tailscale app is not running, the job starts it with
+  `open -g -b <bundle id>`. Both the App Store build (`io.tailscale.ipn.macos`)
+  and the Standalone build (`io.tailscale.ipn.macsys`) work.
+- If the state is `Stopped` and the client is logged in, the job runs
+  `tailscale up` with no flags. This is the fault in
+  [tailscale/tailscale#21825](https://github.com/tailscale/tailscale/issues/21825),
+  where an App Store update stops the client.
+- Every other state is a failure: `NeedsLogin`, `NeedsMachineAuth`, logged out,
+  still not `Running` after the fix, or output that the job cannot read. If
+  `tailscale up` refuses because the node has non-default settings, that is a
+  failure too. The job never guesses flags, never logs in, and never changes
+  the build.
+
+A failure writes `~/.cron/logs/tailscale-watchdog.FAILED`, and every new shell
+prints it. The job also sends mail to r@rdegges.com through the himalaya
+account `icloud`. Mail goes out only when the state changes, and
+`~/.cron/logs/tailscale-watchdog.state` records the last state. A fix or a
+recovery sends one mail. The job does not wait for the network, because an
+outage is what it reports.
+
 The jobs used to run from cron. `run_onchange_after_retire-crontab.sh.tmpl`
 removes the old crontab. If it cannot (from cron, `crontab` hangs on a macOS
 privacy prompt), it writes `~/.cron/logs/crontab.FAILED`. Then run
@@ -140,6 +172,42 @@ On work machines, chezmoi also writes one AWS SSO profile and wraps the `aws` co
 - The `sso`, `configure`, `help`, `login`, and `logout` commands, `--version`, and `--help` skip that session check, even after global options such as `--region`. With no profile chosen, they also keep the CLI's own default, so `aws sso logout` and `aws configure list` act on `~/.aws/config`. To sign in to the sandbox by hand, run `aws sso login --profile snyk-sandbox`. A trailing `help` (such as `aws s3 help`) skips the check but keeps the profile, because some API calls end in a `help` value.
 - Each call on `snyk-sandbox` starts one extra `aws` process (about 0.25s) to check the session. That cost is one reason the function exists only in interactive zsh. Scripts, SDKs, Terraform, and non-interactive shells use the real binary and do not see `snyk-sandbox`. For them, set `AWS_CONFIG_FILE=~/.config/aws/snyk-sandbox.config` yourself.
 - `aws configure set` or `aws configure sso` with `--profile snyk-sandbox` edits the managed file, and the next hourly apply silently puts it back. To change the profile, edit `dot_config/aws/private_snyk-sandbox.config` in this repo.
+
+### The homelab flag
+
+A second flag, `homelab`, is true only on the homelab server Mac. It gates the
+jobs of that Mac (today: the [Tailscale watchdog](#tailscale-watchdog-homelab-only)).
+`chezmoi init` asks for it once, with the default `false`, next to `work`. A
+machine that has not run `chezmoi init` since this flag was added has no
+`homelab` key. Templates read the flag as `(index . "homelab")`, so a missing
+key counts as `false`.
+
+Two files gate each homelab job, and their lists must stay equal:
+
+- `.chezmoiignore` skips the plist and the `~/.cron` script when the flag is
+  not true.
+- `run_onchange_after_load-launch-agents.sh.tmpl` skips the same labels under
+  the same condition.
+
+To turn the flag on, do these steps on the homelab Mac:
+
+1. Run `chezmoi init` and answer "yes" to the homelab prompt.
+2. Run `chezmoi apply`.
+3. Run `launchctl print gui/$UID | grep tailscale-watchdog` and make sure that
+   the job is loaded.
+
+To turn the flag off, set `homelab = false` in
+`~/.config/chezmoi/chezmoi.toml`, then run `chezmoi apply`. The load script
+then unloads the job. chezmoi does not delete the files of an ignored job, and
+launchd loads every plist in `~/Library/LaunchAgents` at login. Thus you must
+also delete the files by hand:
+
+```bash
+rm -f ~/Library/LaunchAgents/com.rdegges.tailscale-watchdog.plist ~/.cron/tailscale-watchdog.sh
+```
+
+If you do not delete them, the job starts again at the next login. The load
+script unloads it again only when an agent changes.
 
 ## Email (Himalaya)
 
