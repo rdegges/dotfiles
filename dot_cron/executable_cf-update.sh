@@ -19,16 +19,15 @@ pkg="${CF_UPDATE_PACKAGE:-cf@latest}"
 marker="$HOME/.cron/logs/cf.FAILED"
 stamp="$HOME/.cron/logs/cf.ok"
 
-# One line of printable ASCII, at most 300 characters, for the marker. The
-# reason can carry CLI output (`cf --version`), which can have many lines,
-# color codes, or bytes that are not ASCII. It is modeled on oneline() in
-# tailscale-watchdog.sh, but stricter: it also strips CSI color codes and
-# turns CR into a space, so the marker is always one printable-ASCII line.
-# Text that carries CLI output is written with printf '%s\n', never echo:
-# dash and macOS /bin/sh expand backslash escapes in echo, so a \c in it cut
-# the marker short.
-esc=$(printf '\033')
-oneline() { printf '%s' "$1" | LC_ALL=C tr '\n\t\r' '   ' | LC_ALL=C sed "s/$esc\[[0-9;?]*[A-Za-z]//g" | LC_ALL=C tr -cd '\40-\176' | cut -c1-300; }
+# oneline (lib/text.sh) turns CLI output into one marker line. A missing or
+# broken lib writes the marker and exits 1.
+lib="$(dirname "$0")/lib/text.sh"
+if [ -r "$lib" ] && sh -n "$lib" 2>/dev/null && command . "$lib"; then :; else
+    printf '%s\n' "cf-update: cannot load $lib"
+    mkdir -p "${marker%/*}"
+    printf '%s\n' "$(date '+%F %R') cf-update: cannot load ~/.cron/lib/text.sh; run chezmoi apply" > "$marker"
+    exit 1
+fi
 
 fail() {
     printf '%s\n' "cf-update: FAILED: $1"
@@ -43,10 +42,10 @@ fail() {
 # 1 (helper missing, or it cannot check) runs the job as before.
 "${WAIT_FOR_NETWORK:-$HOME/.cron/wait-for-network.sh}"
 if [ $? -eq 1 ]; then
-    echo "cf-update: network not up; skipped"
+    printf '%s\n' "cf-update: network not up; skipped"
     if [ ! -e "$marker" ] && [ -z "$(find "$stamp" -mmin -4320 2>/dev/null)" ]; then
         mkdir -p "${marker%/*}"
-        echo "$(date '+%F %R') cf: network check failed and no successful run in 72 hours (see ~/.cron/logs/cf.log)" > "$marker"
+        printf '%s\n' "$(date '+%F %R') cf: network check failed and no successful run in 72 hours (see ~/.cron/logs/cf.log)" > "$marker"
     fi
     exit 0
 fi

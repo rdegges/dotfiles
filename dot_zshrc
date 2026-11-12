@@ -118,5 +118,8 @@ eval "$(starship init zsh)"
 
 # Surface failed scheduled (launchd) jobs: a job that fails writes
 # ~/.cron/logs/<job>.FAILED and removes it on its next success (see
-# dot_cron/executable_cf-update.sh).
-for f in ~/.cron/logs/*.FAILED(N); do print -r -- $'\e[31m'"cron: $(<$f)"$'\e[0m'; done
+# dot_cron/executable_cf-update.sh). Each line of a marker loses its control
+# characters (ESC, BEL, CR, tab), so a job that writes raw CLI output cannot
+# send escape sequences to the terminal. Newlines stay: a marker can be
+# several lines.
+for f in ~/.cron/logs/*.FAILED(N); do print -r -- $'\e[31m'"cron: ${(@F)${(@f)"$(<$f)"}//[[:cntrl:]]/}"$'\e[0m'; done

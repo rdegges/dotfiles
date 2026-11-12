@@ -16,18 +16,18 @@ for vault in "$HOME/Vault/Personal" "$HOME/Vault/Work"; do
 
     # Never snapshot mid-rebase/merge; committing then would bake in a half state.
     if [ -e "$vault/.git/rebase-merge" ] || [ -e "$vault/.git/MERGE_HEAD" ]; then
-        echo "skip $vault: rebase/merge in progress"
+        printf '%s\n' "skip $vault: rebase/merge in progress"
         continue
     fi
 
-    git -C "$vault" add -A || { echo "fail $vault: git add"; continue; }
+    git -C "$vault" add -A || { printf '%s\n' "fail $vault: git add"; continue; }
 
     if git -C "$vault" diff --cached --quiet; then
-        echo "skip $vault: no changes"
+        printf '%s\n' "skip $vault: no changes"
     else
         n=$(git -C "$vault" diff --cached --name-only | wc -l | tr -d ' ')
         git -C "$vault" commit -q -m "snapshot: $n file(s) @ $(date -Iseconds)" \
-            && echo "ok   $vault: committed $n file(s)" \
-            || echo "fail $vault: git commit"
+            && printf '%s\n' "ok   $vault: committed $n file(s)" \
+            || printf '%s\n' "fail $vault: git commit"
     fi
 done

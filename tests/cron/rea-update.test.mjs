@@ -500,7 +500,7 @@ const SHELLS = [['sh', ['sh']], ['bash --posix -O xpg_echo', ['bash', '--posix',
 // tab, a carriage return, non-ASCII text, and more than 300 characters.
 const HOSTILE = 'dyld: \\c cut \\n here %s\n\x1b[31mred\x1b[0m\ttab\r\n☁ ' + 'x'.repeat(400)
 // The marker text the script must write for a reason: one line, printable ASCII,
-// at most 300 characters (the same steps as oneline() in tailscale-watchdog.sh).
+// at most 300 characters (oneline() in dot_cron/lib/text.sh, for these inputs).
 const clean = (s) => s.replace(/[\n\t\r]/g, ' ').replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '').replace(/[^\x20-\x7e]/g, '').slice(0, 300)
 const printfStub = (stub) => {
   const out = stub.replace('echo "${STUB_REA_ERR:-boom}" >&2', 'printf \'%s\\n\' "${STUB_REA_ERR:-boom}" >&2')

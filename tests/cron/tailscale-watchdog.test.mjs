@@ -590,6 +590,123 @@ test('[bash --posix xpg_echo] a backslash in the state file is written back lite
     assert.equal(readFileSync(sb.statefile, 'utf8'), 'NeedsLogin unsent 2026\\c-01\\n02\n')
   }))
 
+// himalaya 1.2.0 colors its errors with ANSI escapes even when stderr is not a
+// TTY, and NO_COLOR, TERM=dumb, CLICOLOR=0, and --quiet do not turn that off
+// (measured on the homelab Mac). The text below is its real panic output, byte
+// for byte apart from a shorter path. oneline() keeps only printable ASCII, so
+// without stripping the escapes the log line kept fragments such as `[31m`.
+const HIMALAYA_COLORED_PANIC =
+  '\x1b[31mThe application panicked (crashed).\x1b[0m\n' +
+  'Message:  \x1b[36mindex out of bounds: the len is 0 but the index is 0\x1b[0m\n' +
+  'Location: \x1b[35m/cargo-vendor-dir/mail-parser-0.9.4/src/core/message.rs\x1b[0m:\x1b[35m89\x1b[0m\n'
+
+test('a colored himalaya error: the log line has no ANSI codes or [31m fragments', () =>
+  withSandbox({ backend: 'NeedsLogin' }, (sb) => {
+    const panic = join(sb.base, 'panic.txt')
+    writeFileSync(panic, HIMALAYA_COLORED_PANIC)
+    writeFileSync(join(sb.bin, 'himalaya'), `#!/bin/sh\ncat > /dev/null\ncat "${panic}" >&2\nexit 101\n`)
+    chmodSync(join(sb.bin, 'himalaya'), 0o755)
+    const r = sb.run()
+    assertFailed(sb, r, /the alert mail failed too/)
+    const line = r.stdout.split('\n').find((l) => l.includes('mail failed:'))
+    assert.equal(
+      line,
+      'tailscale-watchdog: mail failed: The application panicked (crashed). Message:  index out of bounds: the len is 0 but the index is 0 Location: /cargo-vendor-dir/mail-parser-0.9.4/src/core/message.rs:89',
+    )
+  }))
+
+test('a colored `up` error: the marker and the mail have no ANSI codes or fragments', () =>
+  withSandbox({ backend: 'Stopped' }, (sb) => {
+    writeFileSync(sb.cliPath, rawUpErrCli())
+    const r = sb.run({ STUB_UP_RC: '1', STUB_UP_ERR: '\x1b[1;31merror:\x1b[0m \x1b[33mbackend\x1b[m busy \x1b[2K' })
+    const m = assertFailed(sb, r, /`tailscale up` failed/)
+    assert.ok(m.includes('timeout): error: backend busy  (see '), JSON.stringify(m))
+    for (const text of [m, sb.mails()[0]]) {
+      assert.doesNotMatch(text, /\x1b|\[[0-9;]*[A-Za-z]/, JSON.stringify(text))
+    }
+  }))
+
+// Captured from the real himalaya 1.2.0 on the homelab Mac (stdin empty, an
+// account that does not exist, NO_COLOR=1 TERM=dumb, stderr a pipe), with the
+// account name changed to icloud: a broken account config, the likeliest real
+// mail failure. Unlike the panic it uses bright colors (91, 96) and colors only
+// part of a line.
+const HIMALAYA_COLORED_CONFIG_ERROR =
+  'Error: \n   0: \x1b[91mcannot find configuration for account icloud\x1b[0m\n\n' +
+  '\x1b[96mNote\x1b[0m: Run with --debug to enable logs with spantrace.\n' +
+  '\x1b[96mNote\x1b[0m: Run with --trace to enable verbose logs with backtrace.\n'
+
+test('a real colored himalaya config error: the log line is its plain text, exactly', () =>
+  withSandbox({ backend: 'NeedsLogin' }, (sb) => {
+    const err = join(sb.base, 'err.txt')
+    writeFileSync(err, HIMALAYA_COLORED_CONFIG_ERROR)
+    writeFileSync(join(sb.bin, 'himalaya'), `#!/bin/sh\ncat > /dev/null\ncat "${err}" >&2\nexit 1\n`)
+    chmodSync(join(sb.bin, 'himalaya'), 0o755)
+    const r = sb.run()
+    assertFailed(sb, r, /the alert mail failed too/)
+    assert.ok(
+      r.stdout.split('\n').includes(
+        'tailscale-watchdog: mail failed: Error:     0: cannot find configuration for account icloud  Note: Run with --debug to enable logs with spantrace. Note: Run with --trace to enable verbose logs with backtrace.',
+      ),
+      JSON.stringify(r.stdout),
+    )
+    assert.match(stateLine(sb), unsentLine('NeedsLogin'))
+  }))
+
+// The escapes must go before the 300-character cut, or a heavily colored error
+// would spend the budget on escape bytes and lose most of its text.
+test('a heavily colored `up` error keeps all 300 visible characters: escapes are removed before the cut', () =>
+  withSandbox({ backend: 'Stopped' }, (sb) => {
+    writeFileSync(sb.cliPath, rawUpErrCli())
+    const err = Array.from({ length: 400 }, () => '\x1b[1;31mv\x1b[0m').join('')
+    const r = sb.run({ STUB_UP_RC: '1', STUB_UP_ERR: err })
+    const m = assertFailed(sb, r, /`tailscale up` failed/)
+    assert.ok(m.includes(': ' + 'v'.repeat(300) + ' (see '), JSON.stringify(m))
+    assert.ok(sb.mails()[0].includes(': ' + 'v'.repeat(300) + '\nDown since: '), JSON.stringify(sb.mails()[0]))
+  }))
+
+// Only real escape sequences go: bracketed text that merely looks like a color
+// code, with no ESC before it, is part of the message and stays.
+test('bracketed text with no ESC before it, such as `[31m` or `[0m`, stays in the marker', () =>
+  withSandbox({ backend: 'Stopped' }, (sb) => {
+    writeFileSync(sb.cliPath, rawUpErrCli())
+    const r = sb.run({ STUB_UP_RC: '1', STUB_UP_ERR: 'bad value [31m in [0m and [?25l, kept' })
+    const m = assertFailed(sb, r, /`tailscale up` failed/)
+    assert.ok(m.includes('): bad value [31m in [0m and [?25l, kept (see '), JSON.stringify(m))
+  }))
+
+// ECMA-48 CSI parameter bytes are 0x30-0x3F, so ':' (SGR sub-parameters
+// such as 38:5:196 or the 4:3 curly underline) and '<=>' (xterm private modes)
+// are part of such a sequence. A sed class [0-9;?] stops at them, tr then
+// drops only the ESC, and the rest stays as a fragment.
+test('an ESC [ ... letter sequence with ":" or ">" parameters leaves no fragment', () =>
+  withSandbox({ backend: 'Stopped' }, (sb) => {
+    writeFileSync(sb.cliPath, rawUpErrCli())
+    const r = sb.run({ STUB_UP_RC: '1', STUB_UP_ERR: '\x1b[38:5:196mred\x1b[0m and \x1b[4:3mwavy\x1b[4:0m and \x1b[>4;2mkeys\x1b[>4m' })
+    const m = assertFailed(sb, r, /`tailscale up` failed/)
+    assert.ok(m.includes('): red and wavy and keys (see '), JSON.stringify(m))
+  }))
+
+// Escape forms outside "ESC [ ... letter", which lib/text.sh also removes.
+// `tput sgr0` on xterm prints ESC ( B ESC [ m, an OSC 8 hyperlink is
+// ESC ] 8 ; ; <url> ESC \, and CSI finals include '~'.
+test('other escape sequences (ESC ( B, OSC 8 hyperlinks, CSI ending in ~) leave no fragment', () =>
+  withSandbox({ backend: 'Stopped' }, (sb) => {
+    writeFileSync(sb.cliPath, rawUpErrCli())
+    const r = sb.run({ STUB_UP_RC: '1', STUB_UP_ERR: 'a\x1b(B\x1b[m b \x1b]8;;https://x.test\x1b\\link\x1b]8;;\x1b\\ c \x1b[3~d' })
+    const m = assertFailed(sb, r, /`tailscale up` failed/)
+    assert.ok(m.includes('): a b link c d (see '), JSON.stringify(m))
+  }))
+
+test('[bash --posix xpg_echo] a colored `up` error: the marker and the mail have no ANSI codes', { skip: spawnSync('sh', ['-c', 'command -v bash']).status === 0 ? false : 'bash not installed' }, () =>
+  withSandbox({ backend: 'Stopped' }, (sb) => {
+    writeFileSync(sb.cliPath, rawUpErrCli())
+    const r = sb.run({ STUB_UP_RC: '1', STUB_UP_ERR: '\x1b[1;31merror:\x1b[0m \x1b[33mbackend\x1b[m busy' }, XPG)
+    const m = assertFailed(sb, r, /`tailscale up` failed/)
+    assert.ok(m.includes('timeout): error: backend busy (see '), JSON.stringify(m))
+    assert.ok(sb.mails()[0].includes('timeout): error: backend busy\nDown since: '), JSON.stringify(sb.mails()[0]))
+  }))
+
 // macOS /bin/sh is bash 3.2 in POSIX mode; the rest of this file runs under dash.
 test('[bash --posix] down then recovered: both mails arrive whole on stdin, marker cleared', { skip: spawnSync('sh', ['-c', 'command -v bash']).status === 0 ? false : 'bash not installed' }, () =>
   withSandbox({ backend: 'NeedsLogin' }, (sb) => {
@@ -684,7 +801,7 @@ test('without timeout/gtimeout on PATH it still runs, unbounded', () =>
   withSandbox({ backend: 'Stopped' }, (sb) => {
     const tools = join(sb.base, 'tools')
     mkdirSync(tools)
-    for (const t of ['sh', 'mkdir', 'cat', 'sed', 'tr', 'cut', 'date', 'sleep', 'rm', 'touch', 'head', 'tail', 'wc', 'mv', 'ls', 'grep']) {
+    for (const t of ['sh', 'dirname', 'mkdir', 'cat', 'sed', 'tr', 'cut', 'date', 'sleep', 'rm', 'touch', 'head', 'tail', 'wc', 'mv', 'ls', 'grep']) {
       const w = spawnSync('sh', ['-c', `command -v ${t}`], { encoding: 'utf8' })
       assert.equal(w.status, 0, `${t} not found`)
       symlinkSync(w.stdout.trim(), join(tools, t))

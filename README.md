@@ -62,6 +62,11 @@ the shared `.chezmoitemplates/launchagent.plist`. When an agent or the template
 changes, `run_onchange_after_load-launch-agents.sh.tmpl` loads the agents again.
 Each job still writes its log to `~/.cron/logs/<job>.log`.
 
+Jobs print with `printf '%s\n'`, never `echo`. A job that puts CLI output in a
+marker or mail cleans it with `oneline` from `~/.cron/lib/text.sh`. The shell
+banner removes control characters. `tests/cron/text-lib.test.mjs` enforces
+this.
+
 If the Mac sleeps through a job's time, launchd runs the job once when the Mac
 wakes. Cron skipped these runs.
 
