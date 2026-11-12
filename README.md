@@ -192,7 +192,9 @@ mail but do not cause one. The "relaunch by hand" list of the last mail is in
 the same list sends no mail. A failure, or a mail that the job cannot send,
 writes `~/.cron/logs/app-update.FAILED`, and every new shell prints it. Only a
 pass with no failure removes the marker. If no pass completes in 7 days, a
-skipped run writes the marker and sends one mail.
+skipped run writes the marker and sends one mail; the 7 days count from the
+last pass, or from the first skip (`~/.cron/logs/app-update.since`) when no
+pass has ever completed.
 
 launchd appends to `~/.cron/logs/app-update.log`. The run that does the pass
 empties the log first. Thus the later runs of the night add one "already ran
