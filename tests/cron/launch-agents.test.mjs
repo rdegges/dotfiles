@@ -25,7 +25,12 @@
 // XPC_SERVICE_NAME (it loads the others and exits 1). A managed job that
 // launchd reports as running, or whose state launchctl print cannot read, is
 // neither booted out nor bootstrapped, and the run exits 1 (checked against
-// stub output; the real text was confirmed by hand on launchd). With a stub
+// stub output; the real text was confirmed by hand on launchd). The
+// homelab-only agent (com.rdegges.tailscale-watchdog) renders to its own command
+// and a 5-minute schedule that skips :15 and :20. With `homelab` missing, false,
+// and true, .chezmoiignore and the loader agree: a real `chezmoi apply` writes
+// exactly the plists the loader's label list names, and the loader bootstraps
+// those and only those, also across true -> false -> true. With a stub
 // crontab, the retire script clears crontab.FAILED when `crontab -l` is empty
 // or absent, otherwise tries `crontab -r` once (also after a hung `crontab -l`
 // is killed at 30s), writes the marker when that fails, and always exits 0. It says
@@ -68,6 +73,24 @@ const OLD_CRONTAB = {
   'oh-my-zsh': '0 10 * * 6 { date; zsh -c \'cd $HOME/.oh-my-zsh && git pull -q\'; } > $HOME/.cron/logs/oh-my-zsh.log 2>&1',
 }
 const LABELS = Object.keys(OLD_CRONTAB).map((j) => `com.rdegges.${j}`).sort()
+
+// Jobs added after the move to launchd, which have no old crontab line. These
+// are homelab-only: .chezmoiignore and the loader skip them unless `homelab` is
+// true, so LABELS above stays the set every other Mac manages.
+const WATCHDOG_MINUTES = [2, 7, 12, 17, 22, 27, 32, 37, 42, 47, 52, 57]
+const HOMELAB_AGENTS = {
+  'tailscale-watchdog': {
+    schedule: WATCHDOG_MINUTES.map((m) => ({ Minute: m })),
+    command: '{ date; $HOME/.cron/tailscale-watchdog.sh; } > $HOME/.cron/logs/tailscale-watchdog.log 2>&1',
+  },
+}
+const HOMELAB_LABELS = Object.keys(HOMELAB_AGENTS).map((j) => `com.rdegges.${j}`).sort()
+const ALL_LABELS = [...LABELS, ...HOMELAB_LABELS].sort()
+// What each agent must render to: the old crontab line, or the HOMELAB_AGENTS entry.
+const AGENTS = {
+  ...Object.fromEntries(Object.entries(OLD_CRONTAB).map(([j, line]) => [j, parseCron(line)])),
+  ...HOMELAB_AGENTS,
+}
 
 // "m h * * dow cmd" -> { schedule: [StartCalendarInterval dict], command }.
 function parseCron(line) {
@@ -119,20 +142,20 @@ function hostileHome() {
 
 // --- Agents ---------------------------------------------------------------------
 
-test('agents: exactly one plist template per old crontab job, named com.rdegges.<job>.plist.tmpl', () => {
+test('agents: exactly one plist template per job (old crontab jobs and homelab jobs), named com.rdegges.<job>.plist.tmpl', () => {
   const files = readdirSync(join(SOURCE, AGENTS_DIR)).sort()
-  assert.deepEqual(files, LABELS.map((l) => `${l}.plist.tmpl`).sort())
+  assert.deepEqual(files, ALL_LABELS.map((l) => `${l}.plist.tmpl`).sort())
 })
 
-for (const [job, line] of Object.entries(OLD_CRONTAB)) {
+for (const job of Object.keys(AGENTS)) {
   const label = `com.rdegges.${job}`
-  test(`agent ${label}: valid plist with the old crontab command, schedule, and log`, () => {
+  test(`agent ${label}: valid plist with the expected command, schedule, and log`, () => {
     const { base, home } = hostileHome()
     try {
       const xml = execTemplate(read(`${AGENTS_DIR}/${label}.plist.tmpl`), { home })
       assert.ok(xml.startsWith('<?xml version="1.0" encoding="UTF-8"?>\n'), 'XML declaration is not at byte 0')
       const p = parsePlist(xml)
-      const want = parseCron(line)
+      const want = AGENTS[job]
 
       assert.equal(p.Label, label)
       assert.deepEqual(p.ProgramArguments, ['/bin/sh', '-c', want.command])
@@ -229,8 +252,20 @@ test('agents: the command is XML-escaped in the source XML, not passed through r
   assert.match(cmd, /&lt; \/dev\/null/)
 })
 
+test('agents: the Tailscale watchdog runs every 5 minutes and never at :15 or :20 (the hourly chezmoi apply)', () => {
+  const p = parsePlist(execTemplate(read(`${AGENTS_DIR}/com.rdegges.tailscale-watchdog.plist.tmpl`)))
+  const minutes = p.StartCalendarInterval.map((e) => {
+    assert.deepEqual(Object.keys(e), ['Minute'], 'an entry limits more than the minute')
+    return e.Minute
+  })
+  assert.equal(minutes.length, 12)
+  for (let i = 1; i < minutes.length; i++) assert.equal(minutes[i] - minutes[i - 1], 5, minutes.join(','))
+  assert.ok(minutes[0] < 5 && minutes[11] + 5 - 60 === minutes[0], `gap across the hour: ${minutes.join(',')}`)
+  assert.ok(!minutes.includes(15) && !minutes.includes(20), minutes.join(','))
+})
+
 test('agents: each job file keeps its job comment and only calls the shared template', () => {
-  for (const label of LABELS) {
+  for (const label of ALL_LABELS) {
     const src = read(`${AGENTS_DIR}/${label}.plist.tmpl`)
     assert.match(src, /^\{\{- \/\* \S[\s\S]*? \*\/ -\}\}\n\{\{ template "launchagent\.plist" \(dict\n/, label)
     assert.match(src, new RegExp(`"label" "${label.replace(/\./g, '\\.')}"\n`), label)
@@ -245,6 +280,47 @@ test('chezmoiignore: Library/LaunchAgents is ignored off darwin and managed on d
   assert.equal(ignored('linux'), true)
   assert.equal(ignored('darwin'), false)
 })
+
+// The three ways a Mac can hold the flag: no key (has not re-run `chezmoi init`
+// since the flag was added), false, and true.
+const HOMELAB_CASES = [['missing', {}], ['false', { homelab: false }], ['true', { homelab: true }]]
+const isHomelab = (extra) => extra.homelab === true
+const HOMELAB_PATHS = [
+  'Library/LaunchAgents/com.rdegges.tailscale-watchdog.plist',
+  '.cron/tailscale-watchdog.sh',
+]
+
+test('chezmoi.toml.tmpl: homelab is asked once with promptBoolOnce, default false, next to work', () => {
+  const t = read('.chezmoi.toml.tmpl')
+  assert.match(t, /^\{\{- \$homelab := promptBoolOnce \. "homelab" "[^"]+" false -\}\}$/m)
+  assert.match(t, /^\[data\]\n  work = \{\{ \$work \}\}\n  homelab = \{\{ \$homelab \}\}$/m)
+})
+
+for (const [name, extra] of HOMELAB_CASES) {
+  test(`chezmoiignore: homelab ${name}: the homelab-only plist and script are ${isHomelab(extra) ? 'managed' : 'ignored'}`, () => {
+    const lines = execTemplate(read('.chezmoiignore'), { data: JSON.stringify({ work: false, chezmoi: { os: 'darwin' }, ...extra }) }).split('\n')
+    for (const path of HOMELAB_PATHS) assert.equal(lines.includes(path), !isHomelab(extra), path)
+  })
+
+  test(`full source: homelab ${name}: chezmoi ${isHomelab(extra) ? 'manages' : 'does not manage'} the watchdog plist and script`, () => {
+    const home = mkdtempSync(join(tmpdir(), 'launch-agents-'))
+    try {
+      const data = JSON.stringify({ work: false, chezmoi: { os: 'darwin' }, ...extra })
+      const r = spawnSync('chezmoi', ['--source', SOURCE, '--destination', home, '--override-data', data, 'managed', '--include=files'], {
+        encoding: 'utf8',
+        env: { PATH: process.env.PATH, HOME: home },
+      })
+      assert.ifError(r.error)
+      assert.equal(r.status, 0, `chezmoi managed exited ${r.status}: ${r.stderr}`)
+      const managed = r.stdout.split('\n')
+      // A control: the other agents are managed either way.
+      assert.ok(managed.includes('Library/LaunchAgents/com.rdegges.chezmoi.plist'), r.stdout)
+      for (const path of HOMELAB_PATHS) assert.equal(managed.includes(path), isHomelab(extra), path)
+    } finally {
+      rmSync(home, { recursive: true, force: true })
+    }
+  })
+}
 
 test('chezmoiremove: the old ~/.cron/crontab goes, and its source and installer are gone', () => {
   assert.ok(read('.chezmoiremove').split('\n').includes('.cron/crontab'))
@@ -271,6 +347,18 @@ test('loader: the hash header names the shared template and every agent; the lab
   const list = s.match(/^labels=\(\n([\s\S]*?)\n\)$/m)[1]
   assert.deepEqual(list.split('\n').map((l) => l.trim()).sort(), LABELS.map((l) => `'${l}'`))
 })
+
+const loaderLabels = (script) => script.match(/^labels=\(\n([\s\S]*?)\n\)$/m)[1].split('\n').map((l) => l.trim().replace(/^'|'$/g, '')).sort()
+
+for (const [name, extra] of HOMELAB_CASES) {
+  test(`loader: homelab ${name}: renders, and its labels and hash header are ${isHomelab(extra) ? 'every agent' : 'every agent but the homelab-only ones'}`, () => {
+    const s = renderLoader({ data: JSON.stringify({ chezmoi: { os: 'darwin' }, ...extra }) })
+    const want = isHomelab(extra) ? ALL_LABELS : LABELS
+    assert.deepEqual(loaderLabels(s), want)
+    const hashes = [...s.matchAll(/^# (\S+) hash: ([0-9a-f]{64})$/gm)].map((m) => m[1])
+    assert.deepEqual(hashes, ['launchagent.plist', ...want.map((l) => `${l}.plist.tmpl`).sort()])
+  })
+}
 
 test('loader: changing only the shared template, or only one agent, changes the rendered script', () => {
   const base = mkdtempSync(join(tmpdir(), 'launch-agents-src-'))
@@ -794,14 +882,15 @@ test('retire: without timeout/gtimeout on PATH a failed removal still writes the
 // A scratch source with only the launchd pieces, applied with .chezmoi.os forced
 // to darwin so the loader and retire scripts really run, from chezmoi, against
 // the stubs. Never touches the real HOME or the real launchd.
-function applySandbox() {
+function applySandbox(extra = {}) {
   const base = mkdtempSync(join(tmpdir(), 'launch-agents-apply-'))
   const src = join(base, 'src')
   const home = join(base, 'home dir')
   const bin = join(base, 'bin')
   const state = join(base, 'state')
   for (const d of [src, home, bin, join(state, 'loaded'), join(state, 'linger')]) mkdirSync(d, { recursive: true })
-  for (const p of ['.chezmoitemplates', AGENTS_DIR, LOADER, RETIRE]) cpSync(join(SOURCE, p), join(src, p), { recursive: true })
+  // .chezmoiignore too, so the homelab gate applies; it reads .work, so the data sets it.
+  for (const p of ['.chezmoitemplates', AGENTS_DIR, LOADER, RETIRE, '.chezmoiignore']) cpSync(join(SOURCE, p), join(src, p), { recursive: true })
   writeFileSync(join(bin, 'launchctl'), LAUNCHCTL)
   writeFileSync(join(bin, 'crontab'), CRONTAB)
   chmodSync(join(bin, 'launchctl'), 0o755)
@@ -810,7 +899,7 @@ function applySandbox() {
   writeFileSync(cfg, '')
   const calls = join(base, 'calls')
   writeFileSync(calls, '')
-  const cz = ['--source', src, '--destination', home, '--config', cfg, '--no-tty', '--override-data', DARWIN]
+  const cz = (extra) => ['--source', src, '--destination', home, '--config', cfg, '--no-tty', '--override-data', JSON.stringify({ work: false, chezmoi: { os: 'darwin' }, ...extra })]
   return {
     src,
     home,
@@ -818,8 +907,8 @@ function applySandbox() {
     loaded: () => readdirSync(join(state, 'loaded')).sort(),
     calls: () => readFileSync(calls, 'utf8').split('\n').filter(Boolean),
     resetCalls: () => writeFileSync(calls, ''),
-    apply: (env = {}) =>
-      spawnSync('chezmoi', [...cz, 'apply', '--force'], {
+    apply: (env = {}, data = extra) =>
+      spawnSync('chezmoi', [...cz(data), 'apply', '--force'], {
         encoding: 'utf8',
         env: { HOME: home, PATH: `${bin}:${process.env.PATH}`, CALLS: calls, STATE: state, STUB_L: 'jobs', STUB_R: 'ok', ...env },
       }),
@@ -898,3 +987,107 @@ test('apply: loader then retire, in that order; a self-run failure is retried by
     sb.cleanup()
   }
 })
+
+for (const [name, extra] of HOMELAB_CASES) {
+  test(`apply: homelab ${name}: chezmoi writes exactly the plists the loader names, and the loader loads exactly those`, () => {
+    const sb = applySandbox(extra)
+    try {
+      const r = sb.apply()
+      assert.equal(r.status, 0, r.stdout + r.stderr)
+      const labels = loaderLabels(renderLoader({ data: JSON.stringify({ chezmoi: { os: 'darwin' }, ...extra }) }))
+      assert.deepEqual(labels, isHomelab(extra) ? ALL_LABELS : LABELS)
+      assert.deepEqual(readdirSync(sb.agents).sort(), labels.map((l) => `${l}.plist`).sort())
+      assert.deepEqual(sb.loaded(), labels)
+    } finally {
+      sb.cleanup()
+    }
+  })
+}
+
+test('apply: homelab true -> false -> true: the watchdog is booted out (its plist file stays) and then loaded again', () => {
+  const sb = applySandbox()
+  const watchdog = 'com.rdegges.tailscale-watchdog'
+  try {
+    let r = sb.apply({}, { homelab: true })
+    assert.equal(r.status, 0, r.stdout + r.stderr)
+    assert.deepEqual(sb.loaded(), ALL_LABELS)
+
+    sb.resetCalls()
+    r = sb.apply({}, { homelab: false })
+    assert.equal(r.status, 0, r.stdout + r.stderr)
+    assert.deepEqual(sb.loaded(), LABELS)
+    assert.match(r.stdout, /launch-agents: booting out com\.rdegges\.tailscale-watchdog \(no managed plist\)/)
+    // chezmoi does not delete an ignored target, and launchd loads every plist
+    // in ~/Library/LaunchAgents at login: hence the README's manual rm.
+    assert.ok(existsSync(join(sb.agents, `${watchdog}.plist`)), 'the plist file was removed')
+
+    sb.resetCalls()
+    r = sb.apply({}, { homelab: true })
+    assert.equal(r.status, 0, r.stdout + r.stderr)
+    assert.deepEqual(sb.loaded(), ALL_LABELS)
+    assert.ok(sb.calls().includes(`bootstrap gui/${process.getuid()} ${join(sb.agents, `${watchdog}.plist`)}`), sb.calls().join('\n'))
+  } finally {
+    sb.cleanup()
+  }
+})
+
+// --- The homelab flag, from a real config file (tester additions) -------------------
+//
+// The tests above pass the flag with --override-data. These use the config file
+// that `chezmoi init` really writes, as every existing Mac has it.
+
+const promptOf = (key) => read('.chezmoi.toml.tmpl').match(new RegExp(`promptBoolOnce \\. "${key}" "([^"]+)"`))[1]
+
+function configHome(toml) {
+  const home = mkdtempSync(join(tmpdir(), 'launch-agents-cfg-'))
+  mkdirSync(join(home, '.config', 'chezmoi'), { recursive: true })
+  if (toml !== undefined) writeFileSync(join(home, '.config', 'chezmoi', 'chezmoi.toml'), toml)
+  return home
+}
+
+test('upgrade path: a config written before the flag (no homelab key) applies with exit 0, only a warning, and does not manage the watchdog', () => {
+  const home = configHome('[data]\n  work = false\n')
+  const src = mkdtempSync(join(tmpdir(), 'launch-agents-src-'))
+  try {
+    // Only the config template: apply has nothing else to run.
+    cpSync(join(SOURCE, '.chezmoi.toml.tmpl'), join(src, '.chezmoi.toml.tmpl'))
+    const env = { PATH: process.env.PATH, HOME: home }
+    const a = spawnSync('chezmoi', ['--source', src, '--destination', home, '--no-tty', 'apply'], { encoding: 'utf8', env })
+    assert.ifError(a.error)
+    assert.equal(a.status, 0, a.stderr)
+    assert.match(a.stderr, /config file template has changed/)
+
+    const m = spawnSync('chezmoi', ['--source', SOURCE, '--destination', home, 'managed', '--include=files'], { encoding: 'utf8', env })
+    assert.equal(m.status, 0, m.stderr)
+    const managed = m.stdout.split('\n')
+    assert.ok(managed.includes('.cron/chezmoi-update.sh'), 'control: the other cron scripts are managed')
+    assert.ok(!managed.includes('.cron/tailscale-watchdog.sh'), m.stdout)
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+    rmSync(src, { recursive: true, force: true })
+  }
+})
+
+for (const [answer, want] of [['true', 'true'], ['false', 'false']]) {
+  test(`chezmoi init on a Mac whose config has work = true and no homelab key: answering ${answer} writes homelab = ${want} and keeps work = true`, () => {
+    const home = configHome('[data]\n  work = true\n')
+    const src = mkdtempSync(join(tmpdir(), 'launch-agents-src-'))
+    try {
+      cpSync(join(SOURCE, '.chezmoi.toml.tmpl'), join(src, '.chezmoi.toml.tmpl'))
+      // promptBoolOnce asks only for the missing key; the work prompt is not answered.
+      const r = spawnSync('chezmoi', ['init', '--source', src, '--no-tty', '--promptBool', `${promptOf('homelab')}=${answer}`], {
+        encoding: 'utf8',
+        env: { PATH: process.env.PATH, HOME: home },
+        input: '',
+      })
+      assert.ifError(r.error)
+      assert.equal(r.status, 0, r.stderr)
+      const cfg = readFileSync(join(home, '.config', 'chezmoi', 'chezmoi.toml'), 'utf8')
+      assert.match(cfg, /^\[data\]\n {2}work = true\n {2}homelab = (true|false)$/m)
+      assert.equal(cfg.match(/^ {2}homelab = (\w+)$/m)[1], want)
+    } finally {
+      rmSync(home, { recursive: true, force: true })
+      rmSync(src, { recursive: true, force: true })
+    }
+  })
+}

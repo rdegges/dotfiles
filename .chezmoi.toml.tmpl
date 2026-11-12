@@ -1,4 +1,5 @@
 {{- $work := promptBoolOnce . "work" "Is this a work (Snyk) machine" false -}}
+{{- $homelab := promptBoolOnce . "homelab" "Is this the homelab server Mac" false -}}
 # Allow chezmoi to automatically handle Git `commit` and `push` operations
 # to simplify dotfile management.
 [git]
@@ -9,5 +10,10 @@
 # dotfiles repo). `work` is true only on the work laptop; it gates work-specific
 # config and tooling, e.g. the Snyk account in the himalaya template. Asked once
 # at `chezmoi init` time -- re-run `chezmoi init` to change the answer.
+# `homelab` is true only on the homelab server Mac; it gates that Mac's own
+# scheduled jobs (.chezmoiignore). A machine that has not re-run `chezmoi init`
+# since this flag was added has no `homelab` key, so templates read it as
+# `(index . "homelab")`, which is false when the key is missing.
 [data]
   work = {{ $work }}
+  homelab = {{ $homelab }}

@@ -1,5 +1,14 @@
 {{- if eq .chezmoi.os "darwin" -}}
-{{- $agents := glob (joinPath .chezmoi.sourceDir "private_Library/LaunchAgents/*.plist.tmpl") -}}
+{{- /* Agents for the homelab server Mac only. .chezmoiignore skips their plists
+     under the same condition, so this list must match it; `index` reads a
+     missing key as false. */ -}}
+{{- $homelabOnly := list "com.rdegges.tailscale-watchdog" -}}
+{{- $agents := list -}}
+{{- range glob (joinPath .chezmoi.sourceDir "private_Library/LaunchAgents/*.plist.tmpl") -}}
+{{-   if or (index $ "homelab") (not (has (base . | trimSuffix ".plist.tmpl") $homelabOnly)) -}}
+{{-     $agents = append $agents . -}}
+{{-   end -}}
+{{- end -}}
 #!/bin/bash
 # launchagent.plist hash: {{ include ".chezmoitemplates/launchagent.plist" | sha256sum }}
 {{- range $agents }}
@@ -11,6 +20,8 @@
 # ~/.cron scripts the jobs run are already written. chezmoi does not delete a
 # target when its source goes away, so to retire a job, also list its plist in
 # .chezmoiremove; any loaded com.rdegges.* label not managed here is booted out.
+# Homelab-only agents are not managed here unless `homelab` is true, so turning
+# the flag off boots them out (their plist files stay; see the README).
 # A managed job that is running, or whose state cannot be read, is left alone
 # and the run fails, so the next apply reloads it.
 #

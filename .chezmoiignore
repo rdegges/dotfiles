@@ -27,6 +27,15 @@ Library/Application Support/com.vorssaint.utils
 .config/aws
 {{ end }}
 
+{{/* Jobs for the homelab server Mac only. `index` reads a missing key (a
+     machine that has not re-run `chezmoi init`) as false. The loader
+     (run_onchange_after_load-launch-agents.sh.tmpl) skips the same labels
+     under the same condition; keep the two lists equal. */}}
+{{ if not (index . "homelab") }}
+Library/LaunchAgents/com.rdegges.tailscale-watchdog.plist
+.cron/tailscale-watchdog.sh
+{{ end }}
+
 {{/* launchd agents are macOS-only, like the crontab installer they replace. */}}
 {{ if ne .chezmoi.os "darwin" }}
 Library/LaunchAgents
