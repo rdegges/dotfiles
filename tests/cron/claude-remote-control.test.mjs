@@ -26,7 +26,12 @@
 // - a TERM goes on to claude, and the wrapper then exits 0 and writes no
 //   marker; claude still running after the settle time clears the marker and
 //   touches .ok; any other exit writes the marker with claude's exit code and
-//   the last 20 log lines (printable ASCII only) and exits with that code;
+//   the last 20 log lines (cleaned by `lines` from dot_cron/lib/text.sh: each
+//   one printable ASCII, at most 300 bytes, no color-code fragments) and exits
+//   with that code;
+// - with lib/text.sh missing or not parsing, the wrapper writes the marker
+//   ("cannot load"), exits 1, and never starts claude or mails; a lib cut short
+//   after oneline (no lines) still leaves the failure reason in the marker;
 // - a log over 10 MB is emptied at start, a smaller one is kept;
 // - on the homelab render only, one mail goes out when the server goes down
 //   and one when it is back (not one per crash-loop restart, also across
@@ -63,6 +68,7 @@ const AGENT = 'private_Library/LaunchAgents/com.rdegges.claude-remote-control.pl
 const LOADER = 'run_onchange_after_load-launch-agents.sh.tmpl'
 const LABEL = 'com.rdegges.claude-remote-control'
 const SYS_PATH = '/usr/bin:/bin'
+const LIB = join(SOURCE, 'dot_cron/lib/text.sh')
 
 function execTemplate(input, { source = SOURCE, data } = {}) {
   const home = mkdtempSync(join(tmpdir(), 'crc-tmpl-'))
@@ -146,7 +152,9 @@ const STUBS = {
     'n=$(ls "$STATE" | grep -c "^mail\\.")\nmv "$STATE/stdin.tmp" "$STATE/mail.$((n + 1))"\n',
 }
 
-function wrapperSandbox({ homelab = false, trusted = { Code: true }, code = true, stubs = Object.keys(STUBS) } = {}) {
+// lib: 'ok' (the real lib/text.sh next to the wrapper, as chezmoi deploys it),
+// 'missing', 'syntax', or 'no-lines' (the real lib cut short before lines).
+function wrapperSandbox({ homelab = false, trusted = { Code: true }, code = true, stubs = Object.keys(STUBS), lib = 'ok' } = {}) {
   const base = mkdtempSync(join(tmpdir(), 'crc-'))
   const home = join(base, 'home dir')
   const bin = join(base, 'bin')
@@ -163,6 +171,11 @@ function wrapperSandbox({ homelab = false, trusted = { Code: true }, code = true
   const script = join(base, 'claude-remote-control.sh')
   writeFileSync(script, renderWrapper(homelab))
   chmodSync(script, 0o755)
+  if (lib !== 'missing') {
+    mkdirSync(join(base, 'lib'))
+    const text = readFileSync(LIB, 'utf8')
+    writeFileSync(join(base, 'lib', 'text.sh'), lib === 'syntax' ? 'oneline() {\n' : lib === 'no-lines' ? text.split('\nlines()')[0] : text)
+  }
   const calls = join(base, 'calls')
   writeFileSync(calls, '')
   const logs = join(home, '.cron', 'logs')
@@ -357,12 +370,35 @@ test('wrapper: claude exits 0 by itself: still a failure (launchd starts it agai
     assertFailed(sb, sb.run({ STUB_CLAUDE: 'exit', STUB_CLAUDE_RC: '0' }), /exited \(exit 0\)/, 0)
   }))
 
-test('wrapper: log lines with control characters and non-ASCII reach the marker as printable ASCII, each cut at 300', () =>
+test('wrapper: log lines with escape sequences, CR, and non-ASCII reach the marker cleaned by lines, each cut at 300', () =>
   withWrapper({}, async (sb) => {
-    sb.run({ STUB_CLAUDE: 'exit', STUB_CLAUDE_TEXT: '\x1b[31mréseau ☁ down\x07 ' + 'y'.repeat(400) })
+    const text = '\x1b[31mréseau ☁ down\x07\x1b[0m \x1b]0;title\x07\x1b[38:5:196mred\r [31m raw ' + 'y'.repeat(400)
+    sb.run({ STUB_CLAUDE: 'exit', STUB_CLAUDE_TEXT: text })
     const m = readFileSync(sb.marker)
-    assert.ok(m.every((b) => b === 0x0a || b === 0x09 || (b >= 0x20 && b <= 0x7e)), m.toString())
-    assert.ok(m.toString().split('\n').every((l) => l.length <= 310))
+    assert.ok(m.every((b) => b === 0x0a || (b >= 0x20 && b <= 0x7e)), m.toString())
+    const lines = m.toString('latin1').trimEnd().split('\n')
+    assert.equal(lines.at(-1), '  | ' + ('rseau  down red  [31m raw ' + 'y'.repeat(400)).slice(0, 300))
+    assert.deepEqual(lines.slice(-4, -1), [1, 2, 3].map((i) => `  | stub claude line ${i}`))
+    assert.ok(lines.every((l) => l.length <= 304), 'a line is over 300 bytes after the prefix')
+  }))
+
+for (const shell of ['sh', 'bash']) {
+  for (const lib of ['missing', 'syntax']) {
+    test(`wrapper (${shell}): a ${lib} lib/text.sh writes the marker ("cannot load"), exits 1, never starts claude, never mails`, () =>
+      withWrapper({ homelab: true, lib }, async (sb) => {
+        const r = sb.run({}, shell)
+        assert.equal(r.status, 1, sb.logText())
+        assert.match(readFileSync(sb.marker, 'utf8'), /^\d{4}-\d{2}-\d{2} \d{2}:\d{2} claude-remote-control: cannot load ~\/\.cron\/lib\/text\.sh; run chezmoi apply\n$/)
+        assert.match(sb.logText(), /^claude-remote-control: cannot load .*\/lib\/text\.sh$/m)
+        assert.equal(sb.claudeArgs(), null, 'claude was started')
+        assert.deepEqual(sb.calls().filter((c) => c.startsWith('himalaya')), [])
+      }))
+  }
+}
+
+test('wrapper: a lib cut short before lines still leaves the failure reason in the marker', () =>
+  withWrapper({ lib: 'no-lines' }, async (sb) => {
+    assertFailed(sb, sb.run({ STUB_CLAUDE: 'exit', STUB_CLAUDE_RC: '3' }), /claude remote-control exited \(exit 3\)/, 3)
   }))
 
 // --- Preflight ------------------------------------------------------------------------------

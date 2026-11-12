@@ -26,8 +26,9 @@
 #     has exited, this exits 0 and does not touch the marker. If claude still
 #     runs 300 seconds after the start, the marker is removed and
 #     claude-remote-control.ok is touched. Any other exit of claude is a
-#     failure: the marker gets claude's exit code and the last 20 log lines, and
-#     this exits with claude's code, so launchd starts it again.
+#     failure: the marker gets claude's exit code and the last 20 log lines
+#     (cleaned by lines, from lib/text.sh), and this exits with claude's code, so
+#     launchd starts it again.
 #
 # --permission-mode is explicit and must equal permissions.defaultMode in
 # dot_claude/settings.json (tests/cron/claude-remote-control.test.mjs checks
@@ -63,23 +64,29 @@ statefile="$logs/claude-remote-control.state"
 account=icloud
 rcpt=r@rdegges.com
 
+# oneline and lines (lib/text.sh) clean claude's output for the marker and the
+# mail. A missing, broken, or incomplete lib writes the marker and exits 1,
+# with no mail; launchd starts this again a minute later.
+lib="$(dirname "$0")/lib/text.sh"
+if [ -r "$lib" ] && sh -n "$lib" 2>/dev/null && command . "$lib" && command -v oneline >/dev/null 2>&1; then :; else
+    printf '%s\n' "claude-remote-control: cannot load $lib"
+    mkdir -p "${marker%/*}"
+    printf '%s\n' "$(date '+%F %R') claude-remote-control: cannot load ~/.cron/lib/text.sh; run chezmoi apply" > "$marker"
+    exit 1
+fi
+
 mkdir -p "$logs"
 size=$(wc -c < "$log" 2>/dev/null | tr -d ' ')
 if [ "${size:-0}" -gt 10485760 ] 2>/dev/null; then
     : > "$log"
-    echo "claude-remote-control: the log was over 10 MB; emptied it"
+    printf '%s\n' "claude-remote-control: the log was over 10 MB; emptied it"
 fi
-echo "$(date '+%F %T') claude-remote-control: starting (pid $$)"
+printf '%s\n' "$(date '+%F %T') claude-remote-control: starting (pid $$)"
 
 # The loader's pattern: bounded when coreutils' timeout is installed, unbounded
 # otherwise. run <seconds> <cmd...>
 TO=$(command -v gtimeout || command -v timeout || true)
 run() { s=$1; shift; if [ -n "$TO" ]; then "$TO" -k 5 "$s" "$@"; else "$@"; fi; }
-
-# One line, at most 300 characters, for the marker and the mail. Printable
-# ASCII only, before the cut: under launchd there is no LANG, so cut counts
-# bytes and could split a multi-byte character into invalid UTF-8.
-oneline() { printf '%s' "$1" | tr '\n\t' '  ' | LC_ALL=C tr -cd '\11\12\15\40-\176' | cut -c1-300; }
 
 host=$(run 10 scutil --get LocalHostName 2>/dev/null)
 where=$(oneline "$host")
@@ -91,10 +98,10 @@ send_mail() { # send_mail <subject> <body>
     # The message goes on stdin, never as an argument: himalaya 1.2.0 reads
     # stdin whenever it is not a TTY, and panics on an empty one (exit 101).
     if out=$(printf '%s' "$msg" | run 60 himalaya message send -a "$account" 2>&1); then
-        echo "claude-remote-control: mailed: $1"
+        printf '%s\n' "claude-remote-control: mailed: $1"
         return 0
     fi
-    echo "claude-remote-control: mail failed: $(oneline "$out")"
+    printf '%s\n' "claude-remote-control: mail failed: $(oneline "$out")"
     return 1
 }
 
@@ -112,7 +119,7 @@ Last log lines:
 $lastlines
 }
 launchd starts it again at most once a minute. You get one more mail when it has run for ${settle}s again. Until then the reason stays in ~/.cron/logs/claude-remote-control.FAILED."; then
-            echo down > "$statefile"
+            printf '%s\n' down > "$statefile"
         else
             note="; the alert mail failed too"
         fi
@@ -134,11 +141,11 @@ healthy() {
                 return
             fi
         fi
-        echo up > "$statefile"
+        printf '%s\n' up > "$statefile"
     fi
     rm -f "$marker"
     touch "$stamp"
-    echo "$(date '+%F %T') claude-remote-control: ok: running for ${settle}s"
+    printf '%s\n' "$(date '+%F %T') claude-remote-control: ok: running for ${settle}s"
 }
 
 command -v claude > /dev/null 2>&1 || fail "claude is not on PATH ($PATH); install Claude Code"
@@ -160,7 +167,7 @@ trap 'trapped=1 settled=1' USR1
 claude remote-control --name "$host" --spawn same-dir --permission-mode bypassPermissions &
 child=$!
 [ "$stopping" = 0 ] || kill -TERM "$child" 2>/dev/null
-echo "claude-remote-control: started claude remote-control (pid $child) in $dir as $host"
+printf '%s\n' "claude-remote-control: started claude remote-control (pid $child) in $dir as $host"
 ( sleep "$settle" < /dev/null > /dev/null 2>&1; kill -USR1 $$ 2>/dev/null ) &
 timer=$!
 
@@ -182,8 +189,8 @@ done
 kill "$timer" 2>/dev/null
 
 if [ "$stopping" = 1 ]; then
-    echo "$(date '+%F %T') claude-remote-control: stopped (claude exit $rc)"
+    printf '%s\n' "$(date '+%F %T') claude-remote-control: stopped (claude exit $rc)"
     exit 0
 fi
-lastlines=$(tail -n 20 "$log" 2>/dev/null | LC_ALL=C tr -cd '\11\12\40-\176' | cut -c1-300 | sed 's/^/  | /')
+lastlines=$(lines "$(tail -n 20 "$log" 2>/dev/null)" | sed 's/^/  | /')
 fail "claude remote-control exited (exit $rc)" "$rc"

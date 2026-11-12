@@ -63,8 +63,9 @@ changes, `run_onchange_after_load-launch-agents.sh.tmpl` loads the agents again.
 Each job still writes its log to `~/.cron/logs/<job>.log`.
 
 Jobs print with `printf '%s\n'`, never `echo`. A job that puts CLI output in a
-marker or mail cleans it with `oneline` from `~/.cron/lib/text.sh`. The shell
-banner removes control characters. `tests/cron/text-lib.test.mjs` enforces
+marker or mail cleans it with a function from `~/.cron/lib/text.sh`: `oneline`
+for one line, or `lines` for more than one line. The shell banner removes
+control characters. `tests/cron/text-lib.test.mjs` enforces
 this.
 
 If the Mac sleeps through a job's time, launchd runs the job once when the Mac
@@ -247,8 +248,9 @@ interactive session (see [AI coding tools](#ai-coding-tools)).
   `~/Code` exists, and that `~/.claude.json` marks `~/Code` as trusted. It
   reads that file and never writes it.
 - If a check fails, or if the server stops for a reason other than a stop
-  command, the script writes `~/.cron/logs/claude-remote-control.FAILED`. Every
-  new shell prints it. When the server runs for 5 minutes, the script removes
+  command, the script writes `~/.cron/logs/claude-remote-control.FAILED`. When
+  the server stops, the marker also gets the last 20 lines of the log, cleaned
+  with `lines`. Every new shell prints the marker. When the server runs for 5 minutes, the script removes
   the marker. On the homelab Mac, the script also sends one mail when the server
   stops and one mail when it runs again.
 - The log is `~/.cron/logs/claude-remote-control.log`. The script empties it at
