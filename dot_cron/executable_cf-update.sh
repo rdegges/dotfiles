@@ -19,10 +19,10 @@ pkg="${CF_UPDATE_PACKAGE:-cf@latest}"
 marker="$HOME/.cron/logs/cf.FAILED"
 stamp="$HOME/.cron/logs/cf.ok"
 
-# oneline (lib/text.sh) turns CLI output into one marker line. A missing or
-# broken lib writes the marker and exits 1.
+# oneline (lib/text.sh) turns CLI output into one marker line. A missing,
+# broken, or incomplete lib writes the marker and exits 1.
 lib="$(dirname "$0")/lib/text.sh"
-if [ -r "$lib" ] && sh -n "$lib" 2>/dev/null && command . "$lib"; then :; else
+if [ -r "$lib" ] && sh -n "$lib" 2>/dev/null && command . "$lib" && command -v oneline >/dev/null 2>&1; then :; else
     printf '%s\n' "cf-update: cannot load $lib"
     mkdir -p "${marker%/*}"
     printf '%s\n' "$(date '+%F %R') cf-update: cannot load ~/.cron/lib/text.sh; run chezmoi apply" > "$marker"

@@ -69,10 +69,10 @@ statefile="$logs/tailscale-watchdog.state"
 account=icloud
 rcpt=r@rdegges.com
 
-# oneline (lib/text.sh) turns CLI output into one marker line. A missing or
-# broken lib writes the marker and exits 1 (no mail, no state change).
+# oneline (lib/text.sh) turns CLI output into one marker line. A missing,
+# broken, or incomplete lib writes the marker and exits 1 (no mail, no state change).
 lib="$(dirname "$0")/lib/text.sh"
-if [ -r "$lib" ] && sh -n "$lib" 2>/dev/null && command . "$lib"; then :; else
+if [ -r "$lib" ] && sh -n "$lib" 2>/dev/null && command . "$lib" && command -v oneline >/dev/null 2>&1; then :; else
     printf '%s\n' "tailscale-watchdog: cannot load $lib"
     mkdir -p "${marker%/*}"
     printf '%s\n' "$(date '+%F %R') tailscale-watchdog: cannot load ~/.cron/lib/text.sh; run chezmoi apply" > "$marker"

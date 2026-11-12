@@ -30,10 +30,10 @@ pkg="${REA_UPDATE_PACKAGE:-rea-agents@latest}"
 marker="$HOME/.cron/logs/rea.FAILED"
 stamp="$HOME/.cron/logs/rea.ok"
 
-# oneline (lib/text.sh) turns CLI output into one marker line. A missing or
-# broken lib writes the marker and exits 1.
+# oneline (lib/text.sh) turns CLI output into one marker line. A missing,
+# broken, or incomplete lib writes the marker and exits 1.
 lib="$(dirname "$0")/lib/text.sh"
-if [ -r "$lib" ] && sh -n "$lib" 2>/dev/null && command . "$lib"; then :; else
+if [ -r "$lib" ] && sh -n "$lib" 2>/dev/null && command . "$lib" && command -v oneline >/dev/null 2>&1; then :; else
     printf '%s\n' "rea-update: cannot load $lib"
     mkdir -p "${marker%/*}"
     printf '%s\n' "$(date '+%F %R') rea-update: cannot load ~/.cron/lib/text.sh; run chezmoi apply" > "$marker"

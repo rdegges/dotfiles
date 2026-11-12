@@ -240,10 +240,11 @@ for (const extra of [{}, { homelab: false }, { homelab: true }]) {
 // --- Lint: no job prints with echo or cleans text itself -------------------------
 //
 // What a pass proves: no file under dot_cron/ (lib/ excepted) uses echo, a
-// printf with a non-literal format, or private cleaning code (tr -c, cut -c, an
-// ESC literal, esc=/bel=, its own oneline), and every file that calls oneline
-// loads the lib with the loader. It checks non-comment lines only (a line
-// whose first non-blank character is #).
+// printf with a non-literal format or a %b format, or private cleaning code
+// (tr -c, cut -c, cut -b, head -c, an ESC literal, esc=/bel=, its own
+// oneline), and every file that calls oneline loads the lib with the loader.
+// It checks non-comment lines only (a line whose first non-blank character
+// is #).
 // What it does not prove: that every untrusted value reaching a marker or a
 // mail went through oneline. The banner covers the terminal for that gap.
 
@@ -252,7 +253,9 @@ const RULES = [
   ['a printf whose format is not one single-quoted literal', /\bprintf\b(?!\s+'[^']*'(?=[\s;|&)>]|$))/],
   ['tr -c or tr -cd', /\btr\s+(-\S+\s+)*-[A-Za-z]*[cC]/],
   ['cut -c', /\bcut\s+(-\S+\s+)*-[A-Za-z]*c/],
-  ['an ESC literal (\\033, \\x1b, \\e, or the byte)', /\\033|\\x1[bB]|\\e|\x1b/],
+  ['an ESC literal (\\033, \\33, \\x1b, \\e, or the byte)', /\\0?33(?![0-9])|\\x1[bB]|\\e|\x1b/],
+  ['printf %b', /\bprintf\b\s+'[^']*%b/],
+  ['cut -b or head -c', /\bcut\s+(-\S+\s+)*-[A-Za-z]*b|\bhead\s+(-\S+\s+)*-[A-Za-z]*c/],
   ['esc= or bel=', /\b(esc|bel)=/],
   ['a oneline() definition', /\boneline\s*\(\s*\)|\bfunction\s+oneline\b/],
 ]
@@ -263,7 +266,7 @@ const codeLines = (src) =>
 // The loader every job that calls oneline runs; <job> is the job's name.
 const LOADER = [
   'lib="$(dirname "$0")/lib/text.sh"',
-  'if [ -r "$lib" ] && sh -n "$lib" 2>/dev/null && command . "$lib"; then :; else',
+  'if [ -r "$lib" ] && sh -n "$lib" 2>/dev/null && command . "$lib" && command -v oneline >/dev/null 2>&1; then :; else',
   "    printf '%s\\n' \"<job>: cannot load $lib\"",
   '    mkdir -p "${marker%/*}"',
   "    printf '%s\\n' \"$(date '+%F %R') <job>: cannot load ~/.cron/lib/text.sh; run chezmoi apply\" > \"$marker\"",
@@ -290,6 +293,7 @@ test('lint: the rules catch each banned form and pass the allowed ones', () => {
     'echo hi', '    [ -n "$x" ] && echo "$x"', 'printf "$x"', 'printf "%s\\n" x', "printf '%s'\"$x\" y", 'printf $fmt', 'printf \\',
     "LC_ALL=C tr -cd '\\40-\\176'", 'tr -c a b', 'tr -dc a', 'tr -C a b', 'cut -c1-300', 'LC_ALL=C cut -b1 -c2',
     "x=$(printf '\\033')", 'a\\x1bb', 'a\\x1Bb', "printf '\\e[0m'", 'a\x1bb', 'esc=1', '  bel=$(x)', 'oneline() {', 'oneline () {', 'function oneline {',
+    "printf '%b\\n' \"$x\"", "x=$(printf '\\33')", 'cut -b1-300', 'head -c 300',
   ]
   for (const l of bad) assert.notDeepEqual(violations(l), [], `not caught: ${l}`)
   const good = [

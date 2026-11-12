@@ -1,7 +1,7 @@
 # Shared text cleaning for the ~/.cron jobs. Sourced, never run: each job that
 # calls oneline loads it right after its variables, with a loader that writes
 # the job's FAILED marker and exits 1 when this file is missing, unreadable,
-# or does not parse.
+# does not parse, or does not define oneline.
 #
 # This file only sets esc and bel and defines oneline. It runs no other
 # command and changes no `set` option.
