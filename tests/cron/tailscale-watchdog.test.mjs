@@ -20,7 +20,9 @@
 // `up`; an app that is not running is started with `open -g -b` for either
 // bundle id and an unknown id is not started. Each failure writes one marker
 // line and exits 1; mail goes to r@rdegges.com from the himalaya account
-// `icloud` only when the state changes (also across Running -> down -> Running
+// `icloud`, with the whole message on stdin (the stub, like himalaya 1.2.0,
+// ignores a message argument and panics on an empty stdin), only when the
+// state changes (also across Running -> down -> Running
 // -> down); a recovery mails once and clears the marker; a mail that cannot be
 // sent writes the marker, exits 1, and is retried by the next run.
 //
@@ -84,11 +86,19 @@ const STUBS = {
     '#!/bin/sh\necho "plutil $*" >> "$CALLS"\n' +
     'if [ -n "${STUB_PLUTIL_FAIL:-}" ]; then echo "Could not extract value, error: No value at that key path" >&2; exit 1; fi\n' +
     'printf "%s\\n" "${STUB_BUNDLE_ID:-io.tailscale.ipn.macos}"\n',
-  // Each sent message lands in $STATE/mail.<n>; the call line keeps every other arg.
+  // Like the real himalaya 1.2.0 `message send`: with a non-TTY stdin it reads
+  // the message from stdin and ignores any message argument, and an empty stdin
+  // makes it panic (exit 101, nothing sent), as measured on the homelab Mac. Each
+  // sent message (the stdin bytes) lands in $STATE/mail.<n>.
   himalaya:
     '#!/bin/sh\necho "himalaya $1 $2 $3 $4 ($# args)" >> "$CALLS"\n' +
+    'cat > "$STATE/stdin.tmp"\n' +
+    'if [ ! -s "$STATE/stdin.tmp" ]; then\n' +
+    '  printf "The application panicked (crashed).\\nMessage:  index out of bounds: the len is 0 but the index is 0\\nLocation: /cargo/registry/src/mail-parser-0.9.4/src/core/message.rs:89\\n" >&2\n' +
+    '  exit 101\n' +
+    'fi\n' +
     'if [ "${STUB_MAIL_RC:-0}" != 0 ]; then echo "cannot send message: smtp connection refused" >&2; exit "$STUB_MAIL_RC"; fi\n' +
-    'n=$(ls "$STATE" | grep -c "^mail\\.")\nprintf "%s" "$5" > "$STATE/mail.$((n + 1))"\n',
+    'n=$(ls "$STATE" | grep -c "^mail\\.")\nmv "$STATE/stdin.tmp" "$STATE/mail.$((n + 1))"\n',
   hostname: '#!/bin/sh\necho testhost\n',
 }
 
@@ -403,13 +413,38 @@ test('app not running, open succeeds but the app never shows up: FAILED after th
 
 // --- Mail --------------------------------------------------------------------------
 
-test('mail: account icloud, From and To r@rdegges.com, one raw message argument', () =>
+test('mail: account icloud, From and To r@rdegges.com, the whole message on stdin and no message argument', () =>
   withSandbox({ backend: 'NeedsLogin' }, (sb) => {
-    sb.run()
-    assert.deepEqual(sb.calls().filter((c) => c.startsWith('himalaya')), ['himalaya message send -a icloud (5 args)'])
+    const r = sb.run()
+    assert.doesNotMatch(r.stdout, /mail failed/, r.stdout)
+    assert.deepEqual(sb.calls().filter((c) => c.startsWith('himalaya')), ['himalaya message send -a icloud (4 args)'])
     const m = sb.mails()[0]
-    assert.match(m, /^From: r@rdegges\.com\nTo: r@rdegges\.com\nSubject: Tailscale is down on testhost: NeedsLogin\n\n/)
-    assert.match(m, /Reason: BackendState is NeedsLogin/)
+    assert.equal(
+      m,
+      'From: r@rdegges.com\nTo: r@rdegges.com\nSubject: Tailscale is down on testhost: NeedsLogin\n\n' +
+        'Tailscale on testhost is not up, and the watchdog could not fix it.\n\n' +
+        'Reason: BackendState is NeedsLogin; this needs a person (the watchdog never re-authenticates)\n\n' +
+        'The watchdog mails again only when this changes. The reason stays in ~/.cron/logs/tailscale-watchdog.FAILED until a run finds Tailscale Running.',
+    )
+    assert.equal(state(sb), 'NeedsLogin')
+  }))
+
+test('mail: the recovery mail (headers and body) also arrives on stdin', () =>
+  withSandbox({ backend: 'Stopped' }, (sb) => {
+    const r = sb.run()
+    assertHealthy(sb, r)
+    assert.match(sb.mails()[0], /^From: r@rdegges\.com\nTo: r@rdegges\.com\nSubject: Tailscale recovered on testhost\n\nTailscale on testhost is Running again\.\n\nWhat happened: BackendState was Stopped while logged in; the watchdog ran `tailscale up`\.$/)
+  }))
+
+test('mail: a himalaya panic (empty stdin, exit 101) is a failed send: marker, exit 1, state kept', () =>
+  withSandbox({ backend: 'NeedsLogin' }, (sb) => {
+    // A stub that sees no stdin at all, as `< /dev/null` gives it.
+    writeFileSync(join(sb.bin, 'himalaya'), STUBS.himalaya.replace('cat > "$STATE/stdin.tmp"', ': > "$STATE/stdin.tmp"'))
+    const r = sb.run()
+    assertFailed(sb, r, /the alert mail failed too/)
+    assert.match(r.stdout, /mail failed: The application panicked \(crashed\)\. Message:  index out of bounds/)
+    assert.equal(existsSync(sb.statefile), false)
+    assert.deepEqual(sb.mails(), [])
   }))
 
 test('mail only on change: the same failure twice mails once; a different failure mails again', () =>
@@ -709,8 +744,8 @@ test('a 5000-character, many-line `up` error: one marker line, bounded, and a on
   }))
 
 // Marker and mail text must stay valid UTF-8 when the CLI's own output is valid
-// UTF-8: the shell banner prints the marker, and himalaya takes the message as a
-// command-line argument. Under launchd there is no LANG, so `cut -c` counts bytes
+// UTF-8: the shell banner prints the marker, and himalaya sends the message it
+// reads on stdin. Under launchd there is no LANG, so `cut -c` counts bytes
 // (as GNU cut in this container always does) and can split a multi-byte character.
 test('a non-ASCII `up` error that crosses the 300-character cut: marker and mail stay valid UTF-8', () =>
   withSandbox({ backend: 'Stopped' }, (sb) => {
