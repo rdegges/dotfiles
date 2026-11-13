@@ -116,3 +116,7 @@
 [credential "https://gist.github.com"]
 	helper = 
 	helper = !{{ if eq .chezmoi.arch "arm64" }}/opt/homebrew{{ else }}/usr/local{{ end }}/bin/gh auth git-credential
+
+# Machine-local settings (e.g. commit signing) live in ~/.gitconfig.local, which is not managed. Git skips a missing include.
+[include]
+  path = ~/.gitconfig.local
