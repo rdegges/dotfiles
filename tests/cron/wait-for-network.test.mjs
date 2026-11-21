@@ -274,9 +274,9 @@ test('wait-for-network.sh: POSIX sh shebang, parses under sh -n and bash --posix
 const cskip = has('chezmoi') ? false : 'chezmoi not installed (see the run command at the top)'
 const MAC_TOOLS = { route: '/sbin', dscacheutil: '/usr/bin' }
 const JOBS = [
-  { job: 'chezmoi', runs: 'chezmoi update --force' },
-  { job: 'cf', runs: 'npm install --global cf@latest' },
-  { job: 'rea', runs: 'npm install --global rea-agents@latest' },
+  { job: 'chezmoi', says: 'chezmoi-update', runs: ['chezmoi update --force'] },
+  // The daily update job runs cf-update.sh and rea-update.sh, which wait too.
+  { job: 'update', says: 'update', runs: ['npm install --global cf@latest', 'npm install --global rea-agents@latest'] },
 ]
 
 // Rewrites absolute macOS system paths in a deployed script to live under root.
@@ -357,7 +357,7 @@ function launchdRun(job, { route }) {
   }
 }
 
-for (const { job, runs } of JOBS) {
+for (const { job, says, runs } of JOBS) {
   test(`launchd ${job}: under the plist's own PATH the network check can evaluate (finds route and dscacheutil)`, { skip: cskip }, () => {
     const r = launchdRun(job, { route: ROUTE_UP })
     assert.doesNotMatch(r.log, /wait-for-network: .*(not found|cannot check)/, r.log)
@@ -369,14 +369,14 @@ for (const { job, runs } of JOBS) {
     test(`launchd ${job}: no default route (${name}) -> the job skips and never runs its update`, { skip: cskip }, () => {
       const r = launchdRun(job, { route })
       assert.equal(r.status, 0, r.log)
-      assert.match(r.log, new RegExp(`^${job}-update: network not up; skipped$`, 'm'), r.log)
-      assert.ok(!r.calls.includes(runs), `ran "${runs}" with the network down; log:\n${r.log}`)
+      assert.match(r.log, new RegExp(`^${says}: network not up; skipped$`, 'm'), r.log)
+      for (const cmd of runs) assert.ok(!r.calls.includes(cmd), `ran "${cmd}" with the network down; log:\n${r.log}`)
     })
   }
 
   test(`launchd ${job}: network up -> the job runs its update`, { skip: cskip }, () => {
     const r = launchdRun(job, { route: ROUTE_UP })
-    assert.ok(r.calls.includes(runs), `"${runs}" never ran; log:\n${r.log}`)
+    for (const cmd of runs) assert.ok(r.calls.includes(cmd), `"${cmd}" never ran; log:\n${r.log}`)
     assert.doesNotMatch(r.log, /skipped/)
   })
 }

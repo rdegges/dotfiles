@@ -1,0 +1,9 @@
+{{- /* The daily software update: Homebrew, App Store apps, asdf plugins, pipx,
+     Oh My Zsh, Codex, cf, REA, and the pull request that bumps the asdf pins
+     (see dot_cron/executable_update.sh). On failure the script writes
+     ~/.cron/logs/update.FAILED, which every new shell prints. Daily at 10:00. */ -}}
+{{ template "launchagent.plist" (dict
+	"label" "com.rdegges.update"
+	"schedule" (list (dict "Hour" 10 "Minute" 0))
+	"command" `{ date; $HOME/.cron/update.sh; } > $HOME/.cron/logs/update.log 2>&1`
+	"home" .chezmoi.homeDir) -}}

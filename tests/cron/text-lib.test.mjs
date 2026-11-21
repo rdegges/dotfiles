@@ -384,7 +384,7 @@ test('lint: the rules catch each banned form and pass the allowed ones', () => {
 test('lint: every dot_cron file (lib/ excepted) is clean, and oneline callers load the lib first', () => {
   const files = cronFiles()
   assert.ok(files.length > 0, 'the lint scanned no files')
-  for (const job of ['app-update', 'cf-update', 'chezmoi-update', 'rea-update', 'tailscale-watchdog', 'vault-snapshot', 'wait-for-network']) {
+  for (const job of ['app-update', 'cf-update', 'chezmoi-update', 'rea-update', 'tailscale-watchdog', 'tool-versions-bump', 'update', 'vault-snapshot', 'wait-for-network']) {
     assert.ok(files.includes(`executable_${job}.sh`), `${job} not scanned: ${files.join(', ')}`)
   }
   assert.ok(files.includes('executable_claude-remote-control.sh.tmpl'), `claude-remote-control not scanned: ${files.join(', ')}`)

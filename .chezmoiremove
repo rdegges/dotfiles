@@ -16,3 +16,14 @@ AGENTS.md
 {{/* launchd runs the scheduled jobs now (Library/LaunchAgents); the crontab
      file they replaced has no reader left. */}}
 .cron/crontab
+
+{{/* One daily job (com.rdegges.update, ~/.cron/update.sh) replaced these eight.
+     The loader boots out their labels; this deletes their plist files. */}}
+Library/LaunchAgents/com.rdegges.asdf.plist
+Library/LaunchAgents/com.rdegges.brew.plist
+Library/LaunchAgents/com.rdegges.brew-cleanup.plist
+Library/LaunchAgents/com.rdegges.cf.plist
+Library/LaunchAgents/com.rdegges.codex.plist
+Library/LaunchAgents/com.rdegges.oh-my-zsh.plist
+Library/LaunchAgents/com.rdegges.pipx.plist
+Library/LaunchAgents/com.rdegges.rea.plist

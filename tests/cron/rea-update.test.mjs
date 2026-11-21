@@ -381,14 +381,13 @@ test('end to end: a stale Codex entry shows in the zsh banner, the next good run
 
 // --- Wiring --------------------------------------------------------------------
 
-// tests/cron/launch-agents.test.mjs proves the agent renders to this command.
-test('launchd: one daily 10:25 agent runs ~/.cron/rea-update.sh and logs to rea.log', () => {
+test('launchd: no agent of its own; the daily update job runs ~/.cron/rea-update.sh and logs to rea.log', () => {
   const dir = 'private_Library/LaunchAgents/'
   const users = readdirSync(join(SOURCE, dir)).filter((f) => read(dir + f).includes('rea-update.sh'))
-  assert.deepEqual(users, ['com.rdegges.rea.plist.tmpl'])
-  const agent = read(dir + users[0])
-  assert.match(agent, /^\t"command" `\{ date; \$HOME\/\.cron\/rea-update\.sh; \} > \$HOME\/\.cron\/logs\/rea\.log 2>&1`$/m)
-  assert.match(agent, /^\t"schedule" \(list \(dict "Hour" 10 "Minute" 25\)\)$/m)
+  assert.deepEqual(users, [])
+  const update = read('dot_cron/executable_update.sh')
+  assert.match(update, /^for job in cf rea; do$/m)
+  assert.match(update, /^        \{ date; "\$HOME\/\.cron\/\$job-update\.sh"; \} > "\$logs\/\$job\.log" 2>&1 < \/dev\/null$/m)
 })
 
 test('run_onchange: after_ script, re-runs on Node pin or script change, execs the cron script', () => {

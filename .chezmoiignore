@@ -12,6 +12,12 @@ tests
      Settings sync via ~/.config/vorssaint/settings.plist instead. */}}
 Library/Application Support/com.vorssaint.utils
 
+{{/* The pull request that bumps the asdf pins comes from personal Macs only:
+     the work Mac's gh account does not own the dotfiles repo. */}}
+{{ if .work }}
+.cron/tool-versions-bump.sh
+{{ end }}
+
 {{/* Codex delegation skill is work-only (needs an authenticated Codex sub). */}}
 {{ if not .work }}
 .claude/skills/codex-computer-use
