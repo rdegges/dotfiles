@@ -8,8 +8,9 @@
 //
 // What a pass proves: for work=false and work=true, chezmoi renders both
 // targets from this source tree with a throwaway HOME, neither is empty, and
-// they are byte-identical outside the ### Browser section, so opencode and
-// Claude Code read the same rules except for browsers. opencode's Browser
+// opencode's file is byte-identical to Codex's outside the ### Browser section
+// and the web-search line, so opencode never reads a rule for a Claude-only
+// tool, agent, or workflow (it used to get Claude's text). opencode's Browser
 // section is exactly the text that points it at its built-in `browser` tools
 // (Code Mode `tools.browser.*`, which need the OpenCode desktop app), and it
 // names no other agent's browser tool. A pass does not prove that the tools
@@ -55,6 +56,10 @@ function browser(text) {
   return m[0]
 }
 
+// What opencode and Codex share: everything but each one's Browser section and
+// its own name for the Parallel search tool.
+const shared = (text) => text.replace(BROWSER, '').replace(/^- Web search: use Parallel [^\n]*\n/m, '')
+
 // Every browser tool any agent has, plus Claude-only Browser text.
 const FORBIDDEN = ['mcp__claude-in-chrome', 'claude-in-chrome', 'Claude in Chrome', 'switch_browser', '/chrome', 'claude.ai', 'tester.md', 'codex-computer-use', 'Codex Chrome plugin', 'ChatGPT', 'Browser Control', 'browser-control', '@browser']
 const OPENCODE_BROWSER = `### Browser
@@ -68,13 +73,21 @@ const OPENCODE_BROWSER = `### Browser
 `
 
 for (const work of [false, true]) {
-  test(`work=${work}: opencode AGENTS.md is byte-identical to CLAUDE.md outside the Browser section`, () => {
-    const claude = render('.claude/CLAUDE.md', work)
+  test(`work=${work}: opencode AGENTS.md is byte-identical to the Codex AGENTS.md outside the Browser section and the web-search line`, () => {
+    const codex = render('.codex/AGENTS.md', work)
     const opencode = render('.config/opencode/AGENTS.md', work)
-    assert.ok(claude.startsWith('# Global CLAUDE.md'), JSON.stringify(claude.slice(0, 40)))
-    assert.notEqual(browser(opencode), browser(claude))
-    assert.ok(opencode.replace(BROWSER, '').length > 1000, 'nothing left outside the Browser section')
-    assert.equal(opencode.replace(BROWSER, ''), claude.replace(BROWSER, ''))
+    assert.ok(opencode.startsWith('# Global AGENTS.md'), JSON.stringify(opencode.slice(0, 40)))
+    assert.notEqual(browser(opencode), browser(codex))
+    assert.ok(shared(opencode).length > 1000, 'nothing left outside the Browser section')
+    assert.equal(shared(opencode), shared(codex))
+  })
+
+  test(`work=${work}: opencode render names no Claude-only tool, agent, workflow, or skill`, () => {
+    const oc = render('.config/opencode/AGENTS.md', work)
+    for (const t of ['CLAUDE.md', 'Bash tool', 'mcp__', 'acceptance-gate', 'gate-protocol', 'red-team-reviewer', 'bdfl', 'planner', 'tester', 'Gate REVISE rounds', 'SendMessage', 'pkms', 'WebFetch', 'codex-delegation', 'Navia']) {
+      assert.ok(!oc.includes(t), `opencode render contains ${t}`)
+    }
+    assert.ok(oc.includes('- Never run review gates or merge a PR. Finish on a non-default branch, open the PR with `gh`'), 'opencode render lacks the PR rule')
   })
 
   test(`work=${work}: opencode Browser section is exactly the built-in browser tools text`, () => {
@@ -123,7 +136,7 @@ const OPENCODE_DIR = '.config/opencode'
 const USER_FILES = { 'opencode.json': '{"theme":"mine"}\n', 'agent/review.md': 'my agent\n', 'AGENTS.md.bak': 'old\n' }
 
 for (const work of [false, true]) {
-  test(`work=${work}: apply writes ~/.config/opencode/AGENTS.md equal to ~/.claude/CLAUDE.md outside the Browser section and keeps the user's opencode files`, () => {
+  test(`work=${work}: apply writes ~/.config/opencode/AGENTS.md equal to ~/.codex/AGENTS.md outside the Browser section and the web-search line, and keeps the user's opencode files`, () => {
     applied(
       work,
       (home) => {
@@ -137,8 +150,8 @@ for (const work of [false, true]) {
         assert.ok(st.isFile(), `pass ${pass}: AGENTS.md is not a regular file`)
         assert.equal(st.mode & 0o111, 0, `pass ${pass}: AGENTS.md is executable`)
         const body = readFileSync(path, 'utf8')
-        assert.ok(body.startsWith('# Global CLAUDE.md'), `pass ${pass}: ${JSON.stringify(body.slice(0, 40))}`)
-        assert.equal(body.replace(BROWSER, ''), readFileSync(join(home, '.claude/CLAUDE.md'), 'utf8').replace(BROWSER, ''), `pass ${pass}: applied files differ`)
+        assert.ok(body.startsWith('# Global AGENTS.md'), `pass ${pass}: ${JSON.stringify(body.slice(0, 40))}`)
+        assert.equal(shared(body), shared(readFileSync(join(home, '.codex/AGENTS.md'), 'utf8')), `pass ${pass}: applied files differ`)
         assert.equal(browser(body), OPENCODE_BROWSER, `pass ${pass}: applied Browser section is not the built-in browser tools text`)
         for (const [f, b] of Object.entries(USER_FILES)) {
           assert.equal(readFileSync(join(home, OPENCODE_DIR, f), 'utf8'), b, `pass ${pass}: ${f} changed`)
@@ -277,7 +290,7 @@ for (const work of [false, true]) {
   for (const reader of ['codex', 'opencode', 'claude']) {
     test(`work=${work}: a reader=${reader} key in machine data does not change the opencode or Codex target`, () => {
       const oc = renderData('.config/opencode/AGENTS.md', { work, reader })
-      assert.ok(oc.startsWith('# Global CLAUDE.md'), JSON.stringify(oc.slice(0, 40)))
+      assert.ok(oc.startsWith('# Global AGENTS.md'), JSON.stringify(oc.slice(0, 40)))
       assert.equal(browser(oc), OPENCODE_BROWSER)
       const cx = renderData('.codex/AGENTS.md', { work, reader })
       assert.ok(cx.startsWith('# Global AGENTS.md'), JSON.stringify(cx.slice(0, 40)))

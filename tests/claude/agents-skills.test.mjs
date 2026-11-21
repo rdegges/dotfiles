@@ -34,9 +34,9 @@ import { join } from 'node:path'
 const SOURCE = new URL('../../', import.meta.url).pathname
 
 // Skills the Codex render names that have no file location to link.
-const EXCLUDED = {
-  '/pkms:process-inbox': 'plugin skill from the pkms plugin, not a skill folder',
-}
+// None now: the render no longer names the pkms plugin skill, which only
+// Claude Code has.
+const EXCLUDED = {}
 
 function chezmoi(home, work, args, input) {
   const r = spawnSync(

@@ -1008,7 +1008,7 @@ test('restart: the hash header changes with the agent, the shared template, the 
       assert.notEqual(render(), before, p)
     }
     const before = render()
-    appendFileSync(join(src, 'private_Library/LaunchAgents/com.rdegges.pipx.plist.tmpl'), '\n')
+    appendFileSync(join(src, 'private_Library/LaunchAgents/com.rdegges.update.plist.tmpl'), '\n')
     assert.equal(render(), before, 'another agent restarted the server')
   } finally {
     rmSync(src, { recursive: true, force: true })

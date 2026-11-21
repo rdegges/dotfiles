@@ -357,30 +357,21 @@ test('end to end: a failed run shows in the banner, the next good run clears it'
 
 // --- Wiring ------------------------------------------------------------------
 
-const agent = read('private_Library/LaunchAgents/com.rdegges.cf.plist.tmpl')
 const onchange = read('run_onchange_after_install-cloudflare-cli.sh.tmpl')
 
-test('launchd: one daily 10:10 agent runs ~/.cron/cf-update.sh and logs to cf.log', () => {
+test('launchd: no agent of its own; the daily update job runs ~/.cron/cf-update.sh and logs to cf.log', () => {
   const dir = new URL('private_Library/LaunchAgents/', ROOT)
   const users = readdirSync(dir).filter((f) => readFileSync(new URL(f, dir), 'utf8').includes('cf-update.sh'))
-  assert.deepEqual(users, ['com.rdegges.cf.plist.tmpl'])
-  assert.match(agent, /^\t"command" `\{ date; \$HOME\/\.cron\/cf-update\.sh; \} > \$HOME\/\.cron\/logs\/cf\.log 2>&1`$/m)
-  assert.match(agent, /^\t"schedule" \(list \(dict "Hour" 10 "Minute" 10\)\)$/m)
+  assert.deepEqual(users, [])
+  const update = read('dot_cron/executable_update.sh')
+  assert.match(update, /^for job in cf rea; do$/m)
+  assert.match(update, /^        \{ date; "\$HOME\/\.cron\/\$job-update\.sh"; \} > "\$logs\/\$job\.log" 2>&1 < \/dev\/null$/m)
 })
 
 test('launchd: PATH puts the asdf shims first so npm and cf resolve to the pinned Node', () => {
   const path = read('.chezmoitemplates/launchagent.plist').match(/<key>PATH<\/key>\n\t*<string>(.*)<\/string>/)
   assert.ok(path, 'no PATH entry')
   assert.equal(path[1].split(':')[0], '{{ .home | html }}/.asdf/shims')
-})
-
-test('launchd: the cf agent comment describes the failure signal the script really sends', () => {
-  // The script header says it deliberately does NOT send a macOS notification
-  // (it writes ~/.cron/logs/cf.FAILED instead). A comment saying otherwise
-  // sends the reader looking for a notification that never comes.
-  const comment = agent.match(/^\{\{- \/\*([\s\S]*?)\*\/ -\}\}/)[1]
-  assert.match(comment, /~\/\.cron\/logs\/cf\.FAILED/)
-  assert.doesNotMatch(comment, /notification/i, comment)
 })
 
 test('run_onchange: after_ script, re-runs on Node pin or script change, execs the cron script', () => {
