@@ -1,5 +1,6 @@
-// The CLAUDE.md gate rule's agent-worktree clauses (porcelain exception and
-// post-merge cleanup), checked against real git.
+// The gate-protocol skill's agent-worktree clauses (porcelain exception and
+// post-merge cleanup), checked against real git. The clauses were in CLAUDE.md;
+// CLAUDE.md now carries one pointer to the skill.
 //
 // Run from the repo root (chezmoi is needed; without it every test FAILS, it
 // does not skip):
@@ -28,14 +29,17 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync, existsSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync, existsSync, readFileSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 const SOURCE = new URL('../../', import.meta.url).pathname
 
-function render(work) {
+// The text the rules below are read from.
+const render = () => readFileSync(join(SOURCE, 'dot_claude/skills/gate-protocol/SKILL.md'), 'utf8')
+
+function renderRules(work) {
   const home = mkdtempSync(join(tmpdir(), 'wt-cleanup-'))
   try {
     const r = spawnSync(
@@ -56,7 +60,7 @@ function render(work) {
 // as an anchored regex where * matches one path segment.
 function porcelainGlob(text) {
   const m = text.match(/`git status --porcelain -uall` prints only `([^`]+)` lines/)
-  assert.ok(m, 'Claude render no longer states the -uall porcelain exception')
+  assert.ok(m, 'gate-protocol no longer states the -uall porcelain exception')
   const esc = m[1].replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '[^/]*')
   return { glob: m[1], re: new RegExp(`^${esc}$`) }
 }
@@ -104,11 +108,12 @@ function squash(f) {
 const isAncestor = (wt, ref) => sh(`git -C ${wt} merge-base --is-ancestor HEAD ${ref}`).code
 
 for (const work of [false, true]) {
-  test(`work=${work}: Claude render names the cleanup steps this file runs`, () => {
-    const t = render(work).replace(/\s*\n\s*/g, ' ')
+  test(`work=${work}: the gate-protocol skill names the cleanup steps this file runs, and the Claude render points at it`, () => {
+    assert.ok(renderRules(work).includes('load the `gate-protocol` skill and follow it'), 'the Claude render does not point at gate-protocol')
+    const t = render().replace(/\s*\n\s*/g, ' ')
     porcelainGlob(t)
     for (const s of ['`git -C <wt> status --porcelain` exits 0 and prints nothing', '`git -C <repo> fetch -q origin`', '`git -C <wt> merge-base --is-ancestor HEAD origin/<base>`', '`git worktree remove` (never `--force`)', '`gh pr view <n> --json state,headRefOid`', '`git -C <wt> rev-parse HEAD`', '`git worktree prune`', '`git branch -d`', '`git branch -D`']) {
-      assert.ok(t.includes(s), `Claude render lost ${s}`)
+      assert.ok(t.includes(s), `gate-protocol lost ${s}`)
     }
   })
 }

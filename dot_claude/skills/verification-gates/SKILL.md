@@ -1,6 +1,6 @@
 ---
 name: verification-gates
-description: "Load when building or changing a gate, CI check, eval, prompt, or AI pipeline, or when reading a subagent's report. Covers eval-driven AI work, gates that fail closed, checking external-system facts against authoritative artifacts, self-improving patterns, and the red flags for trusting reports and pre-filled verdicts."
+description: "Load when building or changing a gate, CI check, eval, prompt, AI pipeline, or scheduled job, after fixing an environment problem on one host, or when reading a subagent's report. Covers eval-driven AI work, gates that fail closed, checking external-system facts against authoritative artifacts, proving a scheduled job, carrying a host fix to every sibling, self-improving patterns, and the red flags for trusting reports and pre-filled verdicts."
 ---
 
 ## Verification gates
@@ -26,6 +26,10 @@ description: "Load when building or changing a gate, CI check, eval, prompt, or 
   vs. match, parse vs. serialize), find the doc or source line that says so or probe
   the difference; before adding fixtures to a test corpus, read the suite's gates on
   that corpus.
+
+### Scheduled jobs and environment fixes
+- A new or changed scheduled job is done only after one real triggered run and a confirmed failure signal that someone will see. A green run that had nothing to do proves nothing.
+- After fixing a problem on one host or in one shell environment (PATH, config vars, tool versions), list every other place the same trigger hits: sibling hosts, cron and boot tasks, update automations, non-interactive shells, CI, runbooks. Check each has the fix; name any you could not check.
 
 ### Gates Fail Closed
 

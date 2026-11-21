@@ -30,7 +30,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 const SOURCE = new URL('../../', import.meta.url).pathname
-const CLAUDE_ONLY = ['switch_browser', 'WebFetch', 'WebSearch', 'codex-computer-use', 'Bash tool', 'mcp__', 'acceptance-gate', 'tester', 'red-team-reviewer', 'bdfl', 'planner', 'Gate REVISE rounds', 'SendMessage']
+const CLAUDE_ONLY = ['switch_browser', 'WebFetch', 'WebSearch', 'codex-computer-use', 'Bash tool', 'mcp__', 'acceptance-gate', 'tester', 'red-team-reviewer', 'bdfl', 'planner', 'Gate REVISE rounds', 'SendMessage', 'gate-protocol', 'pkms:']
 const DELEGATION = '## Delegation (work machine)'
 const WORK_TRACKING = '## Work tracking (work machine)'
 
@@ -74,15 +74,13 @@ function withoutDelegation(text) {
 // Codex swaps both gate bullets whole, so none of their sentences is shared,
 // even the ones that name no Claude-only tool.
 function withoutGates(text) {
-  return text.replace(/^- (Non-trivial changes merge only when|Every plan goes through) .*\n/gm, '')
+  return text.replace(/^- (Non-trivial changes merge only when|Before you launch a gate|Every plan goes through) .*\n/gm, '')
 }
 
-// The worktree cleanup bullet is Claude-only: Codex has no harness worktrees.
-// The subagent resume bullet is Claude-only too: it names SendMessage.
+// The subagent resume bullet is Claude-only: it names SendMessage. (The
+// worktree cleanup bullet this also stripped lives in the gate-protocol skill now.)
 function withoutCleanup(text) {
-  return text
-    .replace(/^- After a PR merges or is abandoned, clean up the worktrees[^\n]*\n/m, '')
-    .replace(/^- A subagent that stops on a network or API error[^\n]*\n/m, '')
+  return text.replace(/^- A subagent that stops on a network or API error[^\n]*\n/m, '')
 }
 
 // Lines, less list markers, cut at sentence ends. A wrong cut only makes the
@@ -235,10 +233,13 @@ for (const work of [false, true]) {
     })
   })
 
-  test(`work=${work}: Codex carries the Navia standing exception word for word`, () => {
-    const m = claude().match(/Standing exception: while you follow the `navia-fsa-claims` skill[^\n]*?needs my confirmation\./)
-    assert.ok(m, 'no Navia standing exception in the Claude render')
-    assert.ok(codex().includes(m[0]))
+  // Only Codex has the navia-fsa-claims skill (dot_codex/skills), so only its
+  // rules carry the exception that the skill relies on.
+  test(`work=${work}: the Navia standing exception renders for Codex only, in the irreversible-step bullet`, () => {
+    const NAVIA = "ask me before doing it in Chrome. Standing exception: while you follow the `navia-fsa-claims` skill, my request to submit a Navia FSA claim authorizes that claim's final **Send claim to Navia** once its details match the source documents; accepting Navia's terms still needs my confirmation.\n"
+    assert.ok(codex().includes(NAVIA), 'Codex render lacks the Navia standing exception')
+    for (const t of [claude(), render('.config/opencode/AGENTS.md', work)]) assert.ok(!/Navia|Standing exception/.test(t), 'a render without the skill carries the Navia exception')
+    assert.ok(claude().includes('ask me before doing it in Chrome.\n'))
   })
 }
 
@@ -389,9 +390,16 @@ for (const work of [false, true]) {
   test(`work=${work}: agent worktree rules render for Claude only`, () => {
     const cl = render('.claude/CLAUDE.md', work)
     const cx = render('.codex/AGENTS.md', work)
-    assert.ok(cl.includes(PORCELAIN_CLAUDE), 'Claude render lacks the per-worktree porcelain exception')
-    assert.ok(cl.includes(`\n${CLEANUP} `), 'Claude render lacks the worktree cleanup bullet')
-    for (const s of SAFETY) assert.ok(cl.includes(s), `Claude render lost: ${s}`)
+    // The steps live in the gate-protocol skill, word for word; the rules
+    // that load in every session carry one pointer to it.
+    const skill = readFileSync(join(SOURCE, 'dot_claude/skills/gate-protocol/SKILL.md'), 'utf8')
+    assert.ok(skill.includes(`\n- ${PORCELAIN_CLAUDE}\n`), 'gate-protocol lacks the per-worktree porcelain exception')
+    assert.ok(skill.includes(`\n${CLEANUP} `), 'gate-protocol lacks the worktree cleanup bullet')
+    for (const s of SAFETY) assert.ok(skill.includes(s), `gate-protocol lost: ${s}`)
+    assert.ok(skill.includes("- When it returns, commit the files the tester's report lists under Tests added/modified, as they are (red included), in their own commit on the branch under review, and push it if the branch has a remote; delete tests meant to be ephemeral (scratch probes, throwaway harnesses) instead.\n"))
+    assert.match(skill, /^---\nname: gate-protocol\ndescription: "Load before you launch the acceptance-gate workflow, when a gate returns, and after a PR merges or is abandoned\./)
+    assert.ok(cl.includes('\n- Before you launch a gate, when a gate returns, and after a PR merges or is abandoned, load the `gate-protocol` skill and follow it: '), 'Claude render lacks the pointer to gate-protocol')
+    for (const t of [PORCELAIN, CLEANUP, 'headRefOid', '.claude/worktrees', 'Tests added/modified']) assert.ok(!cl.includes(t), `Claude render still carries the moved text: ${t}`)
     assert.ok(!cx.includes(PORCELAIN), 'Codex render contains the gate porcelain rule')
     assert.ok(!cx.includes(CLEANUP), 'Codex render contains the worktree cleanup bullet')
     assert.ok(!cx.includes('.claude/worktrees'))
@@ -490,9 +498,11 @@ for (const work of [false, true]) {
 
   // Follow-up the PR left open. It is a proposal, not an agreed contract: it
   // stays todo so it does not fail the suite.
-  test(`PROPOSED CONTRACT: work=${work}: Codex render names no Claude-plugin-only pkms agents or slash skills`, { todo: true }, () => {
+  test(`work=${work}: Codex render names no Claude-plugin-only pkms agents or slash skills, and keeps the vault rules`, () => {
     const cx = codex()
-    for (const t of ['pkms:librarian', 'pkms:archivist', '/pkms:process-inbox']) assert.ok(!cx.includes(t), `Codex render contains ${t}`)
+    for (const t of ['pkms:librarian', 'pkms:archivist', '/pkms:process-inbox', 'pkms']) assert.ok(!cx.includes(t), `Codex render contains ${t}`)
+    assert.ok(cx.includes('Read `Now.md` when the task touches my work, people, or projects. Follow `Preferences.md` §Vault Hygiene on every vault read and write. Never create new top-level folders.\n'))
+    assert.ok(cx.includes('and a `Now.md` update when my priorities shift. Vault linting is report-first.\n'))
   })
 }
 
@@ -524,12 +534,22 @@ for (const work of [false, true]) {
 
   // The shared-sentence check skips what withoutCleanup strips; an over-broad
   // strip would hide drift in neighbouring shared lines.
-  test(`work=${work}: withoutCleanup strips exactly the cleanup and resume bullets`, () => {
+  test(`work=${work}: withoutCleanup strips exactly the resume bullet`, () => {
     const cl = claude()
     const kept = withoutCleanup(cl).split('\n')
     const gone = cl.split('\n').filter((l) => !kept.includes(l))
-    assert.equal(gone.length, 2, JSON.stringify(gone.map((l) => l.slice(0, 60))))
-    assert.ok(gone[0].startsWith('- After a PR merges or is abandoned, clean up the worktrees'))
-    assert.equal(gone[1] + '\n', RESUME)
+    assert.equal(gone.length, 1, JSON.stringify(gone.map((l) => l.slice(0, 60))))
+    assert.equal(gone[0] + '\n', RESUME)
+  })
+
+  test(`work=${work}: the rules that load in every session stay small`, () => {
+    // Measured after the gate and worktree procedures moved to gate-protocol:
+    // about 8.9 KB for Claude on a personal Mac. The cap fails a change that
+    // puts a procedure back in place of a pointer to a skill.
+    const cap = work ? 12500 : 9500
+    for (const t of ['.claude/CLAUDE.md', '.codex/AGENTS.md', '.config/opencode/AGENTS.md']) {
+      const n = Buffer.byteLength(render(t, work))
+      assert.ok(n <= cap, `${t} is ${n} bytes (cap ${cap})`)
+    }
   })
 }

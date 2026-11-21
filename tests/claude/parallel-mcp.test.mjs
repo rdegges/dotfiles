@@ -620,7 +620,7 @@ for (const [reader, target, everyOs] of [
           assert.ok(t.includes(EMAIL + SEARCH_RULE[reader]), 'web-search rule is not right after the Email bullet')
         } else {
           assert.deepEqual(lines, [])
-          assert.ok(t.includes(EMAIL + '- A new or changed scheduled job'), 'Email bullet no longer runs straight into the next bullet')
+          assert.ok(t.includes(EMAIL + '\n### Browser\n'), 'Email bullet no longer closes the Environment list')
         }
       })
     }
