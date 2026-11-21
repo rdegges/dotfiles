@@ -34,6 +34,10 @@
 # Personal-only agents are not managed here when `work` is true, in the same way.
 # A managed job that is running, or whose state cannot be read, is left alone
 # and the run fails, so the next apply reloads it.
+# The job that runs this apply (the hourly chezmoi job) cannot reload itself.
+# After each bootstrap the loader keeps a copy of the plist in ~/.cron/loaded.
+# When the job's own plist equals that copy, launchd already has it and the run
+# does not fail. Only a change to that one plist needs a `chezmoi apply` by hand.
 # A service (always running) is never reloaded here: a loaded one, or one that
 # `launchctl disable` turned off, is left alone and the run does not fail; one
 # that is not loaded is bootstrapped. Its own restart script applies a change.
@@ -64,6 +68,16 @@ run() { if [ -n "$TO" ]; then "$TO" -k 5 30 "$@"; else "$@"; fi; }
 domain="gui/$(id -u)"
 self=
 rc=0
+
+# remember <label>: keep a copy of the plist that launchd just loaded.
+# unchanged <label>: the plist on disk equals that copy.
+loaded_dir="$HOME/.cron/loaded"
+mkdir -p "$loaded_dir"
+remember() { cat "$HOME/Library/LaunchAgents/$1.plist" > "$loaded_dir/$1.plist"; }
+unchanged() {
+    [ -r "$loaded_dir/$1.plist" ] && [ -r "$HOME/Library/LaunchAgents/$1.plist" ] \
+        && [ "$(<"$loaded_dir/$1.plist")" = "$(<"$HOME/Library/LaunchAgents/$1.plist")" ]
+}
 
 # bootout returns before launchd has fully removed the service, and a bootstrap
 # in that window fails. Wait (at most 10s) until `launchctl print` no longer
@@ -118,10 +132,15 @@ load_service() {
 for label in "${labels[@]}"; do
     case " ${services[*]} " in *" $label "*) load_service "$label"; continue ;; esac
     # Booting out the job that runs this apply (the hourly chezmoi job) would
-    # kill this script half way through. Load everything else, then fail so the
+    # kill this script half way through. When its plist did not change, there
+    # is nothing to reload. Otherwise load everything else, then fail so the
     # banner asks for an interactive apply.
     if [ "$label" = "${XPC_SERVICE_NAME:-}" ]; then
-        self=$label
+        if unchanged "$label"; then
+            echo "launch-agents: $label runs this apply and its plist did not change; left alone"
+        else
+            self=$label
+        fi
         continue
     fi
     # Never boot out a job that may be running. launchctl print exits 113 when
@@ -140,6 +159,7 @@ for label in "${labels[@]}"; do
     fi
     bootout "$label" || { rc=1; continue; }
     if run launchctl bootstrap "$domain" "$HOME/Library/LaunchAgents/$label.plist"; then
+        remember "$label"
         echo "launch-agents: loaded $label"
     else
         echo "launch-agents: ERROR: launchctl bootstrap $domain $label failed" >&2
