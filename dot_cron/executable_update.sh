@@ -58,8 +58,9 @@ brew_all() {
 }
 
 have brew && step brew brew_all
-# Mac App Store apps.
-have mas && step mas mas upgrade
+# No `mas upgrade` for App Store apps: mas 7 runs it through sudo, which needs
+# a password that no launchd job can give. The App Store updates its own apps
+# (System Settings > App Store > Automatic Updates).
 # Plugin repos only: the installed versions stay pinned by ~/.tool-versions,
 # and tool-versions-bump.sh (below) proposes new pins.
 have asdf && step asdf asdf plugin update --all

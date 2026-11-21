@@ -101,14 +101,16 @@ One job, `com.rdegges.update`, runs `~/.cron/update.sh` daily at 10:00 and
 writes `~/.cron/logs/update.log`. It replaced eight jobs. The steps, in order:
 
 1. Homebrew: `brew update`, `brew upgrade --no-quit`, `brew cleanup --prune=30`.
-2. Mac App Store apps: `mas upgrade`.
-3. asdf plugin repos: `asdf plugin update --all`. The installed versions stay
+2. asdf plugin repos: `asdf plugin update --all`. The installed versions stay
    pinned by `~/.tool-versions`.
-4. `pipx upgrade-all`, `git pull` in `~/.oh-my-zsh`, and `codex update`.
-5. `~/.cron/cf-update.sh` and `~/.cron/rea-update.sh`. These two keep their own
+3. `pipx upgrade-all`, `git pull` in `~/.oh-my-zsh`, and `codex update`.
+4. `~/.cron/cf-update.sh` and `~/.cron/rea-update.sh`. These two keep their own
    logs (`cf.log`, `rea.log`) and markers (`cf.FAILED`, `rea.FAILED`).
-6. On personal Macs, `~/.cron/tool-versions-bump.sh`, which opens a pull
+5. On personal Macs, `~/.cron/tool-versions-bump.sh`, which opens a pull
    request when an asdf pin in `dot_tool-versions` is behind.
+
+App Store apps are not in the pass: `mas upgrade` needs `sudo`. The App Store
+updates them (System Settings > App Store > Automatic Updates).
 
 A step whose tool is not installed is skipped. A failed step does not stop the
 later steps. If a step fails, the job writes `~/.cron/logs/update.FAILED` with
