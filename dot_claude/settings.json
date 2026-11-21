@@ -1,16 +1,16 @@
 {
-  "permissions": {
-    "defaultMode": "bypassPermissions",
-    "allow": [
-      "Edit(//Users/rdegges/Vault/Personal/**)",
-      "mcp__claude-in-chrome__javascript_tool"
-    ]
-  },
-  "model": "opus",
   "attribution": {
     "commit": "",
     "pr": ""
   },
+  "permissions": {
+    "allow": [
+      "Edit(//Users/rdegges/Vault/Personal/**)",
+      "mcp__claude-in-chrome__javascript_tool"
+    ],
+    "defaultMode": "bypassPermissions"
+  },
+  "model": "fable",
   "enabledPlugins": {
     "gopls-lsp@claude-plugins-official": true,
     "pkms@rdegges": true
@@ -22,22 +22,10 @@
         "repo": "anthropics/claude-plugins-official"
       }
     },
-    "mattpocock": {
-      "source": {
-        "source": "github",
-        "repo": "mattpocock/skills"
-      }
-    },
     "rdegges": {
       "source": {
         "source": "github",
         "repo": "rdegges/pkms"
-      }
-    },
-    "cloudflare": {
-      "source": {
-        "source": "github",
-        "repo": "cloudflare/skills"
       }
     }
   },
@@ -52,14 +40,14 @@
     "mode": "hold"
   },
   "skipDangerousModePermissionPrompt": true,
+  "remoteControlAtStartup": true,
   "inputNeededNotifEnabled": true,
   "agentPushNotifEnabled": true,
-  "remoteControlAtStartup": true,
-  "voiceEnabled": true,
   "autoMode": {
     "allow": [
       "$defaults",
       "Reads and writes to Snyk Atlassian (snyksec.atlassian.net, home.atlassian.com) through the Claude in Chrome tools, including Jira issue transitions, comments, and project or space changes, when the user asked for the change in chat."
     ]
-  }
+  },
+  "voiceEnabled": true
 }
