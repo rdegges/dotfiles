@@ -42,7 +42,7 @@ function exe(path, body) {
 
 // --- update.sh -------------------------------------------------------------------
 
-const ALL_TOOLS = ['brew', 'mas', 'asdf', 'pipx', 'git']
+const ALL_TOOLS = ['brew', 'asdf', 'pipx', 'git']
 // Each stub logs its call and whether stdin is a terminal or a file with data,
 // then exits STUB_<TOOL>_RC (default 0).
 const toolStub = (t) =>
@@ -99,7 +99,6 @@ const FULL_PASS = [
   'brew update --quiet',
   'brew upgrade --quiet --no-quit',
   'brew cleanup --prune=30 --quiet',
-  'mas upgrade',
   'asdf plugin update --all',
   'pipx upgrade-all',
   'git -C HOME/.oh-my-zsh pull -q',
@@ -127,18 +126,23 @@ for (const [name, shell] of SHELLS) {
 
   test(`[${name}] update: a failed step does not stop the pass; the marker names each failed step; exit 1`, () =>
     withUpdate({}, (sb) => {
-      const r = sb.run({ STUB_BREW_RC: '1', STUB_MAS_RC: '3' }, shell)
+      const r = sb.run({ STUB_BREW_RC: '1', STUB_PIPX_RC: '3' }, shell)
       assert.equal(r.status, 1, r.stdout + r.stderr)
       // brew stops at its first failed command; every later step still runs.
       assert.deepEqual(sb.calls().map((c) => c.replace(sb.home, 'HOME')), FULL_PASS.filter((c) => !/^brew (upgrade|cleanup)/.test(c)))
-      assert.match(readFileSync(sb.marker, 'utf8'), /^\d{4}-\d\d-\d\d \d\d:\d\d update failed: brew mas \(see ~\/\.cron\/logs\/update\.log\)\n$/)
+      assert.match(readFileSync(sb.marker, 'utf8'), /^\d{4}-\d\d-\d\d \d\d:\d\d update failed: brew pipx \(see ~\/\.cron\/logs\/update\.log\)\n$/)
       assert.ok(!existsSync(sb.stamp))
-      assert.match(r.stdout, /^update: mas FAILED: exit 3$/m)
+      assert.match(r.stdout, /^update: pipx FAILED: exit 3$/m)
       // The next clean pass replaces nothing and removes the marker.
       assert.equal(sb.run({}, shell).status, 0)
       assert.ok(!existsSync(sb.marker))
     }))
 }
+
+test('update: no step needs sudo (the App Store step did, so the App Store keeps its own apps current)', () => {
+  const code = readFileSync(UPDATE, 'utf8').split('\n').filter((l) => !l.trimStart().startsWith('#')).join('\n')
+  assert.doesNotMatch(code, /\b(sudo|mas)\b/)
+})
 
 test('update: a tool that is not installed is skipped, and the pass still succeeds', () =>
   withUpdate({ tools: ['brew'], codex: false, subjobs: false, bump: false, omz: false }, (sb) => {
@@ -189,7 +193,7 @@ test('update: network down with update.ok missing or over 72 hours old writes a 
 test('update: a wait status other than 1 (helper missing, cannot check) runs the pass', () =>
   withUpdate({}, (sb) => {
     for (const rc of ['2', '127']) assert.equal(sb.run({ STUB_WAIT_RC: rc }).status, 0)
-    assert.equal(sb.calls().filter((c) => c === 'mas upgrade').length, 2)
+    assert.equal(sb.calls().filter((c) => c === 'pipx upgrade-all').length, 2)
   }))
 
 test('update.sh and tool-versions-bump.sh: POSIX sh shebang, parse under sh -n and bash --posix -n', () => {
