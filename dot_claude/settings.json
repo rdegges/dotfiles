@@ -13,7 +13,8 @@
   "model": "fable",
   "enabledPlugins": {
     "gopls-lsp@claude-plugins-official": true,
-    "pkms@rdegges": true
+    "pkms@rdegges": true,
+    "parallel@synced": false
   },
   "extraKnownMarketplaces": {
     "claude-plugins-official": {
