@@ -52,6 +52,10 @@ const NODE = '#!/bin/sh\nv=$(basename "$(dirname "$(dirname "$0")")")\nprintf "n
 // rea uninstall: logs its args and how much stdin it got. STUB_REA_RC fails it.
 // It removes the client entries and skill folders unless STUB_REA_KEEP names
 // what it leaves (skills, mcp). STUB_REA_CODEX=edit|delete changes Codex's file.
+// Like the real rea-agents 6.10.1 (checked in Docker), it removes a client
+// entry only when the entry names its own install: an entry that names another
+// Node version's bin/rea is "not REA-owned", is retained, and the run still
+// exits 0. It removes the skill folders whatever their origin, as the real one does.
 const REA = `#!/bin/sh
 echo "rea $* stdin=$(cat | wc -c | tr -d ' ')" >> "$CALLS"
 [ -n "\${STUB_REA_RC:-}" ] && exit "$STUB_REA_RC"
@@ -59,9 +63,10 @@ case "\${STUB_REA_CODEX:-}" in
   edit) printf '%s\\n' '# rea was here' >> "$HOME/.codex/config.toml" ;;
   delete) rm -f "$HOME/.codex/config.toml" ;;
 esac
+self="$(cd "$(dirname "$0")/.." && pwd)/bin/rea"
 case " \${STUB_REA_KEEP:-} " in *" mcp "*) ;; *)
   for f in "$HOME/.claude.json" "$HOME/.config/opencode/opencode.json"; do
-    [ -f "$f" ] && printf '%s\\n' '{"mcpServers":{"parallel":{}}}' > "$f"
+    [ -f "$f" ] && grep -qF "$self" "$f" && printf '%s\\n' '{"mcpServers":{"parallel":{}}}' > "$f"
   done ;;
 esac
 case " \${STUB_REA_KEEP:-} " in *" skills "*) ;; *)
@@ -79,14 +84,21 @@ exit 0
 `
 const ASDF = '#!/bin/sh\necho "asdf $*" >> "$CALLS"\nexit "${STUB_ASDF_RC:-0}"\n'
 
-const CLAUDE_WITH_REA = '{"numStartups":3,"mcpServers":{"parallel":{"type":"http"},"rea":{"command":"node"}}}\n'
-const OPENCODE_WITH_REA = '{"mcp":{"parallel":{"type":"remote"},\n  "rea" : {"type":"local"}}}\n'
+// The entries name the Node version whose rea setup wrote them, as the real
+// ones do (command = <version>/bin/node, args = [<version>/bin/rea, "mcp"]).
+const CLAUDE_WITH_REA = (home, v = '26.13.0') => {
+  const d = join(home, '.asdf/installs/nodejs', v, 'bin')
+  return JSON.stringify({ numStartups: 3, mcpServers: { parallel: { type: 'http' }, rea: { command: join(d, 'node'), args: [join(d, 'rea'), 'mcp'] } } }) + '\n'
+}
+const OPENCODE_WITH_REA = (home, v = '26.13.0') =>
+  `{"mcp":{"parallel":{"type":"remote"},\n  "rea" : {"type":"local","command":["${join(home, '.asdf/installs/nodejs', v, 'bin/node')}","${join(home, '.asdf/installs/nodejs', v, 'bin/rea')}","mcp"]}}}\n`
 const CODEX = 'approval_policy = "never"\n\n[mcp_servers.parallel]\nurl = "https://search.parallel.ai/mcp"\n'
 
 // versions: Node versions to create; withRea: those that get bin/rea.
 // installed: whether REA's client entries and skill folders exist.
-function sandbox({ versions = ['26.13.0', '26.4.0', '28.0.0'], withRea = ['26.13.0', '26.4.0'], installed = true } = {}) {
-  const base = mkdtempSync(join(tmpdir(), 'uninstall-rea-'))
+// registeredIn: the Node version whose rea setup wrote the client entries.
+function sandbox({ versions = ['26.13.0', '26.4.0', '28.0.0'], withRea = ['26.13.0', '26.4.0'], installed = true, registeredIn = '26.13.0', baseName = 'uninstall-rea-' } = {}) {
+  const base = mkdtempSync(join(tmpdir(), baseName))
   const home = join(base, 'home')
   const bin = join(base, 'bin')
   const calls = join(base, 'calls')
@@ -108,8 +120,8 @@ function sandbox({ versions = ['26.13.0', '26.4.0', '28.0.0'], withRea = ['26.13
     writeFileSync(join(home, d, 'SKILL.md'), 'x\n')
   }
   if (installed) {
-    writeFileSync(join(home, '.claude.json'), CLAUDE_WITH_REA)
-    writeFileSync(join(home, '.config', 'opencode', 'opencode.json'), OPENCODE_WITH_REA)
+    writeFileSync(join(home, '.claude.json'), CLAUDE_WITH_REA(home, registeredIn))
+    writeFileSync(join(home, '.config', 'opencode', 'opencode.json'), OPENCODE_WITH_REA(home, registeredIn))
     for (const d of ['.claude/skills', '.agents/skills']) {
       mkdirSync(join(home, d, 'reverse-engineer-anything', 'references'), { recursive: true })
       writeFileSync(join(home, d, 'reverse-engineer-anything', 'SKILL.md'), 'rea\n')
@@ -121,6 +133,7 @@ function sandbox({ versions = ['26.13.0', '26.4.0', '28.0.0'], withRea = ['26.13
   }
   return {
     home,
+    bin,
     calls: () => readFileSync(calls, 'utf8').split('\n').filter(Boolean),
     run: (env = {}) =>
       spawnSync('bash', ['-c', BODY], {
@@ -191,7 +204,7 @@ test('installed in two Node versions: one rea uninstall, npm uninstall in each, 
   }))
 
 test('installed only in an older Node, not the pinned one the PATH shim uses: still found and removed', () =>
-  withSandbox({ withRea: ['26.4.0'] }, (sb) => {
+  withSandbox({ withRea: ['26.4.0'], registeredIn: '26.4.0' }, (sb) => {
     const r = sb.run()
     assert.equal(r.status, 0, r.stdout + r.stderr)
     assert.deepEqual(sb.calls(), ['node(26.4.0) rea uninstall --purge-data stdin=0', NPM_UN('26.4.0'), 'asdf reshim nodejs'])
@@ -286,8 +299,8 @@ test('absent, no asdf installs and no client files at all: exit 0', () =>
   }))
 
 for (const [what, setup, says] of [
-  ['a rea entry in ~/.claude.json', (h) => writeFileSync(join(h, '.claude.json'), CLAUDE_WITH_REA), '.claude.json'],
-  ['a rea entry in opencode.json', (h) => writeFileSync(join(h, '.config/opencode/opencode.json'), OPENCODE_WITH_REA), '.config/opencode/opencode.json'],
+  ['a rea entry in ~/.claude.json', (h) => writeFileSync(join(h, '.claude.json'), CLAUDE_WITH_REA(h)), '.claude.json'],
+  ['a rea entry in opencode.json', (h) => writeFileSync(join(h, '.config/opencode/opencode.json'), OPENCODE_WITH_REA(h)), '.config/opencode/opencode.json'],
   ['the skill folder in ~/.claude/skills', (h) => mkdirSync(join(h, SKILLS[0])), SKILLS[0]],
   ['the skill folder in ~/.agents/skills', (h) => mkdirSync(join(h, SKILLS[1])), SKILLS[1]],
 ]) {
@@ -339,4 +352,128 @@ test('chezmoi apply removes the deployed REA files and keeps the live ones', () 
   } finally {
     rmSync(base, { recursive: true, force: true })
   }
+})
+
+// --- Added by the tester -----------------------------------------------------
+//
+// What a pass proves (on top of the header): a Mac shaped like the one this
+// PR targets -- REA in several Node versions, the client entries written by
+// the pinned Node, which is not the first version in glob order, opencode's
+// entry under mcp.servers -- ends with no rea entry, no bin/rea, and exit 0.
+// The asdf-missing, no-Codex-file, dangling-symlink, and odd-HOME paths behave
+// as the script says. Rendered ~/.codex/config.toml has no rea table, and no
+// tracked file outside the uninstaller, .chezmoiremove, and tests still runs
+// or documents the REA updater.
+
+// A claude CLI stand-in for a fix that removes the entry through Claude Code
+// (as the old rea-update.sh did): "mcp remove rea -s user" drops mcpServers.rea.
+const CLAUDE_CLI = (nodeBin) => '#!/bin/sh\necho "claude $*" >> "$CALLS"\n' +
+  'if [ "$1 $2 $3" = "mcp remove rea" ]; then\n' +
+  '  "' + nodeBin + '" -e \'const f=process.env.HOME+"/.claude.json",fs=require("fs");const o=JSON.parse(fs.readFileSync(f,"utf8"));if(!o.mcpServers||!o.mcpServers.rea)process.exit(1);delete o.mcpServers.rea;fs.writeFileSync(f,JSON.stringify(o))\'\n' +
+  'fi\n'
+
+const reaKeyLeft = (home) =>
+  ['.claude.json', '.config/opencode/opencode.json'].filter((f) => existsSync(join(home, f)) && /"rea"\s*:/.test(readFileSync(join(home, f), 'utf8')))
+
+// Real-data shape of the target Mac (read-only look on 2026-11-21): Node
+// 25.8.0 (no REA), 26.13.0 and 26.13.1 (rea-agents 6.10.1), 26.4.0 (6.8.0);
+// pin 26.13.1; ~/.claude.json mcpServers.rea and opencode mcp.servers.rea both
+// name 26.13.1. Glob order puts 26.13.0 first. A Docker replay with the real
+// rea-agents 6.10.1 (same layout) retained both entries ("The rea-named
+// registration is not REA-owned"), npm-uninstalled REA everywhere, and exited 1
+// on the leftover check, on the first run and on every later apply.
+test('DEFECT: client entries written by the pinned Node, which is not first in glob order: still removed, exit 0', () =>
+  withSandbox({ versions: ['25.8.0', '26.13.0', '26.13.1', '26.4.0'], withRea: ['26.13.0', '26.13.1', '26.4.0'], registeredIn: '26.13.1' }, (sb) => {
+    const v = join(sb.home, '.asdf/installs/nodejs/26.13.1/bin')
+    writeFileSync(join(sb.home, '.config/opencode/opencode.json'),
+      JSON.stringify({ mcp: { parallel: { type: 'remote' }, servers: { rea: { type: 'local', command: [join(v, 'node'), join(v, 'rea'), 'mcp'], disabled: false } } } }, null, 2) + '\n')
+    exe(join(sb.bin, 'claude'), CLAUDE_CLI(process.execPath))
+    const r = sb.run()
+    assert.deepEqual(reaKeyLeft(sb.home), [], r.stdout + r.stderr)
+    for (const ver of ['26.13.0', '26.13.1', '26.4.0']) assert.ok(!existsSync(join(sb.home, '.asdf/installs/nodejs', ver, 'bin/rea')), ver)
+    assert.equal(r.status, 0, r.stdout + r.stderr)
+    assert.ok(!sb.calls().some((c) => c.startsWith('PATH rea')), sb.calls().join('\n'))
+  }))
+
+test('asdf is not on PATH: exit 1 after the npm uninstalls, and the message says to reshim', () =>
+  withSandbox({}, (sb) => {
+    rmSync(join(sb.bin, 'asdf'))
+    const r = sb.run()
+    assert.equal(r.status, 1, r.stdout + r.stderr)
+    // The uninstalls ran before the reshim step failed.
+    for (const v of ['26.13.0', '26.4.0']) assert.ok(sb.calls().includes(NPM_UN(v)), sb.calls().join('\n'))
+    assert.match(r.stderr, /asdf not found on PATH; run asdf reshim nodejs/)
+    assert.doesNotMatch(r.stdout, /uninstall-rea: done\./)
+  }))
+
+test('no ~/.codex/config.toml: nothing saved or restored, no file created, exit 0', () =>
+  withSandbox({}, (sb) => {
+    rmSync(join(sb.home, '.codex/config.toml'))
+    const r = sb.run()
+    assert.equal(r.status, 0, r.stdout + r.stderr)
+    assert.ok(sb.calls().includes(UNINSTALL), sb.calls().join('\n'))
+    assert.ok(!existsSync(join(sb.home, '.codex/config.toml')))
+    assert.doesNotMatch(r.stdout, /put chezmoi's copy back/)
+  }))
+
+test('rea uninstall leaves a dangling skill symlink: the script removes the link, exit 0', () =>
+  withSandbox({}, (sb) => {
+    const link = join(sb.home, SKILLS[0])
+    // REA_KEEP=skills keeps both folders; replace the Claude one with a link to nowhere.
+    rmSync(link, { recursive: true })
+    spawnSync('ln', ['-s', join(sb.home, 'gone'), link])
+    const r = sb.run({ STUB_REA_KEEP: 'skills' })
+    assert.equal(r.status, 0, r.stdout + r.stderr)
+    assert.equal(spawnSync('test', ['-L', link]).status, 1, 'the dangling link survived')
+    assert.ok(r.stdout.includes('removed ' + link), r.stdout)
+  }))
+
+test('absent, but a dangling reverse-engineer-anything symlink is left: exit 1 and it is named', () =>
+  withSandbox({ withRea: [], installed: false }, (sb) => {
+    spawnSync('ln', ['-s', join(sb.home, 'gone'), join(sb.home, SKILLS[1])])
+    const r = sb.run()
+    assert.equal(r.status, 1, r.stdout + r.stderr)
+    assert.deepEqual(sb.calls(), [])
+    assert.ok(r.stderr.includes(join(sb.home, SKILLS[1])), r.stderr)
+  }))
+
+test('a HOME path with a space and non-ASCII letters: full uninstall, exit 0', () =>
+  withSandbox({ baseName: 'uninstall rea é-' }, (sb) => {
+    const r = sb.run()
+    assert.equal(r.status, 0, r.stdout + r.stderr)
+    for (const v of ['26.13.0', '26.4.0']) assert.ok(!existsSync(join(sb.home, '.asdf/installs/nodejs', v, 'bin/rea')), v)
+    assert.deepEqual(reaKeyLeft(sb.home), [])
+    assert.equal(readFileSync(join(sb.home, '.codex/config.toml'), 'utf8'), CODEX)
+  }))
+
+for (const work of [false, true]) {
+  test('rendered ~/.codex/config.toml has no rea table and no REA path (work=' + work + ')', () => {
+    const home = mkdtempSync(join(tmpdir(), 'uninstall-rea-codex-'))
+    try {
+      const r = spawnSync('chezmoi', ['--source', SOURCE, '--destination', home, '--override-data', JSON.stringify({ work }), 'cat', join(home, '.codex/config.toml')], {
+        encoding: 'utf8',
+        env: { PATH: process.env.PATH, HOME: home },
+      })
+      assert.ifError(r.error)
+      assert.equal(r.status, 0, r.stderr)
+      assert.ok(r.stdout.length > 0)
+      assert.doesNotMatch(r.stdout, /mcp_servers\.rea|\/bin\/rea|rea-update/)
+      assert.ok(r.stdout.endsWith('\n') && !r.stdout.endsWith('\n\n\n'), JSON.stringify(r.stdout.slice(-40)))
+    } finally {
+      rmSync(home, { recursive: true, force: true })
+    }
+  })
+}
+
+test('no tracked file outside the uninstaller, .chezmoiremove, and tests runs or documents the REA updater', () => {
+  const r = spawnSync('git', ['-C', SOURCE, 'ls-files'], { encoding: 'utf8' })
+  // An exported tree (no .git) falls back to a walk of the source.
+  const files = r.status === 0 && r.stdout.trim()
+    ? r.stdout.trim().split('\n')
+    : spawnSync('find', ['.', '-type', 'f', '-not', '-path', './.git/*'], { cwd: SOURCE, encoding: 'utf8' }).stdout.trim().split('\n').map((f) => f.replace(/^\.\//, ''))
+  assert.ok(files.length > 20, 'the scan found almost no files')
+  const allowed = (f) => f === '.chezmoiremove' || f === TEMPLATE || f.startsWith('tests/')
+  const hits = files.filter((f) => !allowed(f) && existsSync(join(SOURCE, f)))
+    .filter((f) => /rea-update|rea-agents|rea setup|rea doctor|install-rea|mcp_servers\.rea/.test(readFileSync(join(SOURCE, f), 'utf8')))
+  assert.deepEqual(hits, [])
 })

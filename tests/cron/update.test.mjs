@@ -156,6 +156,16 @@ test('update: cf-update.sh reports for itself: its failure does not fail the pas
     assert.ok(!existsSync(sb.marker))
   }))
 
+test('update: a stale ~/.cron/rea-update.sh left on disk (before .chezmoiremove runs) is never run, and no rea.log is written', () =>
+  withUpdate({}, (sb) => {
+    exe(join(sb.home, '.cron', 'rea-update.sh'), '#!/bin/sh\necho "rea-update" >> "$CALLS"\n')
+    const r = sb.run()
+    assert.equal(r.status, 0, r.stdout + r.stderr)
+    assert.deepEqual(sb.calls().map((c) => c.replaceAll(sb.home, 'HOME')), FULL_PASS)
+    assert.ok(!existsSync(join(sb.logs, 'rea.log')))
+    assert.doesNotMatch(r.stdout, /rea/)
+  }))
+
 test('update: the pin bump is a step: its failure writes the marker', () =>
   withUpdate({}, (sb) => {
     const r = sb.run({ STUB_BUMP_RC: '1' })
