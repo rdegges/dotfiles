@@ -52,7 +52,9 @@ const exe = (p, body) => {
 // node runs the script it is given, as the real one does, and logs which
 // version's node it is. rea and npm are shell stubs that node runs.
 const NODE = '#!/bin/sh\nv=$(basename "$(dirname "$(dirname "$0")")")\nprintf "node(%s) " "$v" >> "$CALLS"\ns=$1; shift\nexec /bin/sh "$s" "$@"\n'
-// rea uninstall: logs its args and how much stdin it got. STUB_REA_RC fails it.
+// rea uninstall: logs its args and how much stdin it got. STUB_REA_RC fails it
+// (after any Codex change, so a failed run can still have edited that file);
+// STUB_REA_RC_IN=<version> limits the failure to that version's rea.
 // It removes the client entries and skill folders unless STUB_REA_KEEP names
 // what it leaves (skills, mcp). STUB_REA_CODEX=edit|delete changes Codex's file.
 // Like the real rea-agents 6.10.1 (checked in Docker), it removes a client
@@ -61,12 +63,14 @@ const NODE = '#!/bin/sh\nv=$(basename "$(dirname "$(dirname "$0")")")\nprintf "n
 // exits 0. It removes the skill folders whatever their origin, as the real one does.
 const REA = `#!/bin/sh
 echo "rea $* stdin=$(cat | wc -c | tr -d ' ')" >> "$CALLS"
-[ -n "\${STUB_REA_RC:-}" ] && exit "$STUB_REA_RC"
 case "\${STUB_REA_CODEX:-}" in
   edit) printf '%s\\n' '# rea was here' >> "$HOME/.codex/config.toml" ;;
   delete) rm -f "$HOME/.codex/config.toml" ;;
 esac
 self="$(cd "$(dirname "$0")/.." && pwd)/bin/rea"
+if [ -n "\${STUB_REA_RC:-}" ]; then
+  case "\${STUB_REA_RC_IN:-}" in ''|"$(basename "$(dirname "$(dirname "$self")")")") exit "$STUB_REA_RC" ;; esac
+fi
 case " \${STUB_REA_KEEP:-} " in *" mcp "*) ;; *)
   for f in "$HOME/.claude.json" "$HOME/.config/opencode/opencode.json"; do
     [ -f "$f" ] && grep -qF "$self" "$f" && printf '%s\\n' '{"mcpServers":{"parallel":{}}}' > "$f"
@@ -81,6 +85,7 @@ exit 0
 // fails it; STUB_NPM_KEEP=1 exits 0 but leaves bin/rea.
 const NPM = `#!/bin/sh
 echo "npm $*" >> "$CALLS"
+echo "\${PATH%%:*}" >> "$CALLS.path"
 [ -n "\${STUB_NPM_RC:-}" ] && exit "$STUB_NPM_RC"
 [ -n "\${STUB_NPM_KEEP:-}" ] || rm -f "$(dirname "$0")/rea"
 exit 0
@@ -138,6 +143,8 @@ function sandbox({ versions = ['26.13.0', '26.4.0', '28.0.0'], withRea = ['26.13
     home,
     bin,
     calls: () => readFileSync(calls, 'utf8').split('\n').filter(Boolean),
+    // The first PATH entry each npm uninstall saw, in call order.
+    npmPaths: () => (existsSync(calls + '.path') ? readFileSync(calls + '.path', 'utf8').split('\n').filter(Boolean) : []),
     run: (env = {}) =>
       spawnSync('bash', ['-c', BODY], {
         encoding: 'utf8',
@@ -493,4 +500,105 @@ test('an entry that no installed REA can remove: exit 1, and no npm uninstall ra
       assert.ok(existsSync(join(sb.home, '.asdf/installs/nodejs', v, 'lib/node_modules/rea-agents')), v + ' lib/node_modules/rea-agents')
     }
     assert.ok(r.stderr.includes('  an MCP entry named rea in ' + join(sb.home, '.claude.json')), r.stderr)
+  }))
+
+// --- Added by the tester (gate round 2) ------------------------------------
+//
+// What a pass proves (on top of the above): each npm uninstall runs with its
+// own version's bin/ first on PATH. A rea uninstall that fails in a later
+// install, after an earlier one already removed things, still stops before
+// any npm uninstall, and a rerun after the cause is gone finishes the job. A
+// failed rea uninstall that changed ~/.codex/config.toml gets chezmoi's bytes
+// back before the script exits. Entries written by two different installs
+// (one per client file) are both removed. The documented recovery for an
+// entry no installed REA owns ("remove them by hand, then run chezmoi apply")
+// works: reruns fail the same way without side effects until the entry is
+// gone, then the next run uninstalls everything.
+
+test('npm uninstall runs with that version\'s bin first on PATH (npm lifecycle scripts resolve node there)', () =>
+  withSandbox({}, (sb) => {
+    const r = sb.run()
+    assert.equal(r.status, 0, r.stdout + r.stderr)
+    assert.deepEqual(sb.npmPaths(), ['26.13.0', '26.4.0'].map((v) => join(sb.home, '.asdf/installs/nodejs', v, 'bin')))
+  }))
+
+test('rea uninstall fails only in the second install: exit 1 after both ran, no npm uninstall, every bin/rea stays; a clean rerun finishes', () =>
+  withSandbox({}, (sb) => {
+    const r = sb.run({ STUB_REA_RC: '4', STUB_REA_RC_IN: '26.4.0' })
+    assert.equal(r.status, 1, r.stdout + r.stderr)
+    assert.deepEqual(sb.calls(), [UNINSTALL, UN('26.4.0')])
+    assert.match(r.stderr, /rea uninstall --purge-data exited 4/)
+    for (const v of ['26.13.0', '26.4.0']) assert.ok(existsSync(join(sb.home, '.asdf/installs/nodejs', v, 'bin/rea')), v)
+    // The first install already removed the entries; the retry must not trip on that.
+    const again = sb.run()
+    assert.equal(again.status, 0, again.stdout + again.stderr)
+    assert.deepEqual(sb.calls().slice(2), FULL)
+    assert.deepEqual(reaKeyLeft(sb.home), [])
+  }))
+
+for (const change of ['edit', 'delete']) {
+  test(`rea uninstall fails after a ${change} of ~/.codex/config.toml: chezmoi's bytes are back before the exit 1`, () =>
+    withSandbox({}, (sb) => {
+      const r = sb.run({ STUB_REA_RC: '2', STUB_REA_CODEX: change })
+      assert.equal(r.status, 1, r.stdout + r.stderr)
+      assert.equal(readFileSync(join(sb.home, '.codex/config.toml'), 'utf8'), CODEX)
+      assert.match(r.stderr, /rea uninstall --purge-data exited 2/)
+      assert.deepEqual(sb.calls(), [UNINSTALL])
+    }))
+}
+
+test('the Claude Code entry from one install and the opencode entry from another: both removed, exit 0', () =>
+  withSandbox({ registeredIn: '26.4.0' }, (sb) => {
+    writeFileSync(join(sb.home, '.claude.json'), CLAUDE_WITH_REA(sb.home, '26.13.0'))
+    const r = sb.run()
+    assert.equal(r.status, 0, r.stdout + r.stderr)
+    assert.deepEqual(reaKeyLeft(sb.home), [])
+    assert.deepEqual(sb.calls(), FULL)
+  }))
+
+test('an entry no installed REA owns: reruns fail the same way and change nothing; after a hand removal the next run uninstalls everything', () =>
+  withSandbox({ versions: ['25.8.0', '26.13.0', '26.4.0'], registeredIn: '25.8.0' }, (sb) => {
+    const first = sb.run()
+    assert.equal(first.status, 1, first.stdout + first.stderr)
+    const second = sb.run()
+    assert.equal(second.status, 1, second.stdout + second.stderr)
+    assert.equal(second.stderr, first.stderr)
+    // Only the rea uninstall runs again; no npm uninstall, no reshim.
+    assert.deepEqual(sb.calls(), [UNINSTALL, UN('26.4.0'), UNINSTALL, UN('26.4.0')])
+    for (const v of ['26.13.0', '26.4.0']) assert.ok(existsSync(join(sb.home, '.asdf/installs/nodejs', v, 'bin/rea')), v)
+    // The hand fix the message asks for: drop the rea entries.
+    writeFileSync(join(sb.home, '.claude.json'), '{"mcpServers":{"parallel":{}}}\n')
+    writeFileSync(join(sb.home, '.config/opencode/opencode.json'), '{"mcp":{"parallel":{}}}\n')
+    const third = sb.run()
+    assert.equal(third.status, 0, third.stdout + third.stderr)
+    assert.deepEqual(sb.calls().slice(4), FULL)
+  }))
+
+// PROPOSED CONTRACT (not agreed by the maker; todo so it does not fail the
+// suite): a run that fails after the npm uninstalls (asdf missing or reshim
+// failing) leaves ~/.asdf/shims/rea. The retry then takes the "REA is not
+// installed" path, exits 0 without a reshim, and chezmoi never runs the script
+// again, so the dead shim stays first on PATH. Real asdf 0.20.2 removes that
+// shim on reshim (checked in Docker).
+test('PROPOSED CONTRACT: a retry after a failed reshim still reshims while ~/.asdf/shims/rea is left', { todo: true }, () =>
+  withSandbox({}, (sb) => {
+    exe(join(sb.home, '.asdf/shims/rea'), '#!/bin/sh\n')
+    assert.equal(sb.run({ STUB_ASDF_RC: '1' }).status, 1)
+    const before = sb.calls().length
+    const r = sb.run()
+    assert.equal(r.status, 0, r.stdout + r.stderr)
+    assert.deepEqual(sb.calls().slice(before), ['asdf reshim nodejs'], sb.calls().join('\n'))
+  }))
+
+// PROPOSED CONTRACT: npm's bin/rea is a symlink into lib/node_modules. If that
+// package dir is gone but the link stays, the glob still finds it, node fails
+// to load it, and every hourly apply fails with "rea uninstall --purge-data
+// exited 1" and no hint of the cause. A dangling bin/rea is arguably not an
+// install to run.
+test('PROPOSED CONTRACT: a dangling bin/rea symlink is not treated as an install that must run', { todo: true }, () =>
+  withSandbox({ withRea: ['26.13.0'], installed: false }, (sb) => {
+    const bin = join(sb.home, '.asdf/installs/nodejs/26.4.0/bin/rea')
+    spawnSync('ln', ['-s', '../lib/node_modules/rea-agents/dist/cli.js', bin])
+    const r = sb.run()
+    assert.equal(r.status, 0, r.stdout + r.stderr)
   }))
