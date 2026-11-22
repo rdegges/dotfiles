@@ -66,6 +66,45 @@ command -v npm >/dev/null 2>&1 || fail "npm not found on PATH"
 npm install --global "$pkg" || fail "npm install --global $pkg"
 command -v asdf >/dev/null 2>&1 && asdf reshim nodejs
 version=$(rea --version 2>&1) || fail "rea --version: $version"
+# A Node pin bump moves the npm globals to a new asdf install directory. The
+# registrations still name the old directory, and `rea setup` leaves an entry
+# alone when it does not point at the running install ("foreign"), then exits 1.
+# So remove a rea entry first, but only one that points into another asdf Node
+# install; setup writes it again below. Any other entry is not ours to judge and
+# still fails setup. ~/.claude.json goes through `claude mcp remove`, because a
+# running Claude Code session rewrites that file. REA_NODE_PREFIX lets a test
+# name the current install.
+if command -v node >/dev/null 2>&1; then
+    REA_NODE_PREFIX="${REA_NODE_PREFIX:-}" node - <<'JS' || printf '%s\n' "rea-update: could not check for registrations left by an older Node"
+const fs = require('fs'), path = require('path'), { execFileSync } = require('child_process')
+const home = process.env.HOME
+const prefix = (process.env.REA_NODE_PREFIX || path.resolve(process.execPath, '../..')) + '/'
+const root = home + '/.asdf/installs/nodejs/'
+const stale = (words) => {
+  const ours = (Array.isArray(words) ? words : []).filter((w) => typeof w === 'string' && w.startsWith(root))
+  return ours.length > 0 && ours.every((w) => !w.startsWith(prefix))
+}
+const load = (file) => { try { return JSON.parse(fs.readFileSync(file, 'utf8')) } catch { return null } }
+
+const claude = load(home + '/.claude.json')?.mcpServers?.rea
+if (claude && stale([claude.command, ...(claude.args || [])])) {
+  execFileSync('claude', ['mcp', 'remove', 'rea', '-s', 'user'], { stdio: 'inherit' })
+  console.log('rea-update: removed the Claude Code registration left by an older Node')
+}
+
+const file = home + '/.config/opencode/opencode.json'
+const open = load(file)
+let changed = false
+for (const holder of [open?.mcp, open?.mcp?.servers]) {
+  if (holder?.rea && stale(holder.rea.command)) { delete holder.rea; changed = true }
+}
+if (changed) {
+  fs.writeFileSync(file + '.rea-tmp', JSON.stringify(open, null, 2) + '\n')
+  fs.renameSync(file + '.rea-tmp', file)
+  console.log('rea-update: removed the OpenCode registration left by an older Node')
+}
+JS
+fi
 rea setup --client claude_code --client opencode --yes --json < /dev/null \
     || fail "rea setup --client claude_code --client opencode"
 rea doctor --client codex --json \
