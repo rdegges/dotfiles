@@ -1,0 +1,109 @@
+{{- if eq .chezmoi.os "darwin" -}}
+#!/bin/bash
+# Uninstall REA (https://rea.tools, npm package rea-agents), which these
+# dotfiles no longer install. Delete this script once every Mac shows no
+# ~/.asdf/installs/nodejs/*/bin/rea and no rea MCP entry.
+#
+# npm put REA into each asdf Node version that was pinned while it was in use,
+# so this looks for bin/rea in every version, not on PATH: the PATH shim can
+# point at a Node that never had REA while an older Node still does.
+#
+# `rea uninstall` is REA's own remover. It removes the Claude Code and opencode
+# MCP entries and the reverse-engineer-anything skill folders, and with
+# --purge-data also its caches and state (~/.rea/cache, ~/.rea/state,
+# ~/Library/Caches/rea/kuna, ~/Library/Caches/rea/process-helper). It has no
+# --client flag, so it also removes an entry it owns from ~/.codex/config.toml.
+# chezmoi owns that file, so this keeps a copy and puts it back if REA changes
+# it.
+#
+# Every step is local. A failed step exits 1, so chezmoi runs this again on
+# the next apply (it records a run_once_ script only when it succeeds), and
+# the hourly job shows ~/.cron/logs/chezmoi.FAILED until then.
+set -uo pipefail
+shopt -s nullglob
+
+installs="$HOME/.asdf/installs/nodejs"
+codex="$HOME/.codex/config.toml"
+skills=("$HOME/.claude/skills/reverse-engineer-anything" "$HOME/.agents/skills/reverse-engineer-anything")
+
+fail() {
+    echo "uninstall-rea: $1" >&2
+    exit 1
+}
+
+exists() { [ -e "$1" ] || [ -L "$1" ]; }
+
+# Print each REA item that is still here, one per line. An "rea" key anywhere
+# in a client file counts (a project-scoped entry too): a false match fails
+# the apply with the file named, never passes it.
+leftovers() {
+    local f d
+    for f in "$HOME/.claude.json" "$HOME/.config/opencode/opencode.json"; do
+        if [ -f "$f" ] && grep -q '"rea"[[:space:]]*:' "$f"; then
+            echo "an MCP entry named rea in $f"
+        fi
+    done
+    for d in "${skills[@]}"; do
+        if exists "$d"; then echo "$d"; fi
+    done
+}
+
+check_clean() {
+    local left
+    left=$(leftovers)
+    [ -z "$left" ] && return 0
+    echo "uninstall-rea: these REA items remain; remove them by hand, then run chezmoi apply:" >&2
+    printf '  %s\n' "$left" >&2
+    exit 1
+}
+
+versions=()
+for bin in "$installs"/*/bin/rea; do
+    versions+=("${bin%/bin/rea}")
+done
+
+if [ ${#versions[@]} -eq 0 ]; then
+    check_clean
+    echo "uninstall-rea: REA is not installed; nothing to do."
+    exit 0
+fi
+
+# One run is enough: it edits the shared client files, not the Node version.
+first=${versions[0]}
+saved=
+if [ -f "$codex" ]; then
+    saved=$(mktemp) || fail "mktemp failed"
+    trap 'rm -f "$saved"' EXIT
+    cp -p "$codex" "$saved" || fail "could not copy $codex"
+fi
+echo "uninstall-rea: rea uninstall --purge-data (Node ${first##*/})"
+"$first/bin/node" "$first/bin/rea" uninstall --purge-data < /dev/null
+rc=$?
+if [ -n "$saved" ] && ! cmp -s "$saved" "$codex"; then
+    cp -p "$saved" "$codex" || fail "rea uninstall changed $codex and the restore failed"
+    echo "uninstall-rea: rea uninstall changed $codex; put chezmoi's copy back"
+fi
+[ "$rc" -eq 0 ] || fail "rea uninstall --purge-data exited $rc"
+
+for d in "${skills[@]}"; do
+    if exists "$d"; then
+        rm -rf "$d" || fail "could not remove $d"
+        echo "uninstall-rea: removed $d"
+    fi
+done
+
+# Each version's own node runs its own npm, so the global prefix is that
+# version (bin/npm starts with `env node`, which would take the PATH Node).
+for dir in "${versions[@]}"; do
+    echo "uninstall-rea: npm uninstall --global rea-agents (Node ${dir##*/})"
+    PATH="$dir/bin:$PATH" "$dir/bin/node" "$dir/bin/npm" uninstall --global rea-agents < /dev/null \
+        || fail "npm uninstall --global rea-agents failed in Node ${dir##*/}"
+    exists "$dir/bin/rea" && fail "$dir/bin/rea is still there after npm uninstall"
+done
+
+command -v asdf >/dev/null 2>&1 || fail "asdf not found on PATH; run asdf reshim nodejs"
+asdf reshim nodejs < /dev/null || fail "asdf reshim nodejs failed"
+
+check_clean
+echo "uninstall-rea: done."
+{{ end -}}

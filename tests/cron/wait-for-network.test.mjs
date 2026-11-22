@@ -260,8 +260,8 @@ test('wait-for-network.sh: POSIX sh shebang, parses under sh -n and bash --posix
 // --- Under launchd -----------------------------------------------------------
 //
 // What a pass proves: run the way launchd runs them -- `/bin/sh -c <command>`
-// with exactly the EnvironmentVariables the rendered plist sets -- the chezmoi,
-// cf, and rea jobs reach the deployed ~/.cron/wait-for-network.sh, and it can
+// with exactly the EnvironmentVariables the rendered plist sets -- the chezmoi
+// and cf jobs reach the deployed ~/.cron/wait-for-network.sh, and it can
 // evaluate: it finds route and dscacheutil where macOS ships them
 // (/sbin/route and /usr/bin/dscacheutil, checked on macOS 27). With no default
 // route the job skips and never runs its update; with the network up the job
@@ -275,8 +275,8 @@ const cskip = has('chezmoi') ? false : 'chezmoi not installed (see the run comma
 const MAC_TOOLS = { route: '/sbin', dscacheutil: '/usr/bin' }
 const JOBS = [
   { job: 'chezmoi', says: 'chezmoi-update', runs: ['chezmoi update --force'] },
-  // The daily update job runs cf-update.sh and rea-update.sh, which wait too.
-  { job: 'update', says: 'update', runs: ['npm install --global cf@latest', 'npm install --global rea-agents@latest'] },
+  // The daily update job runs cf-update.sh, which waits too.
+  { job: 'update', says: 'update', runs: ['npm install --global cf@latest'] },
 ]
 
 // Rewrites absolute macOS system paths in a deployed script to live under root.
@@ -316,7 +316,7 @@ function launchdRun(job, { route }) {
       writeFileSync(dest, macify(read(`dot_cron/${f}`), root))
       chmodSync(dest, 0o755)
     }
-    // The shared text helper the cf and rea jobs load (dot_cron/lib/text.sh).
+    // The shared text helper the cf job loads (dot_cron/lib/text.sh).
     mkdirSync(join(home, '.cron', 'lib'))
     writeFileSync(join(home, '.cron', 'lib', 'text.sh'), read('dot_cron/lib/text.sh'))
     const put = (dir, name, body) => {
@@ -393,14 +393,13 @@ for (const shell of SHELLS) {
     }))
 }
 
-// chezmoi apply also runs cf-update.sh and rea-update.sh (run_onchange_after_*),
+// chezmoi apply also runs cf-update.sh (run_onchange_after_*),
 // keyed on the ~/.tool-versions hash. A network skip there would exit 0, so
 // chezmoi would record an install that did not happen as done. The templates
 // bypass the wait (WAIT_FOR_NETWORK=true), so an offline apply fails loudly and
 // runs again on the next apply.
 for (const [tmpl, script] of [
   ['run_onchange_after_install-cloudflare-cli.sh.tmpl', 'cf-update.sh'],
-  ['run_onchange_after_install-rea.sh.tmpl', 'rea-update.sh'],
 ]) {
   test(`${tmpl}: an offline chezmoi apply cannot record the install as done via a network skip`, () => {
     const src = read(tmpl)

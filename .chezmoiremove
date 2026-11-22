@@ -27,3 +27,15 @@ Library/LaunchAgents/com.rdegges.codex.plist
 Library/LaunchAgents/com.rdegges.oh-my-zsh.plist
 Library/LaunchAgents/com.rdegges.pipx.plist
 Library/LaunchAgents/com.rdegges.rea.plist
+
+{{/* REA is gone (run_once_after_uninstall-rea.sh.tmpl). These are the files
+     its updater and its own setup and uninstall left. The backup globs also
+     match the .rea.backup.<hash>.recovery copies that `rea uninstall` writes,
+     and the Codex backup it writes if it finds an entry there. */}}
+.cron/rea-update.sh
+.cron/logs/rea.log
+.cron/logs/rea.ok
+.cron/logs/rea.FAILED
+.claude.json.rea.backup*
+.config/opencode/opencode.json.rea.backup*
+.codex/config.toml.rea.backup*

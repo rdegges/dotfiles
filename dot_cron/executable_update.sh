@@ -3,14 +3,14 @@
 # one log (~/.cron/logs/update.log), one marker.
 #
 # It replaces eight jobs (brew, brew-cleanup, asdf, pipx, oh-my-zsh, codex, cf,
-# rea) that each had a schedule and a log, and most of which failed without a
-# signal. Every step runs, also after an earlier step fails. A step whose tool
+# and one since retired) that each had a schedule and a log, and most of which
+# failed without a signal. Every step runs, also after an earlier step fails. A step whose tool
 # is not installed is skipped.
 #
 # A failed step writes ~/.cron/logs/update.FAILED with the names of the failed
 # steps, and every new shell prints it (dot_zshrc) until a later pass has no
-# failure. cf-update.sh and rea-update.sh keep their own logs and markers
-# (chezmoi also runs them on a Node bump), so their status does not count here.
+# failure. cf-update.sh keeps its own log and marker (chezmoi also runs it on
+# a Node bump), so its status does not count here.
 #
 # Every tool comes from PATH, which lets a test stub each one.
 
@@ -69,7 +69,7 @@ have pipx && step pipx pipx upgrade-all
 # The explicit path, so an asdf shim or an old Homebrew install cannot answer.
 [ -x "$HOME/.local/bin/codex" ] && step codex "$HOME/.local/bin/codex" update
 
-for job in cf rea; do
+for job in cf; do
     if [ -x "$HOME/.cron/$job-update.sh" ]; then
         printf '%s\n' "== $job (log: ~/.cron/logs/$job.log)"
         { date; "$HOME/.cron/$job-update.sh"; } > "$logs/$job.log" 2>&1 < /dev/null

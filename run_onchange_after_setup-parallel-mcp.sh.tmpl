@@ -3,9 +3,9 @@
 # Register Parallel's Search MCP server (https://parallel.ai) for Claude Code
 # and opencode on personal machines, signed with my Parallel API key. Both
 # tools keep their user-level MCP servers in state files chezmoi must not own
-# (~/.claude.json, ~/.config/opencode/opencode.json, which `rea setup` also
-# writes), so this drives each CLI instead. Codex's entry is in
-# dot_codex/config.toml.tmpl, because chezmoi owns that file.
+# (~/.claude.json, ~/.config/opencode/opencode.json), so this drives each CLI
+# instead. Codex's entry is in dot_codex/config.toml.tmpl, because chezmoi owns
+# that file.
 #
 # The key comes from 1Password once per machine, into a 0600 file. It is read
 # here, not with a onepasswordRead template, because the hourly `chezmoi

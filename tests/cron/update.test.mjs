@@ -9,8 +9,8 @@
 //     and skips one that is not installed. A failed step does not stop the
 //     later steps; it writes update.FAILED (one line, replaced) with the names
 //     of the failed steps and exits 1. A clean pass removes the marker and
-//     touches update.ok. cf-update.sh and rea-update.sh write to their own
-//     logs, and their status does not fail the pass. A network skip (wait
+//     touches update.ok. cf-update.sh writes to its own log, and its
+//     status does not fail the pass. A network skip (wait
 //     status 1) runs nothing and exits 0, and writes a marker only when
 //     update.ok is missing or over 72 hours old.
 //   - tool-versions-bump.sh reads dot_tool-versions from main through `gh api`,
@@ -65,7 +65,7 @@ function updateSandbox({ tools = ALL_TOOLS, codex = true, subjobs = true, bump =
     exe(join(home, '.local', 'bin', 'codex'), toolStub('codex'))
   }
   if (subjobs) {
-    for (const j of ['cf', 'rea']) exe(join(home, '.cron', `${j}-update.sh`), `#!/bin/sh\necho "${j}-update" >> "$CALLS"\necho "${j} output"\nexit "\${STUB_SUB_RC:-0}"\n`)
+    for (const j of ['cf']) exe(join(home, '.cron', `${j}-update.sh`), `#!/bin/sh\necho "${j}-update" >> "$CALLS"\necho "${j} output"\nexit "\${STUB_SUB_RC:-0}"\n`)
   }
   if (bump) exe(join(home, '.cron', 'tool-versions-bump.sh'), toolStub('bump'))
   const wait = join(base, 'wait')
@@ -104,7 +104,6 @@ const FULL_PASS = [
   'git -C HOME/.oh-my-zsh pull -q',
   'codex update',
   'cf-update',
-  'rea-update',
   'bump ',
 ]
 
@@ -118,10 +117,9 @@ for (const [name, shell] of SHELLS) {
       assert.ok(!existsSync(sb.marker))
       assert.ok(existsSync(sb.stamp))
       assert.match(r.stdout, /^update: ok$/m)
-      // The two self-reporting jobs write to their own logs, not to this one.
+      // The self-reporting job writes to its own log, not to this one.
       assert.match(readFileSync(join(sb.logs, 'cf.log'), 'utf8'), /cf output/)
-      assert.match(readFileSync(join(sb.logs, 'rea.log'), 'utf8'), /rea output/)
-      assert.doesNotMatch(r.stdout, /cf output|rea output/)
+      assert.doesNotMatch(r.stdout, /cf output/)
     }))
 
   test(`[${name}] update: a failed step does not stop the pass; the marker names each failed step; exit 1`, () =>
@@ -151,7 +149,7 @@ test('update: a tool that is not installed is skipped, and the pass still succee
     assert.deepEqual(sb.calls(), FULL_PASS.slice(0, 3))
   }))
 
-test('update: cf-update.sh and rea-update.sh report for themselves: their failure does not fail the pass', () =>
+test('update: cf-update.sh reports for itself: its failure does not fail the pass', () =>
   withUpdate({}, (sb) => {
     const r = sb.run({ STUB_SUB_RC: '1' })
     assert.equal(r.status, 0, r.stdout + r.stderr)
