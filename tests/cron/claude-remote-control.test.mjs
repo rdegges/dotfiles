@@ -1005,6 +1005,95 @@ test('backstop: a log that stays under LOG_MAX (identical repaints) is kept', ()
     assert.equal((await exited(exit)).code, 0)
   }))
 
+
+// --- Log filter: tester additions --------------------------------------------------------------
+//
+// Modeled on claude 2.1.330's renderer: a log line (logStatus, logError, ...)
+// erases the block (ESC[<n>A ESC[J), writes the line on the marker's line, and
+// redraws the block with no marker of its own (its line count was reset).
+const MARKER8 = `${ESC}[8A${ESC}[J`
+
+for (const awk of ['original-awk', 'gawk', 'mawk']) {
+  test(`filter (${awk}): a log line drawn the 2.1.330 way, or a plain stderr line between repaints, is written once and costs at most 2 block copies; identical repaints after it add 0 bytes`, () => {
+    const A = statusBlock(8)
+    const logged = `${MARKER8}[10:00:00] Session completed (1m 2s) session_01FAKE\n` + A.slice(MARKER8.length)
+    assert.equal(filter(awk, bytes(A + A + logged + A.repeat(50))), bytes(A + logged + A))
+    assert.equal(filter(awk, bytes(A + A + logged + A.repeat(2))), filter(awk, bytes(A + A + logged + A.repeat(200))), 'repeats after a log line added bytes')
+    // A line with no marker in front of it joins the held block.
+    assert.equal(filter(awk, bytes(A + A + 'node: warning: something\n' + A.repeat(50))), bytes(A + A + 'node: warning: something\n' + A))
+  })
+
+  test(`filter (${awk}): a 512 KiB line passes whole (spawnSync's 1 MiB buffer is the test's limit, not the filter's)`, () => {
+    const long = 'x'.repeat(1 << 19) + '\n'
+    assert.equal(filter(awk, long), long)
+    const A = bytes(statusBlock(8))
+    assert.equal(filter(awk, A + long + A + A), A + long + A)
+  })
+
+  // BWK awk (original-awk and macOS /usr/bin/awk 20200816, checked by hand on
+  // the host) ends a record at a NUL byte: "a\0b" is written as "a". gawk and
+  // mawk keep it. A finding, left as todo so it is visible but does not fail.
+  test(`filter (${awk}): a NUL byte in a plain line passes unchanged`, awk === 'original-awk' ? { todo: 'BWK awk drops the bytes after a NUL in a record' } : {}, () => {
+    assert.equal(filter(awk, 'a\x00b\nnext\n'), 'a\x00b\nnext\n')
+  })
+}
+
+for (const shell of Object.keys(WRAPPER_SHELLS)) {
+  test(`filter (${shell}): a TERM, then a second TERM during the 5s drain (a process that claude started holds the FIFO): exit 0, no marker, temp folder removed`, { skip: shellSkip(shell) }, () =>
+    withWrapper({}, async (sb) => {
+      const { child, exit } = sb.start({ STUB_CLAUDE: 'repaint', STUB_REPAINTS: '2', STUB_LINGER: '1', STUB_STAY: '1' }, shell)
+      await until(() => sb.claudePid() && existsSync(join(sb.state, 'linger.pid')), 'claude and its lingering child')
+      const t0 = Date.now()
+      child.kill('SIGTERM')
+      await sleep(1000)
+      child.kill('SIGTERM')
+      const { code } = await exited(exit, 10000)
+      const ms = Date.now() - t0
+      assert.equal(code, 0, sb.logText())
+      assert.ok(ms >= 4000, `done in ${ms}ms: the drain did not wait, so this did not test it`)
+      assert.equal(sb.claudeSignals(), 'TERM\n')
+      assert.equal(existsSync(sb.marker), false)
+      assert.match(sb.logText(), /claude-remote-control: stopped \(claude exit 0\)/)
+      assert.equal(count(sb.logText(), STUB_BLOCK), 1, sb.logText())
+      assert.deepEqual(sb.tmpLeft(), [])
+    }))
+}
+
+test('dedupe: a TMPDIR with a space, a non-ASCII name, and a trailing slash (as macOS sets it) works, and its temp folder is removed', () =>
+  withWrapper({}, async (sb) => {
+    const tmp = join(sb.base, 'tmp dir é')
+    mkdirSync(tmp)
+    const r = sb.run({ TMPDIR: tmp + '/', STUB_CLAUDE: 'repaint', STUB_REPAINTS: '20', STUB_CLAUDE_RC: '3' })
+    assertFailed(sb, r, /claude remote-control exited \(exit 3\)/, 3)
+    assert.equal(count(sb.logText(), STUB_BLOCK), 1, sb.logText())
+    assert.deepEqual(readdirSync(tmp), [])
+  }))
+
+test('backstop: it keeps checking after its first empty, and the writers (O_APPEND) leave no NUL hole in the emptied log', () =>
+  withWrapper({}, async (sb) => {
+    const max = 20000
+    const { child, exit } = sb.start({ STUB_CLAUDE: 'repaint', STUB_REPAINTS: '100000', STUB_REPAINT_SLEEP: '0.02', STUB_REPAINT_VARY: '1', STUB_STAY: '1', CLAUDE_REMOTE_CONTROL_LOG_MAX: String(max), CLAUDE_REMOTE_CONTROL_LOG_CHECK: '1' })
+    let empties = 0
+    let prev = 0
+    let peak = 0
+    const t0 = Date.now()
+    while (empties < 2 && Date.now() - t0 < 20000) {
+      const size = existsSync(sb.log) ? statSync(sb.log).size : 0
+      if (size < prev) empties++
+      prev = size
+      peak = Math.max(peak, size)
+      await sleep(100)
+    }
+    assert.ok(empties >= 2, `the log was emptied ${empties} times in 20s`)
+    await until(() => /while running[^\n]*\n[\s\S]*space to show QR code/.test(sb.logText()), 'a block after the notice')
+    const text = sb.logText()
+    assert.ok(!text.includes('\0'), 'NUL bytes in the log: a writer kept its old offset after the empty')
+    assert.ok(peak < 4 * max, `the log reached ${peak} bytes with a ${max}-byte limit checked every second`)
+    child.kill('SIGTERM')
+    assert.equal((await exited(exit)).code, 0, sb.logText())
+    assert.equal(existsSync(sb.marker), false)
+  }))
+
 // --- Homelab mail -----------------------------------------------------------------------------
 
 test('mail (homelab): down mails once across a crash loop; back mails once; down again mails again (A->B->A)', () =>
