@@ -291,9 +291,13 @@ interactive session (see [AI coding tools](#ai-coding-tools)).
   seconds to write, and then stops it.
 - The script empties the log at start when it is more than 10 MB. While the
   server runs, the script examines the size of the log every 10 minutes. If the
-  log is more than 10 MB, the script empties it and writes a note in it. This
-  is necessary only if a new version of Claude Code changes its status block on
-  each draw.
+  log is more than 10 MB, the script empties it and writes a note in it.
+  Claude Code 2.1.330 already changes its status block on each draw in two
+  states. While it is Connecting, a spinner draws a new frame every 150 ms,
+  which is about 17 MB a day. While it is Reconnecting, each block shows the
+  time since the connection was lost. The filter cannot drop these blocks, so
+  the check limits the log in these states and in any new version that does the
+  same.
 
 Each Mac needs one step by hand before the server can start. Do these steps
 once:

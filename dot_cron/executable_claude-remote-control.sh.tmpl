@@ -26,8 +26,10 @@
 #     server runs, a check every 600 seconds empties it again when it is over
 #     10 MB, with a note in the log and no marker (the server is healthy). That
 #     is the backstop for a claude release whose repaint the filter cannot
-#     dedupe (a clock or a spinner in it). The plist's >> opens the log with
-#     O_APPEND, so emptying it under running writers is safe.
+#     dedupe (a clock or a spinner in it; 2.1.330 already does this while
+#     Connecting, with a 150 ms spinner, and while Reconnecting, with the
+#     elapsed time). The plist's >> opens the log with O_APPEND, so emptying it
+#     under running writers is safe.
 #   - claude's stdout and stderr go through the filter (awk, LC_ALL=C), not
 #     straight into the log. With no TTY, claude still repaints its status
 #     block about once a second: ESC[<n>A ESC[J, then the same ~8 lines. A block
@@ -45,7 +47,9 @@
 #     then the filter never sees EOF); then it is killed, and what it held is
 #     lost. If the filter dies while claude runs, claude's writes fail (EPIPE):
 #     the wrapper does not hang and keeps supervising claude. What the real
-#     claude does on EPIPE is not known.
+#     claude does on EPIPE is not known. Under a BWK awk (macOS /usr/bin/awk),
+#     the bytes after a NUL in a line are lost; claude is not known to print
+#     NULs.
 #   - Then it starts `claude remote-control` in the background and waits on it.
 #     A TERM or INT (launchctl bootout, a restart) goes on to claude; when claude
 #     has exited, this exits 0 and does not touch the marker. If claude still

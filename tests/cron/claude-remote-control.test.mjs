@@ -79,7 +79,11 @@
 // does when the filter dies and its writes fail (EPIPE), or macOS awk
 // 20200816 itself (Debian's original-awk is a later BWK release; mawk is not
 // used for the live runs, as it fills its whole read buffer before it reads a
-// record). Those are the rollout checks on each Mac.
+// record). Nor that the real claude's last output before it exits still reaches
+// the log now that its stdout is a pipe and not a file (Node writes to pipes
+// asynchronously on macOS, so a line written just before exit can be lost), or
+// that launchd's bootout TERM leaves the filter running through the drain.
+// Those are the rollout checks on each Mac.
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
