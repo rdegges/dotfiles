@@ -18,9 +18,34 @@
 #   - Preflight, failing closed: claude is on PATH, LocalHostName is a plain
 #     host name, ~/Code exists, and ~/.claude.json says that ~/Code is trusted.
 #     The trust is read with plutil and never written; a file or format that the
-#     check cannot read is a failure.
+#     check cannot read is a failure. Then the log filter's needs: awk is on
+#     PATH, and mktemp -d and mkfifo work. The temp folder is removed on every
+#     exit.
 #   - The log (~/.cron/logs/claude-remote-control.log, which the plist's
-#     redirect appends to) is emptied first when it is over 10 MB.
+#     redirect appends to) is emptied first when it is over 10 MB. While the
+#     server runs, a check every 600 seconds empties it again when it is over
+#     10 MB, with a note in the log and no marker (the server is healthy). That
+#     is the backstop for a claude release whose repaint the filter cannot
+#     dedupe (a clock or a spinner in it). The plist's >> opens the log with
+#     O_APPEND, so emptying it under running writers is safe.
+#   - claude's stdout and stderr go through the filter (awk, LC_ALL=C), not
+#     straight into the log. With no TTY, claude still repaints its status
+#     block about once a second: ESC[<n>A ESC[J, then the same ~8 lines. A block
+#     runs from one such marker line to the next. The filter drops a block equal
+#     to the last block it wrote, and passes all other output through. What it
+#     holds back: at most one block, written at the next marker or at EOF; a
+#     block that grows past 64 lines with no new marker is written at once; the
+#     END rule writes the held block and a partial last line; each write is
+#     flushed. awk has no clock, so a held block waits for the next marker or
+#     EOF however long that takes. The filter reads a FIFO, so $! stays claude's
+#     own pid. It starts first, and claude's redirect is the only writer the
+#     wrapper opens, so no other process of the wrapper holds the write end.
+#     After claude exits, the filter gets at most 5 seconds to write what it
+#     holds (a process that claude started can still hold the write end, and
+#     then the filter never sees EOF); then it is killed, and what it held is
+#     lost. If the filter dies while claude runs, claude's writes fail (EPIPE):
+#     the wrapper does not hang and keeps supervising claude. What the real
+#     claude does on EPIPE is not known.
 #   - Then it starts `claude remote-control` in the background and waits on it.
 #     A TERM or INT (launchctl bootout, a restart) goes on to claude; when claude
 #     has exited, this exits 0 and does not touch the marker. If claude still
@@ -46,13 +71,17 @@
 # writes the marker, and the state keeps the value that makes the next change
 # try again.
 #
-# CLAUDE_REMOTE_CONTROL_SETTLE overrides the 300 seconds, for a test.
+# CLAUDE_REMOTE_CONTROL_SETTLE overrides the 300 seconds,
+# CLAUDE_REMOTE_CONTROL_LOG_MAX the 10 MB (in bytes), and
+# CLAUDE_REMOTE_CONTROL_LOG_CHECK the 600 seconds, for a test.
 
 set -u
 
 # 1 on the homelab server Mac (rendered from the chezmoi `homelab` flag).
 mail={{ if index . "homelab" }}1{{ else }}0{{ end }}
 settle="${CLAUDE_REMOTE_CONTROL_SETTLE:-300}"
+logmax="${CLAUDE_REMOTE_CONTROL_LOG_MAX:-10485760}"
+logcheck="${CLAUDE_REMOTE_CONTROL_LOG_CHECK:-600}"
 dir="$HOME/Code"
 logs="$HOME/.cron/logs"
 log="$logs/claude-remote-control.log"
@@ -77,7 +106,7 @@ fi
 
 mkdir -p "$logs"
 size=$(wc -c < "$log" 2>/dev/null | tr -d ' ')
-if [ "${size:-0}" -gt 10485760 ] 2>/dev/null; then
+if [ "${size:-0}" -gt "$logmax" ] 2>/dev/null; then
     : > "$log"
     printf '%s\n' "claude-remote-control: the log was over 10 MB; emptied it"
 fi
@@ -159,17 +188,54 @@ trust=$(run 10 plutil -extract "projects.$dir.hasTrustDialogAccepted" raw -o - "
 [ "$trust" = true ] || fail "run \`claude\` in ~/Code once and accept the trust prompt, or the trust check cannot read ~/.claude.json (plutil: $(oneline "$trust"))"
 cd "$dir" || fail "cannot cd to $dir"
 
+# The log filter (see the header). Its program has no ESC literal and no
+# printf, for the lint in tests/cron/text-lib.test.mjs.
+dedupe='
+BEGIN { e = sprintf("%c", 27); mark = "^" e "\\[[0-9]+A" e "\\[J" }
+function release() { if (n && cur != last) { print cur; fflush(); last = cur } n = 0 }
+$0 ~ mark { release(); n = 1; cur = $0; next }
+n { cur = cur "\n" $0; if (++n > 64) { print cur; fflush(); last = cur; n = 0 } next }
+{ print; fflush() }
+END { release() }
+'
+tmp=
+trap '[ -z "$tmp" ] || rm -rf "$tmp"' EXIT
+command -v awk > /dev/null 2>&1 || fail "awk is not on PATH ($PATH); the log filter cannot start"
+tmp=$(mktemp -d "${TMPDIR:-/tmp}/claude-remote-control.XXXXXX") && [ -d "$tmp" ] || { tmp=; fail "mktemp -d failed; the log filter cannot start"; }
+fifo="$tmp/out"
+mkfifo "$fifo" || fail "mkfifo $fifo failed; the log filter cannot start"
+
+# drain: after claude has exited, give the filter at most 5 seconds to write
+# what it holds, then kill it. The wrapper holds no write end of the FIFO.
+drain() {
+    ( sleep 5; kill "$filter" ) < /dev/null > /dev/null 2>&1 &
+    guard=$!
+    while kill -0 "$filter" 2>/dev/null; do wait "$filter"; done
+    kill "$guard" 2>/dev/null
+}
+
 # The supervisor. Each trap sets $trapped, so the loop can tell a wait that a
 # signal cut short from a wait that returned claude's exit code.
 stopping=0 settled=0 cleared=0 child=
 trap 'trapped=1 stopping=1; [ -z "$child" ] || kill -TERM "$child" 2>/dev/null' TERM INT
 trap 'trapped=1 settled=1' USR1
-claude remote-control --name "$host" --spawn same-dir --permission-mode bypassPermissions &
+LC_ALL=C awk "$dedupe" < "$fifo" &
+filter=$!
+claude remote-control --name "$host" --spawn same-dir --permission-mode bypassPermissions > "$fifo" 2>&1 &
 child=$!
 [ "$stopping" = 0 ] || kill -TERM "$child" 2>/dev/null
 printf '%s\n' "claude-remote-control: started claude remote-control (pid $child) in $dir as $host"
 ( sleep "$settle" < /dev/null > /dev/null 2>&1; kill -USR1 $$ 2>/dev/null ) &
 timer=$!
+# The running backstop (see the header).
+( while sleep "$logcheck" > /dev/null 2>&1; do
+    size=$(wc -c < "$log" 2>/dev/null | tr -d ' ')
+    if [ "${size:-0}" -gt "$logmax" ] 2>/dev/null; then
+        : > "$log"
+        printf '%s\n' "claude-remote-control: the log was over 10 MB while running; emptied it (the repaint dedupe may no longer match)"
+    fi
+done ) < /dev/null &
+backstop=$!
 
 rc=
 until [ -n "$rc" ]; do
@@ -186,7 +252,8 @@ until [ -n "$rc" ]; do
         wait "$child"; rc=$?
     fi
 done
-kill "$timer" 2>/dev/null
+kill "$timer" "$backstop" 2>/dev/null
+drain
 
 if [ "$stopping" = 1 ]; then
     printf '%s\n' "$(date '+%F %T') claude-remote-control: stopped (claude exit $rc)"

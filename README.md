@@ -279,8 +279,21 @@ interactive session (see [AI coding tools](#ai-coding-tools)).
   with `lines`. Every new shell prints the marker. When the server runs for 5 minutes, the script removes
   the marker. On the homelab Mac, the script also sends one mail when the server
   stops and one mail when it runs again.
-- The log is `~/.cron/logs/claude-remote-control.log`. The script empties it at
-  start when it is more than 10 MB.
+- The log is `~/.cron/logs/claude-remote-control.log`. With no terminal, the
+  server draws its status block again about once a second, and each copy is
+  usually the same. The script sends the output of the server through a filter.
+  The filter drops a status block when it is equal to the last block that it
+  wrote. All other output goes to the log.
+- The filter holds back at most one block. It writes that block at the next
+  status block, or when the server stops. A block of more than 64 lines goes to
+  the log at once. The filter has no clock, so a held block stays in it until
+  the next status block. When the server stops, the script gives the filter 5
+  seconds to write, and then stops it.
+- The script empties the log at start when it is more than 10 MB. While the
+  server runs, the script examines the size of the log every 10 minutes. If the
+  log is more than 10 MB, the script empties it and writes a note in it. This
+  is necessary only if a new version of Claude Code changes its status block on
+  each draw.
 
 Each Mac needs one step by hand before the server can start. Do these steps
 once:

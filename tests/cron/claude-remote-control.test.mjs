@@ -4,10 +4,10 @@
 // Its plist, the shared template's `service` key, and the loader's service rules
 // are tested in tests/cron/launch-agents.test.mjs.
 //
-// Run from the repo root (chezmoi, python3, and bash are needed; without them
-// these tests FAIL, they do not skip):
+// Run from the repo root (chezmoi, python3, bash, original-awk, and gawk are
+// needed; without them these tests FAIL, they do not skip):
 //   docker run --rm -v "$PWD":/w -w /w node:latest sh -c \
-//     'apt-get update -qq && apt-get install -y -qq zsh >/dev/null &&
+//     'apt-get update -qq && apt-get install -y -qq zsh original-awk gawk >/dev/null &&
 //      sh -c "$(curl -fsLS get.chezmoi.io)" -- -b /usr/local/bin &&
 //      node --test tests/cron/'
 //
@@ -36,7 +36,26 @@
 // - with lib/text.sh missing or not parsing, the wrapper writes the marker
 //   ("cannot load"), exits 1, and never starts claude or mails; a lib cut short
 //   after oneline (no lines) still leaves the failure reason in the marker;
-// - a log over 10 MB is emptied at start, a smaller one is kept;
+// - a log over 10 MB is emptied at start, a smaller one is kept; while the
+//   server runs, a log over CLAUDE_REMOTE_CONTROL_LOG_MAX at a check (every
+//   CLAUDE_REMOTE_CONTROL_LOG_CHECK seconds) is emptied with the notice line and
+//   no marker, and a log under it is kept;
+// - claude's output goes through the dedupe filter, run by original-awk (a BWK
+//   awk, as macOS /usr/bin/awk is; the plain filter runs under gawk and mawk
+//   too): claude's stdout is the FIFO and $! is claude's pid (the TERM and exit
+//   code tests above); an identical repaint block adds 0 bytes; a changed block,
+//   A->B->A, and every other line are written; the filter holds at most one
+//   block: a 64-line block is held, and a block past 64 lines with no new
+//   marker is written while claude still runs; at EOF the held block and a
+//   partial last line are written, before the marker reads its last 20 lines;
+// - the filter's bound: with a process that claude started still holding the
+//   FIFO, the wrapper kills the filter after 5 seconds and writes the marker;
+//   after a TERM and after claude's own exit, the filter, the settle timer, and
+//   the backstop loop are gone when the wrapper exits, and the temp folder is
+//   removed (also on a preflight failure); a filter killed while the server
+//   runs does not hang the wrapper, which still forwards a TERM or writes the
+//   marker; no awk, a failing mktemp -d, or a failing mkfifo writes the marker,
+//   exits 1, and never starts claude;
 // - on the homelab render only, one mail goes out when the server goes down
 //   and one when it is back (not one per crash-loop restart, also across
 //   down -> up -> down), and a failed send writes the marker and is retried on
@@ -55,11 +74,16 @@
 // hasTrustDialogAccepted, real launchd KeepAlive and throttle timing, that the
 // server reconnects after sleep or wake, real plutil or scutil output, Apple's own
 // /bin/sh build (CRC_MACOS_SH is a Linux build of bash 3.2.57), or real mail
-// delivery. Those are the rollout checks on each Mac.
+// delivery. Nor that the real claude repaints the way the stub does (only the
+// stub's fixture, modeled on 2.1.330, is tested), what the real claude (Node)
+// does when the filter dies and its writes fail (EPIPE), or macOS awk
+// 20200816 itself (Debian's original-awk is a later BWK release; mawk is not
+// used for the live runs, as it fills its whole read buffer before it reads a
+// record). Those are the rollout checks on each Mac.
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync, writeFileSync, mkdirSync, mkdtempSync, existsSync, chmodSync, rmSync, readdirSync, cpSync, appendFileSync, utimesSync, statSync, realpathSync } from 'node:fs'
+import { readFileSync, writeFileSync, mkdirSync, mkdtempSync, existsSync, chmodSync, rmSync, readdirSync, cpSync, appendFileSync, utimesSync, statSync, realpathSync, symlinkSync } from 'node:fs'
 import { spawn, spawnSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -94,8 +118,43 @@ const renderWrapper = (homelab) => execTemplate(read(WRAPPER), { data: { ...DARW
 
 // --- Stubs -------------------------------------------------------------------------
 
+// STUB_CLAUDE=repaint draws the status block STUB_REPAINTS times the way the
+// real one repaints with no TTY (ESC[8A ESC[J, then 8 lines; made-up ids), one
+// every STUB_REPAINT_SLEEP seconds; STUB_REPAINT_VARY adds a counter line to each
+// block, and STUB_REPAINT_LAST that line to the last block only. Then
+// STUB_CLAUDE_TEXT, STUB_TAIL_LINES numbered lines, and STUB_PARTIAL with no
+// newline; STUB_LINGER leaves `sleep 60` holding claude's stdout (its pid in
+// $STATE/linger.pid). STUB_STAY then stays up like run, or else it exits
+// STUB_CLAUDE_RC.
+const REPAINT =
+  'block() {\n' +
+  "  printf '\\033[8A\\033[J\\302\\267\\342\\234\\224\\357\\270\\216\\302\\267 Connected \\302\\267 Code\\n'\n" +
+  "  printf '    Capacity: 1/32 \\302\\267 New sessions will be created in the current directory\\n'\n" +
+  "  printf '    \\033]8;;https://claude.ai/code/session_01FAKEFAKEFAKEFAKEFAKEFAKE?from=cli\\007testhost-fake-name\\033]8;;\\007\\n\\n'\n" +
+  "  printf 'Continue coding in the Claude mobile app or https://claude.ai/code?environment=env_01FAKEFAKEFAKEFAKEFAKEFAK\\n'\n" +
+  "  printf 'Or ask Claude to work in this folder from your projects on claude.ai\\n'\n" +
+  '  [ -z "$1" ] || printf "%s\\n" "$1"\n' +
+  "  printf 'space to show QR code\\n'\n" +
+  '}\n'
+const REPAINT_CASE =
+  'repaint)\n' +
+  `  trap 'echo TERM >> "$STATE/claude.signals"; exit 0' TERM\n` +
+  '  i=1; n=${STUB_REPAINTS:-3}\n' +
+  '  while [ "$i" -le "$n" ]; do\n' +
+  '    extra=; [ -z "${STUB_REPAINT_VARY:-}" ] || extra="up $i"; [ "$i" != "$n" ] || extra=${STUB_REPAINT_LAST:-$extra}\n' +
+  '    block "$extra"; i=$((i + 1)); [ -z "${STUB_REPAINT_SLEEP:-}" ] || sleep "$STUB_REPAINT_SLEEP"\n' +
+  '  done\n' +
+  '  [ -z "${STUB_CLAUDE_TEXT:-}" ] || printf "%s\\n" "$STUB_CLAUDE_TEXT"\n' +
+  '  i=1; while [ "$i" -le "${STUB_TAIL_LINES:-0}" ]; do echo "stub claude tail $i"; i=$((i + 1)); done\n' +
+  '  [ -z "${STUB_PARTIAL:-}" ] || printf "%s" "$STUB_PARTIAL"\n' +
+  '  if [ -n "${STUB_LINGER:-}" ]; then sleep 60 & echo $! > "$STATE/linger.pid"; fi\n' +
+  '  if [ -n "${STUB_STAY:-}" ]; then\n' +
+  '    while :; do [ -e "$STATE/die" ] && { echo "stub claude: connection lost"; exit "${STUB_DIE_RC:-4}"; }; sleep 0.1; done\n' +
+  '  fi\n' +
+  '  exit "${STUB_CLAUDE_RC:-1}" ;;\n'
+
 // claude: records its cwd, its pid, the binary of its parent (the shell that
-// runs the wrapper; Linux /proc only), its argv (one per line, written last),
+// runs the wrapper; Linux /proc only), what its stdout is (/proc only), its argv (one per line, written last),
 // and the signals it gets.
 // STUB_CLAUDE=run stays up until TERM, or until $STATE/die exists, then exits
 // STUB_DIE_RC (a crash after the settle time); STUB_CLAUDE=exit prints
@@ -105,7 +164,9 @@ const CLAUDE =
   'pwd > "$STATE/claude.cwd"\n' +
   'echo $$ > "$STATE/claude.pid"\n' +
   'readlink "/proc/$PPID/exe" > "$STATE/claude.parent" 2>/dev/null || :\n' +
+  'out=$(readlink "/proc/$$/fd/1" 2>/dev/null) && printf "%s\\n" "$out" > "$STATE/claude.stdout" || :\n' +
   'printf "%s\\n" "$@" > "$STATE/claude.args.tmp"; mv "$STATE/claude.args.tmp" "$STATE/claude.args"\n' +
+  REPAINT +
   'case "${STUB_CLAUDE:-run}" in\n' +
   'run)\n' +
   '  trap \'echo TERM >> "$STATE/claude.signals"; exit 0\' TERM\n' +
@@ -115,6 +176,7 @@ const CLAUDE =
   '  i=1; while [ "$i" -le "${STUB_CLAUDE_LINES:-3}" ]; do echo "stub claude line $i"; i=$((i + 1)); done\n' +
   '  [ -z "${STUB_CLAUDE_TEXT:-}" ] || printf "%s\\n" "$STUB_CLAUDE_TEXT"\n' +
   '  exit "${STUB_CLAUDE_RC:-1}" ;;\n' +
+  REPAINT_CASE +
   'esac\n'
 
 // plutil -extract <keypath> raw -o - <file>: walk the dotted key path in the
@@ -180,14 +242,26 @@ const shellSkip = (shell) => (shell === 'macos-sh' && !(MACOS_SH && existsSync(M
 // The binary that must be the wrapper's process for that variant.
 const shellBinary = (shell) => realpathSync(shell === 'sh' ? '/bin/sh' : shell === 'macos-sh' ? MACOS_SH : spawnSync('sh', ['-c', 'command -v bash'], { encoding: 'utf8' }).stdout.trim())
 
+// The awk binary with that name, for the awk the wrapper runs (bin/awk). A
+// missing one fails the test (see the run command at the top).
+function awkPath(name) {
+  const r = spawnSync('sh', ['-c', 'command -v "$0"', name], { encoding: 'utf8' })
+  assert.equal(r.status, 0, `${name} is not installed (see the run command at the top)`)
+  return r.stdout.trim()
+}
+
 // lib: 'ok' (the real lib/text.sh next to the wrapper, as chezmoi deploys it),
 // 'missing', 'syntax', or 'no-lines' (the real lib cut short before lines).
-function wrapperSandbox({ homelab = false, trusted = { Code: true }, code = true, stubs = Object.keys(STUBS), lib = 'ok', homeName = 'home dir' } = {}) {
+// awk: the awk that bin/awk links to (original-awk, a BWK awk like macOS
+// /usr/bin/awk, by default), or null for no bin/awk.
+function wrapperSandbox({ homelab = false, trusted = { Code: true }, code = true, stubs = Object.keys(STUBS), lib = 'ok', homeName = 'home dir', awk = 'original-awk' } = {}) {
   const base = mkdtempSync(join(tmpdir(), 'crc-'))
   const home = join(base, homeName)
   const bin = join(base, 'bin')
   const state = join(base, 'state')
-  for (const d of [home, bin, state]) mkdirSync(d)
+  const tmp = join(base, 'tmp')
+  for (const d of [home, bin, state, tmp]) mkdirSync(d)
+  if (awk) symlinkSync(awkPath(awk), join(bin, 'awk'))
   if (code) mkdirSync(join(home, 'Code'))
   for (const s of stubs) {
     writeFileSync(join(bin, s), STUBS[s])
@@ -209,7 +283,7 @@ function wrapperSandbox({ homelab = false, trusted = { Code: true }, code = true
   const logs = join(home, '.cron', 'logs')
   mkdirSync(logs, { recursive: true })
   const log = join(logs, 'claude-remote-control.log')
-  const env = (extra) => ({ HOME: home, PATH: `${bin}:${SYS_PATH}`, CALLS: calls, STATE: state, CLAUDE_REMOTE_CONTROL_SETTLE: '30', ...extra })
+  const env = (extra) => ({ HOME: home, PATH: `${bin}:${SYS_PATH}`, CALLS: calls, STATE: state, TMPDIR: tmp, CLAUDE_REMOTE_CONTROL_SETTLE: '30', ...extra })
   // The plist's command: the wrapper becomes this process and appends to its log.
   const argv = ['-c', 'exec "$0" >> "$HOME/.cron/logs/claude-remote-control.log" 2>&1', script]
   // Another shell variant: the same redirect, with the wrapper run by that shell.
@@ -230,6 +304,9 @@ function wrapperSandbox({ homelab = false, trusted = { Code: true }, code = true
     logText: () => (existsSync(log) ? readFileSync(log, 'utf8') : ''),
     claudeArgs: () => (existsSync(join(state, 'claude.args')) ? readFileSync(join(state, 'claude.args'), 'utf8').split('\n').slice(0, -1) : null),
     claudeSignals: () => (existsSync(join(state, 'claude.signals')) ? readFileSync(join(state, 'claude.signals'), 'utf8') : ''),
+    claudePid: () => (existsSync(join(state, 'claude.pid')) ? Number(readFileSync(join(state, 'claude.pid'), 'utf8')) : null),
+    // What the wrapper left in its TMPDIR (the filter's temp folder, if any).
+    tmpLeft: () => readdirSync(tmp),
     // The variant really ran the wrapper: claude's parent is that shell's binary
     // (checked where /proc exists, as in the Docker run).
     assertShell(shell) {
@@ -259,8 +336,10 @@ function wrapperSandbox({ homelab = false, trusted = { Code: true }, code = true
     // node never exits.
     cleanup() {
       for (const c of started) if (c.exitCode === null && c.signalCode === null) c.kill('SIGKILL')
-      const pid = join(state, 'claude.pid')
-      if (existsSync(pid)) try { process.kill(Number(readFileSync(pid, 'utf8')), 'SIGKILL') } catch {}
+      for (const f of ['claude.pid', 'linger.pid']) {
+        const pid = join(state, f)
+        if (existsSync(pid)) try { process.kill(Number(readFileSync(pid, 'utf8')), 'SIGKILL') } catch {}
+      }
       rmSync(base, { recursive: true, force: true })
     },
   }
@@ -340,6 +419,7 @@ for (const shell of Object.keys(WRAPPER_SHELLS)) {
       assert.equal(existsSync(sb.stamp), false, 'stopped before the settle time, but .ok was touched')
       assert.deepEqual(sb.mails(), [])
       assert.match(sb.logText(), /claude-remote-control: stopped \(claude exit 0\)/)
+      assert.deepEqual(sb.tmpLeft(), [], 'the temp folder was not removed')
     }))
 }
 
@@ -593,6 +673,8 @@ function rootedPath(sb, path) {
     writeFileSync(join(root, dir, tool), STUBS[tool])
     chmodSync(join(root, dir, tool), 0o755)
   }
+  // macOS ships a BWK awk as /usr/bin/awk.
+  symlinkSync(awkPath('original-awk'), join(root, '/usr/bin', 'awk'))
   return [...dirs.map((d) => root + d), SYS_PATH].join(':')
 }
 
@@ -643,6 +725,284 @@ test('log: over 10 MB at start, it is emptied; at 10 MB or less it is kept and a
     text = sb.logText()
     assert.ok(text.length < 10000, `log is ${text.length} bytes`)
     assert.match(text, /^claude-remote-control: the log was over 10 MB; emptied it\n/)
+  }))
+
+
+// --- Log filter: the repaint dedupe -----------------------------------------------------------
+//
+// The filter program, as the rendered wrapper holds it.
+const DEDUPE = renderWrapper(false).match(/^dedupe='\n([\s\S]*?)^'$/m)[1]
+const ESC = '\x1b'
+// One status block as claude 2.1.330 draws it with no TTY (made-up ids): the
+// marker ESC[<n>A ESC[J, then 8 lines (9 with an extra line).
+const statusBlock = (up, extra = '') =>
+  `${ESC}[${up}A${ESC}[J·✔︎· Connected · Code\n` +
+  '    Capacity: 1/32 · New sessions will be created in the current directory\n' +
+  `    ${ESC}]8;;https://claude.ai/code/session_01FAKEFAKEFAKEFAKEFAKEFAKE?from=cli\x07testhost-fake-name${ESC}]8;;\x07\n\n` +
+  'Continue coding in the Claude mobile app or https://claude.ai/code?environment=env_01FAKEFAKEFAKEFAKEFAKEFAK\n' +
+  'Or ask Claude to work in this folder from your projects on claude.ai\n' +
+  (extra ? `${extra}\n` : '') +
+  'space to show QR code\n'
+const numbered = (prefix, n) => Array.from({ length: n }, (_, i) => `${prefix} ${i + 1}\n`).join('')
+
+// The filter alone, under one awk, as the wrapper runs it (LC_ALL=C).
+function filter(awk, input) {
+  const r = spawnSync(awkPath(awk), [DEDUPE], { input: Buffer.from(input, 'latin1'), env: { LC_ALL: 'C', PATH: SYS_PATH } })
+  assert.ifError(r.error)
+  assert.equal(r.status, 0, r.stderr.toString())
+  return r.stdout.toString('latin1')
+}
+// Fixture text as bytes (UTF-8 encoded, then handled byte by byte).
+const bytes = (s) => Buffer.from(s, 'utf8').toString('latin1')
+
+for (const awk of ['original-awk', 'gawk', 'mawk']) {
+  test(`filter (${awk}): an identical repaint adds 0 bytes; each change (1A, 7A, 8A markers, new content, A->B->A) is written; other lines pass`, () => {
+    const pre = 'claude: starting\n\n'
+    const A = statusBlock(8)
+    const B = statusBlock(8, 'up 2')
+    const input = bytes(pre + statusBlock(1) + statusBlock(7) + statusBlock(7) + A.repeat(50) + B + A + A)
+    const want = bytes(pre + statusBlock(1) + statusBlock(7) + A + B + A)
+    assert.equal(filter(awk, input), want)
+    assert.equal(filter(awk, bytes(pre + A.repeat(2))), filter(awk, bytes(pre + A.repeat(200))), 'repeats added bytes')
+  })
+
+  test(`filter (${awk}): the 64-line cap: a 64-line block is held and deduped; a 65-line block is written whole at line 65, each time, and the lines after it pass`, () => {
+    // The marker shares its line with the first line after it.
+    const marker = `${ESC}[8A${ESC}[J`
+    const b64 = bytes(marker + numbered('held', 64))
+    assert.equal(filter(awk, b64 + b64), b64)
+    const b65 = bytes(marker + numbered('capped', 65))
+    assert.equal(filter(awk, b65 + b65), b65 + b65)
+    const long = bytes(statusBlock(8) + numbered('after', 100))
+    assert.equal(filter(awk, long + 'tail\n'), long + 'tail\n')
+  })
+
+  test(`filter (${awk}): at EOF the held block and a partial last line are written; plain bytes (escape codes, CR, non-ASCII) pass unchanged`, () => {
+    const odd = bytes('\x1b[31mréseau ☁ down\x07\x1b[0m \x1b]0;title\x07 raw\r\n')
+    assert.equal(filter(awk, odd), odd)
+    const A = bytes(statusBlock(8))
+    // The partial line is part of the held block, so that block differs and is written.
+    assert.equal(filter(awk, A + A + 'stub claude: partial'), A + A + 'stub claude: partial\n')
+    assert.equal(filter(awk, A + bytes(statusBlock(8, 'changed')) + 'partial'), A + bytes(statusBlock(8, 'changed')) + 'partial\n')
+    assert.equal(filter(awk, 'no newline'), 'no newline\n')
+    assert.equal(filter(awk, ''), '')
+  })
+}
+
+// The block as the stub writes it to the log (after it went through the filter).
+const STUB_BLOCK = statusBlock(8)
+const count = (text, s) => text.split(s).length - 1
+// claude's own bytes in the log: the log without the wrapper's lines.
+const claudeBytes = (text) =>
+  text
+    .split('\n')
+    .filter((l) => !/claude-remote-control: /.test(l))
+    .join('\n')
+
+for (const shell of Object.keys(WRAPPER_SHELLS)) {
+  test(`wrapper (${shell}): 50 identical repaints reach the log once through original-awk; claude exits 3: marker, exit 3, temp folder removed`, { skip: shellSkip(shell) }, () =>
+    withWrapper({}, async (sb) => {
+      const r = sb.run({ STUB_CLAUDE: 'repaint', STUB_REPAINTS: '50', STUB_CLAUDE_RC: '3' }, shell)
+      assertFailed(sb, r, /claude remote-control exited \(exit 3\)/, 3)
+      sb.assertShell(shell)
+      assert.equal(count(sb.logText(), STUB_BLOCK), 1, sb.logText())
+      assert.equal(count(sb.logText(), 'space to show QR code'), 1)
+      assert.deepEqual(sb.tmpLeft(), [])
+    }))
+}
+
+const hasProc = existsSync('/proc/self/stat')
+const NEEDS_PROC = hasProc ? false : 'needs Linux /proc (run it in Docker, see the top)'
+// Every process: pid, state, ppid, and comm, from /proc.
+function procs() {
+  return readdirSync('/proc')
+    .filter((d) => /^\d+$/.test(d))
+    .flatMap((d) => {
+      try {
+        const s = readFileSync(`/proc/${d}/stat`, 'utf8')
+        const rest = s.slice(s.lastIndexOf(')') + 2).split(' ')
+        return [{ pid: Number(d), comm: s.slice(s.indexOf('(') + 1, s.lastIndexOf(')')), state: rest[0], ppid: Number(rest[1]) }]
+      } catch {
+        return []
+      }
+    })
+}
+// A process that exists and is not a zombie.
+const alive = (pid) => procs().some((p) => p.pid === pid && p.state !== 'Z')
+// The wrapper's own children (the plist's sh execs the wrapper, so the
+// spawned pid is the wrapper's).
+const childrenOf = (pid) => procs().filter((p) => p.ppid === pid && p.state !== 'Z')
+const filterOf = (child) => childrenOf(child.pid).find((p) => p.comm === 'awk')
+
+test('dedupe: 50 identical repaints add 0 bytes to the log; claude writes to the FIFO in the temp folder and the TERM reaches it', { skip: NEEDS_PROC }, () =>
+  withWrapper({}, async (sb) => {
+    const sizes = []
+    for (const n of ['1', '50']) {
+      writeFileSync(sb.log, '')
+      sb.resetClaude()
+      const { child, exit } = sb.start({ STUB_CLAUDE: 'repaint', STUB_REPAINTS: n, STUB_STAY: '1' })
+      // One repaint stays held until EOF; 50 write the first block at the second marker.
+      await until(() => sb.claudeArgs() && existsSync(join(sb.state, 'claude.stdout')), 'claude to start')
+      await sleep(500)
+      assert.match(readFileSync(join(sb.state, 'claude.stdout'), 'utf8'), new RegExp(`^${sb.base}/tmp/claude-remote-control\\.[^/]+/out\\n$`))
+      child.kill('SIGTERM')
+      assert.equal((await exited(exit)).code, 0, sb.logText())
+      assert.equal(sb.claudeSignals(), 'TERM\n')
+      assert.equal(count(sb.logText(), STUB_BLOCK), 1, sb.logText())
+      sizes.push(Buffer.byteLength(claudeBytes(sb.logText())))
+    }
+    assert.equal(sizes[1], sizes[0], `50 repaints wrote ${sizes[1] - sizes[0]} bytes more than 1`)
+  }))
+
+test('dedupe: a changed block is written each time', () =>
+  withWrapper({}, async (sb) => {
+    sb.run({ STUB_CLAUDE: 'repaint', STUB_REPAINTS: '5', STUB_REPAINT_VARY: '1', STUB_CLAUDE_RC: '3' })
+    for (let i = 1; i <= 5; i++) assert.equal(count(sb.logText(), statusBlock(8, `up ${i}`)), 1, sb.logText())
+  }))
+
+test('dedupe: a plain error line after a repaint reaches the marker\'s last 20 lines', () =>
+  withWrapper({}, async (sb) => {
+    const r = sb.run({ STUB_CLAUDE: 'repaint', STUB_REPAINTS: '20', STUB_CLAUDE_TEXT: 'stub claude: error: connection reset', STUB_CLAUDE_RC: '3' })
+    const m = assertFailed(sb, r, /exited \(exit 3\)/, 3)
+    assert.match(m, /^ {2}\| stub claude: error: connection reset$/m)
+  }))
+
+test('dedupe: a changed block and a partial last line written just before exit show in the marker\'s last 20 lines', () =>
+  withWrapper({}, async (sb) => {
+    const r = sb.run({ STUB_CLAUDE: 'repaint', STUB_REPAINTS: '10', STUB_REPAINT_LAST: 'Capacity: 2/32 changed', STUB_PARTIAL: 'stub claude: partial, no newline', STUB_CLAUDE_RC: '3' })
+    const m = assertFailed(sb, r, /exited \(exit 3\)/, 3)
+    const lines = m.trimEnd().split('\n')
+    assert.equal(lines.at(-1), '  | stub claude: partial, no newline', m)
+    assert.ok(lines.includes('  | Capacity: 2/32 changed'), m)
+    assert.equal(count(sb.logText(), STUB_BLOCK), 1, 'the 9 identical blocks before it')
+  }))
+
+test('dedupe: after one marker, 100 lines with no new marker all reach the log while claude still runs (64-line cap)', () =>
+  withWrapper({}, async (sb) => {
+    const { child, exit } = sb.start({ STUB_CLAUDE: 'repaint', STUB_REPAINTS: '1', STUB_TAIL_LINES: '100', STUB_STAY: '1' })
+    await until(() => sb.logText().includes('stub claude tail 100\n'), 'the 100th line')
+    assert.equal(child.exitCode, null, 'the wrapper has exited')
+    assert.doesNotThrow(() => process.kill(sb.claudePid(), 0), 'claude has exited')
+    assert.ok(sb.logText().includes(STUB_BLOCK + numbered('stub claude tail', 100)), sb.logText())
+    child.kill('SIGTERM')
+    assert.equal((await exited(exit)).code, 0)
+  }))
+
+test('dedupe (gawk): identical repaints reach the log once, and the TERM path still works', () =>
+  withWrapper({ awk: 'gawk' }, async (sb) => {
+    const { child, exit } = sb.start({ STUB_CLAUDE: 'repaint', STUB_REPAINTS: '30', STUB_STAY: '1' })
+    await until(() => sb.logText().includes('space to show QR code') && sb.claudePid(), 'the first block')
+    await sleep(300)
+    child.kill('SIGTERM')
+    assert.equal((await exited(exit)).code, 0, sb.logText())
+    assert.equal(count(sb.logText(), STUB_BLOCK), 1, sb.logText())
+  }))
+
+// --- Log filter: its bound and its failures -----------------------------------------------
+
+for (const shell of Object.keys(WRAPPER_SHELLS)) {
+test(`filter (${shell}): a process that claude started still holds the FIFO (sleep 60 &), claude exits 3: the filter is killed after 5s, marker with exit 3 within 10s`, { skip: shellSkip(shell) }, () =>
+  withWrapper({}, async (sb) => {
+    const t0 = Date.now()
+    const { exit } = sb.start({ STUB_CLAUDE: 'repaint', STUB_REPAINTS: '2', STUB_LINGER: '1', STUB_CLAUDE_RC: '3' }, shell)
+    const { code } = await exited(exit, 10000)
+    const ms = Date.now() - t0
+    assert.equal(code, 3, sb.logText())
+    assert.ok(ms >= 4000, `done in ${ms}ms: the sleep did not hold the FIFO, so this did not test the bound`)
+    assert.match(readFileSync(sb.marker, 'utf8'), /claude remote-control exited \(exit 3\)/)
+    assert.ok(!hasProc || alive(Number(readFileSync(join(sb.state, 'linger.pid'), 'utf8'))), 'the lingering writer was gone, so this did not test the bound')
+    assert.deepEqual(sb.tmpLeft(), [])
+  }))
+}
+
+for (const shell of Object.keys(WRAPPER_SHELLS)) for (const how of ['a TERM', 'claude\'s own exit']) {
+  test(`filter (${shell}): after ${how}, the wrapper exits and its filter, settle timer, and backstop loop are gone; the temp folder is removed`, { skip: NEEDS_PROC || shellSkip(shell) }, () =>
+    withWrapper({}, async (sb) => {
+      const { child, exit } = sb.start({ STUB_CLAUDE: 'repaint', STUB_REPAINTS: '3', STUB_STAY: '1' }, shell)
+      await until(() => sb.claudePid() && filterOf(child) && childrenOf(child.pid).length >= 4, 'claude, the filter, the timer, and the backstop')
+      const kids = childrenOf(child.pid).map((p) => p.pid)
+      assert.ok(kids.includes(sb.claudePid()), 'claude is not the wrapper\'s child')
+      if (how === 'a TERM') child.kill('SIGTERM')
+      else writeFileSync(join(sb.state, 'die'), '')
+      const { code } = await exited(exit, 7000)
+      assert.equal(code, how === 'a TERM' ? 0 : 4, sb.logText())
+      await until(() => kids.every((pid) => !alive(pid)), 'the wrapper\'s children to be gone', 2000)
+      assert.deepEqual(sb.tmpLeft(), [])
+    }))
+}
+
+for (const shell of Object.keys(WRAPPER_SHELLS)) for (const then of ['TERM', 'claude exits']) {
+  test(`filter (${shell}): killed while the server runs: the wrapper does not hang, and on ${then} it still ${then === 'TERM' ? 'forwards the TERM (exit 0)' : 'writes the marker'}`, { skip: NEEDS_PROC || shellSkip(shell) }, () =>
+    withWrapper({}, async (sb) => {
+      const { child, exit } = sb.start({ STUB_CLAUDE: 'repaint', STUB_REPAINTS: '3', STUB_STAY: '1' }, shell)
+      await until(() => sb.claudePid() && filterOf(child), 'claude and the filter')
+      process.kill(filterOf(child).pid, 'SIGKILL')
+      await sleep(300)
+      assert.ok(alive(child.pid), 'the wrapper exited when the filter died')
+      if (then === 'TERM') {
+        child.kill('SIGTERM')
+        assert.equal((await exited(exit, 7000)).code, 0, sb.logText())
+        assert.equal(sb.claudeSignals(), 'TERM\n')
+        assert.equal(existsSync(sb.marker), false)
+      } else {
+        writeFileSync(join(sb.state, 'die'), '')
+        // The stub's last echo hits the closed FIFO: exit 4, or 141 (SIGPIPE).
+        const { code } = await exited(exit, 7000)
+        assert.ok(code === 4 || code === 141, `exit ${code}`)
+        assert.match(readFileSync(sb.marker, 'utf8'), new RegExp(`claude remote-control exited \\(exit ${code}\\)`))
+      }
+      assert.deepEqual(sb.tmpLeft(), [])
+    }))
+}
+
+// A PATH dir with every tool of /usr/bin and /bin but awk.
+function pathWithoutAwk(sb) {
+  const dir = join(sb.base, 'noawk')
+  mkdirSync(dir)
+  const seen = new Set()
+  for (const d of SYS_PATH.split(':'))
+    for (const f of readdirSync(d)) if (!/awk/.test(f) && !seen.has(f)) seen.add(f), symlinkSync(join(d, f), join(dir, f))
+  return `${sb.bin}:${dir}`
+}
+
+for (const [name, opts, setup] of [
+  ['awk is not on PATH', { awk: null }, (sb) => ({ PATH: pathWithoutAwk(sb) })],
+  ['mktemp -d fails', {}, (sb) => (writeFileSync(join(sb.bin, 'mktemp'), '#!/bin/sh\necho "mktemp: cannot create" >&2\nexit 1\n'), chmodSync(join(sb.bin, 'mktemp'), 0o755), {})],
+  ['mkfifo fails', {}, (sb) => (writeFileSync(join(sb.bin, 'mkfifo'), '#!/bin/sh\necho "mkfifo: cannot create" >&2\nexit 1\n'), chmodSync(join(sb.bin, 'mkfifo'), 0o755), {})],
+]) {
+  test(`preflight: ${name}: the log filter cannot start: marker, exit 1, claude never starts, no temp folder left`, () =>
+    withWrapper(opts, async (sb) => {
+      const env = setup(sb)
+      assertPreflight(sb, sb.run(env), /the log filter cannot start/)
+      assert.deepEqual(sb.tmpLeft(), [])
+    }))
+}
+
+// --- Log filter: the running backstop ---------------------------------------------------------
+
+test('backstop: repaints with changing content push the log over LOG_MAX: a check empties it, with the notice line, and no marker', () =>
+  withWrapper({}, async (sb) => {
+    const { child, exit } = sb.start({ STUB_CLAUDE: 'repaint', STUB_REPAINTS: '100000', STUB_REPAINT_SLEEP: '0.02', STUB_REPAINT_VARY: '1', STUB_STAY: '1', CLAUDE_REMOTE_CONTROL_LOG_MAX: '20000', CLAUDE_REMOTE_CONTROL_LOG_CHECK: '1' })
+    await until(() => sb.logText().includes('the log was over 10 MB while running'), 'the notice')
+    const text = sb.logText()
+    assert.match(text, /^claude-remote-control: the log was over 10 MB while running; emptied it \(the repaint dedupe may no longer match\)$/m)
+    assert.ok(!text.includes('starting (pid'), 'the log was not emptied')
+    child.kill('SIGTERM')
+    assert.equal((await exited(exit)).code, 0)
+    assert.equal(existsSync(sb.marker), false)
+  }))
+
+test('backstop: a log that stays under LOG_MAX (identical repaints) is kept', () =>
+  withWrapper({}, async (sb) => {
+    const { child, exit } = sb.start({ STUB_CLAUDE: 'repaint', STUB_REPAINTS: '100000', STUB_REPAINT_SLEEP: '0.02', STUB_STAY: '1', CLAUDE_REMOTE_CONTROL_LOG_MAX: '20000', CLAUDE_REMOTE_CONTROL_LOG_CHECK: '1' })
+    await until(() => sb.claudePid(), 'claude to start')
+    await sleep(3500)
+    const text = sb.logText()
+    assert.match(text, /claude-remote-control: starting \(pid \d+\)/)
+    assert.ok(!text.includes('while running'), text)
+    assert.ok(Buffer.byteLength(text) < 20000, `the log is ${Buffer.byteLength(text)} bytes`)
+    child.kill('SIGTERM')
+    assert.equal((await exited(exit)).code, 0)
   }))
 
 // --- Homelab mail -----------------------------------------------------------------------------
