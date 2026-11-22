@@ -31,11 +31,11 @@
 //     file that calls oneline or lines has the loader, after `marker=` and
 //     before the first call. It scans every file, and all eight current jobs
 //     by name.
-//   - The loader, in cf-update, rea-update, and tailscale-watchdog under sh
+//   - The loader, in cf-update and tailscale-watchdog under sh
 //     (dash) and bash --posix -O xpg_echo: a missing, unreadable, or
 //     unparsable lib writes the job's marker ("cannot load") and exits 1.
 //     An empty lib, or one cut short before oneline, still leaves the failure
-//     reason in the cf and rea markers; with the real lib the first-step reason
+//     reason in the cf marker; with the real lib the first-step reason
 //     reaches the marker.
 //   - The banner removes every control character but newline from a marker
 //     (ESC, BEL, CR, tab), keeps a multi-line marker's lines, and adds only its
@@ -384,7 +384,7 @@ test('lint: the rules catch each banned form and pass the allowed ones', () => {
 test('lint: every dot_cron file (lib/ excepted) is clean, and oneline callers load the lib first', () => {
   const files = cronFiles()
   assert.ok(files.length > 0, 'the lint scanned no files')
-  for (const job of ['app-update', 'cf-update', 'chezmoi-update', 'rea-update', 'tailscale-watchdog', 'tool-versions-bump', 'update', 'vault-snapshot', 'wait-for-network']) {
+  for (const job of ['app-update', 'cf-update', 'chezmoi-update', 'tailscale-watchdog', 'tool-versions-bump', 'update', 'vault-snapshot', 'wait-for-network']) {
     assert.ok(files.includes(`executable_${job}.sh`), `${job} not scanned: ${files.join(', ')}`)
   }
   assert.ok(files.includes('executable_claude-remote-control.sh.tmpl'), `claude-remote-control not scanned: ${files.join(', ')}`)
@@ -409,16 +409,15 @@ test('lint: every dot_cron file (lib/ excepted) is clean, and oneline callers lo
   assert.deepEqual(found, [])
 })
 
-test('lint: the jobs that call oneline or lines are exactly app-update, cf-update, claude-remote-control, rea-update, and tailscale-watchdog', () => {
+test('lint: the jobs that call oneline or lines are exactly app-update, cf-update, claude-remote-control, and tailscale-watchdog', () => {
   const callers = cronFiles().filter((f) => codeLines(readFileSync(join(CRON, f), 'utf8')).some(({ text }) => CALLS.test(text)))
-  assert.deepEqual(callers.sort(), ['executable_app-update.sh', 'executable_cf-update.sh', 'executable_claude-remote-control.sh.tmpl', 'executable_rea-update.sh', 'executable_tailscale-watchdog.sh'])
+  assert.deepEqual(callers.sort(), ['executable_app-update.sh', 'executable_cf-update.sh', 'executable_claude-remote-control.sh.tmpl', 'executable_tailscale-watchdog.sh'])
 })
 
 // --- Loader: a missing or broken lib fails closed with a marker ------------------
 
 const JOBS = [
   ['cf-update', 'cf.FAILED'],
-  ['rea-update', 'rea.FAILED'],
   ['tailscale-watchdog', 'tailscale-watchdog.FAILED'],
 ]
 const LOADER_SHELLS = [['sh', ['sh']], ['bash --posix -O xpg_echo', ['bash', '--posix', '-O', 'xpg_echo']]]
@@ -463,7 +462,7 @@ function loaderRun(job, libCase, shell) {
     const r = spawnSync(shell[0], [...shell.slice(1), script], {
       encoding: 'utf8',
       ...ids,
-      // No npm, cf, rea, or Tailscale CLI: past the loader each job fails at its first step.
+      // No npm, cf, or Tailscale CLI: past the loader each job fails at its first step.
       env: { HOME: home, PATH: SYS_PATH, WAIT_FOR_NETWORK: 'true', TAILSCALE_CLI: join(base, 'no-cli'), TAILSCALE_WATCHDOG_WAIT: '0' },
     })
     const logs = join(home, '.cron', 'logs')
@@ -488,12 +487,12 @@ for (const [name, shell] of LOADER_SHELLS) {
     }
 
     // An empty lib, or one cut short before oneline, parses under sh -n and
-    // sources fine, so the loader lets it through. cf-update and rea-update
-    // then pass their whole failure reason through the missing oneline, and
+    // sources fine, so the loader lets it through. cf-update then passes
+    // its whole failure reason through the missing oneline, and
     // the marker loses it ("update failed:  (see ...)"). Whatever the fix
     // (the loader checks that oneline is defined, or fail() keeps the reason),
-    // the marker must still say why the job failed. Past the loader both jobs
-    // fail at "npm not found on PATH" (no npm in this PATH).
+    // the marker must still say why the job failed. Past the loader the job
+    // fails at "npm not found on PATH" (no npm in this PATH).
     if (job !== 'tailscale-watchdog') {
       for (const libCase of ['empty', 'no-oneline']) {
         test(`[${name}] loader: ${job} with a lib that parses but has no oneline (${libCase}) still says why it failed`, { skip: skipFor(shell) }, () => {

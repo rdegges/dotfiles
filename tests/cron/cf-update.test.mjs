@@ -364,7 +364,7 @@ test('launchd: no agent of its own; the daily update job runs ~/.cron/cf-update.
   const users = readdirSync(dir).filter((f) => readFileSync(new URL(f, dir), 'utf8').includes('cf-update.sh'))
   assert.deepEqual(users, [])
   const update = read('dot_cron/executable_update.sh')
-  assert.match(update, /^for job in cf rea; do$/m)
+  assert.match(update, /^for job in cf; do$/m)
   assert.match(update, /^        \{ date; "\$HOME\/\.cron\/\$job-update\.sh"; \} > "\$logs\/\$job\.log" 2>&1 < \/dev\/null$/m)
 })
 

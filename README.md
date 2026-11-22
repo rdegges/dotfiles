@@ -72,14 +72,14 @@ If the Mac sleeps through a job's time, launchd runs the job once when the Mac
 wakes. Cron skipped these runs.
 
 At wake, Wi-Fi and DNS are often not back yet, so the chezmoi and update jobs
-(and the cf and rea scripts that the update job runs) first run `~/.cron/wait-for-network.sh`. This script waits up to 60
+(and the cf script that the update job runs) first run `~/.cron/wait-for-network.sh`. This script waits up to 60
 seconds for a default route and a DNS answer for `github.com`. If the network
 is still down, the job logs `network not up; skipped`, exits 0, and never
 removes or rewrites an existing `.FAILED` marker. If the wait script is missing or cannot check the
 network, the job runs as before.
 
 Each successful run touches `~/.cron/logs/<job>.ok`. If no marker exists and no
-run succeeded in the last 24 hours (chezmoi) or 72 hours (update, cf, rea), the skip
+run succeeded in the last 24 hours (chezmoi) or 72 hours (update, cf), the skip
 writes the marker with `network check failed and no successful run in N hours`.
 Right after this change deploys, no stamp exists yet. Thus the first skip can
 show one "no successful run" banner, and the next successful run clears it.
@@ -104,8 +104,8 @@ writes `~/.cron/logs/update.log`. It replaced eight jobs. The steps, in order:
 2. asdf plugin repos: `asdf plugin update --all`. The installed versions stay
    pinned by `~/.tool-versions`.
 3. `pipx upgrade-all`, `git pull` in `~/.oh-my-zsh`, and `codex update`.
-4. `~/.cron/cf-update.sh` and `~/.cron/rea-update.sh`. These two keep their own
-   logs (`cf.log`, `rea.log`) and markers (`cf.FAILED`, `rea.FAILED`).
+4. `~/.cron/cf-update.sh`. It keeps its own log (`cf.log`) and marker
+   (`cf.FAILED`).
 5. On personal Macs, `~/.cron/tool-versions-bump.sh`, which opens a pull
    request when an asdf pin in `dot_tool-versions` is behind.
 
@@ -470,8 +470,8 @@ the script opens one pull request on the branch `bump-tool-versions` (or
 updates the open one). It keeps the suffix of a pin, such as the `t` of
 free-threaded Python. Merge the pull request to accept the new versions. The
 hourly `chezmoi update` then installs them on every Mac
-(`run_onchange_install-tool-versions.sh.tmpl`) and installs `cf` and REA again
-on a Node bump. To move one pin by hand, edit `dot_tool-versions` and commit.
+(`run_onchange_install-tool-versions.sh.tmpl`) and installs `cf` again on a
+Node bump. To move one pin by hand, edit `dot_tool-versions` and commit.
 
 
 ## Cloudflare (cf)
@@ -516,21 +516,6 @@ The only per-machine step is `cf auth login`. `cf` keeps its own credentials, ou
   `~/.config/opencode/AGENTS.md` is rendered from `dot_claude/CLAUDE.md.tmpl`
   with `reader=opencode` (`dot_config/opencode/AGENTS.md.tmpl`), so opencode reads the same
   bytes as `~/.claude/CLAUDE.md` except the Browser section. OpenCode 2 reads only `~/.config/opencode/AGENTS.md` for global rules and has no `~/.claude/CLAUDE.md` fallback, so this managed file is the only way the rules reach opencode. Outside the Browser section the copy is verbatim on purpose, so opencode also sees Claude-only rules (the acceptance-gate agents) that it cannot run. The Browser section points opencode at its built-in `browser` tools (Code Mode `tools.browser.*`). These tools work only in sessions that run in the OpenCode desktop app (`cask "opencode-desktop"`, the official cask from opencode.ai/download), and they drive the app's browser pane, not the real Chrome profile. In the terminal, opencode tells me the task needs the desktop app and stops. Codex and opencode are both told to use only their own browser tool. The desktop app updates itself and bundles its own opencode, while the CLI comes from homebrew-core; when the two versions differ, the app restarts the shared opencode background service (`version-mismatch`), which may interrupt a running terminal session.
-- **REA** ([rea.tools](https://rea.tools)) — reverse-engineering MCP server
-  and skill. `~/.cron/rea-update.sh` installs `rea-agents@latest` as an npm global on the
-  asdf Node, the same way as `cf`. The daily update job runs it, and
-  `run_onchange_after_install-rea.sh.tmpl` runs it when `~/.tool-versions`
-  changes. After each install it runs REA's own `rea setup` for Claude Code and
-  opencode, which registers the server and installs the matching
-  `reverse-engineer-anything` skill. chezmoi owns `~/.codex/config.toml`, so the
-  Codex entry is in `dot_codex/config.toml.tmpl` instead. The script then runs
-  `rea doctor --client codex`. If a new REA release expects a different entry,
-  the script writes `~/.cron/logs/rea.FAILED`. The optional native engines
-  (Hopper, Ghidra, IDA) are not installed. Static JavaScript, .NET, and web
-  analysis work without them. Codex reads the skill from `~/.agents/skills`,
-  which the opencode setup step writes. Setup re-enables the opencode entry
-  each day if you disable it, and leaves `~/.claude.json.rea.backup` and
-  `opencode.json.rea.backup` beside the live files.
 - **WorkOS MCP** — on personal machines (`work = false`),
   `run_onchange_after_add-workos-mcp.sh.tmpl` registers the
   [WorkOS management MCP server](https://workos.com/docs/mcp) at user scope
