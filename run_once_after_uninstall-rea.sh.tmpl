@@ -9,7 +9,9 @@
 # point at a Node that never had REA while an older Node still does.
 #
 # `rea uninstall` is REA's own remover. It removes the Claude Code and opencode
-# MCP entries and the reverse-engineer-anything skill folders, and with
+# MCP entries, but only those that name the install it runs from, so this runs
+# it from every install that has bin/rea. It also removes the
+# reverse-engineer-anything skill folders, and with
 # --purge-data also its caches and state (~/.rea/cache, ~/.rea/state,
 # ~/Library/Caches/rea/kuna, ~/Library/Caches/rea/process-helper). It has no
 # --client flag, so it also removes an entry it owns from ~/.codex/config.toml.
@@ -18,7 +20,9 @@
 #
 # Every step is local. A failed step exits 1, so chezmoi runs this again on
 # the next apply (it records a run_once_ script only when it succeeds), and
-# the hourly job shows ~/.cron/logs/chezmoi.FAILED until then.
+# the hourly job shows ~/.cron/logs/chezmoi.FAILED until then. The leftover
+# check runs before npm removes any install, so a failed run leaves REA in
+# place for that retry.
 set -uo pipefail
 shopt -s nullglob
 
@@ -53,7 +57,7 @@ check_clean() {
     left=$(leftovers)
     [ -z "$left" ] && return 0
     echo "uninstall-rea: these REA items remain; remove them by hand, then run chezmoi apply:" >&2
-    printf '  %s\n' "$left" >&2
+    printf '%s\n' "$left" | sed 's/^/  /' >&2
     exit 1
 }
 
@@ -68,22 +72,22 @@ if [ ${#versions[@]} -eq 0 ]; then
     exit 0
 fi
 
-# One run is enough: it edits the shared client files, not the Node version.
-first=${versions[0]}
 saved=
 if [ -f "$codex" ]; then
     saved=$(mktemp) || fail "mktemp failed"
     trap 'rm -f "$saved"' EXIT
     cp -p "$codex" "$saved" || fail "could not copy $codex"
 fi
-echo "uninstall-rea: rea uninstall --purge-data (Node ${first##*/})"
-"$first/bin/node" "$first/bin/rea" uninstall --purge-data < /dev/null
-rc=$?
-if [ -n "$saved" ] && ! cmp -s "$saved" "$codex"; then
-    cp -p "$saved" "$codex" || fail "rea uninstall changed $codex and the restore failed"
-    echo "uninstall-rea: rea uninstall changed $codex; put chezmoi's copy back"
-fi
-[ "$rc" -eq 0 ] || fail "rea uninstall --purge-data exited $rc"
+for dir in "${versions[@]}"; do
+    echo "uninstall-rea: rea uninstall --purge-data (Node ${dir##*/})"
+    "$dir/bin/node" "$dir/bin/rea" uninstall --purge-data < /dev/null
+    rc=$?
+    if [ -n "$saved" ] && ! cmp -s "$saved" "$codex"; then
+        cp -p "$saved" "$codex" || fail "rea uninstall changed $codex and the restore failed"
+        echo "uninstall-rea: rea uninstall changed $codex; put chezmoi's copy back"
+    fi
+    [ "$rc" -eq 0 ] || fail "rea uninstall --purge-data exited $rc"
+done
 
 for d in "${skills[@]}"; do
     if exists "$d"; then
@@ -91,6 +95,9 @@ for d in "${skills[@]}"; do
         echo "uninstall-rea: removed $d"
     fi
 done
+
+# An entry that names a Node with no bin/rea stays, and fails here.
+check_clean
 
 # Each version's own node runs its own npm, so the global prefix is that
 # version (bin/npm starts with `env node`, which would take the PATH Node).

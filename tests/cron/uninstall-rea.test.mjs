@@ -10,13 +10,16 @@
 // What a pass proves: the script renders only for darwin. Run by bash in a
 // throwaway HOME with a fake ~/.asdf/installs/nodejs (stub node, rea, and npm
 // in each version's bin/, stub asdf on PATH, and a rea on PATH that must never
-// run): with REA in two Node versions, it runs `rea uninstall --purge-data`
-// once, through the first version's own node and with no stdin, then
+// run; its rea stub removes only the entries that name its own install, as
+// the real one does): with REA in two Node versions, it runs
+// `rea uninstall --purge-data` from each of them, through that version's own
+// node and with no stdin, then checks for leftovers, then runs
 // `npm uninstall --global rea-agents` through each of those versions' own node
 // and npm (never in a version without REA), then `asdf reshim nodejs`, and
-// exits 0. It removes skill folders that REA leaves, puts ~/.codex/config.toml
-// back byte for byte when REA edits or deletes it, and exits 1 when an MCP
-// entry is left. With no bin/rea anywhere it makes no call and exits 0 only
+// exits 0. It removes skill folders that REA leaves and puts
+// ~/.codex/config.toml back byte for byte when REA edits or deletes it. When an
+// MCP entry is left after the rea runs, it exits 1, names each item on its own
+// indented line, and leaves every REA install in place for the retry. With no bin/rea anywhere it makes no call and exits 0 only
 // when no rea MCP entry (Claude Code, opencode) and no reverse-engineer-anything
 // skill folder (~/.claude/skills, ~/.agents/skills) is left; else it names each
 // item and exits 1. A failed rea uninstall, npm uninstall, or reshim exits 1
@@ -153,9 +156,10 @@ const withSandbox = (opts, fn) => {
   }
 }
 
-const UNINSTALL = 'node(26.13.0) rea uninstall --purge-data stdin=0'
+const UN = (v) => `node(${v}) rea uninstall --purge-data stdin=0`
+const UNINSTALL = UN('26.13.0')
 const NPM_UN = (v) => `node(${v}) npm uninstall --global rea-agents`
-const FULL = [UNINSTALL, NPM_UN('26.13.0'), NPM_UN('26.4.0'), 'asdf reshim nodejs']
+const FULL = [UNINSTALL, UN('26.4.0'), NPM_UN('26.13.0'), NPM_UN('26.4.0'), 'asdf reshim nodejs']
 const SKILLS = ['.claude/skills/reverse-engineer-anything', '.agents/skills/reverse-engineer-anything']
 
 // --- template ----------------------------------------------------------------
@@ -191,7 +195,7 @@ test('the retirement note is in the header, and the script parses under bash -n'
 
 // --- REA installed -----------------------------------------------------------
 
-test('installed in two Node versions: one rea uninstall, npm uninstall in each, reshim; exit 0', () =>
+test('installed in two Node versions: rea uninstall in each, then npm uninstall in each, then reshim; exit 0', () =>
   withSandbox({}, (sb) => {
     const r = sb.run()
     assert.equal(r.status, 0, r.stdout + r.stderr)
@@ -233,8 +237,12 @@ test('rea uninstall leaves an MCP entry: exit 1, and the message names both file
   withSandbox({}, (sb) => {
     const r = sb.run({ STUB_REA_KEEP: 'mcp' })
     assert.equal(r.status, 1, r.stdout + r.stderr)
-    assert.ok(r.stderr.includes(`an MCP entry named rea in ${join(sb.home, '.claude.json')}`), r.stderr)
-    assert.ok(r.stderr.includes(`an MCP entry named rea in ${join(sb.home, '.config/opencode/opencode.json')}`), r.stderr)
+    // Every leftover on its own indented line.
+    assert.ok(r.stderr.includes(`\n  an MCP entry named rea in ${join(sb.home, '.claude.json')}\n`), r.stderr)
+    assert.ok(r.stderr.includes(`\n  an MCP entry named rea in ${join(sb.home, '.config/opencode/opencode.json')}\n`), r.stderr)
+    // The check runs before npm: REA stays for the retry.
+    assert.deepEqual(sb.calls(), [UNINSTALL, UN('26.4.0')])
+    for (const v of ['26.13.0', '26.4.0']) assert.ok(existsSync(join(sb.home, '.asdf/installs/nodejs', v, 'bin/rea')), v)
   }))
 
 for (const change of ['edit', 'delete']) {
@@ -260,7 +268,7 @@ test('npm uninstall fails: exit 1, no later version, no reshim', () =>
   withSandbox({}, (sb) => {
     const r = sb.run({ STUB_NPM_RC: '1' })
     assert.equal(r.status, 1, r.stdout + r.stderr)
-    assert.deepEqual(sb.calls(), [UNINSTALL, NPM_UN('26.13.0')])
+    assert.deepEqual(sb.calls(), [UNINSTALL, UN('26.4.0'), NPM_UN('26.13.0')])
     assert.match(r.stderr, /npm uninstall --global rea-agents failed in Node 26\.13\.0/)
   }))
 
@@ -365,13 +373,6 @@ test('chezmoi apply removes the deployed REA files and keeps the live ones', () 
 // tracked file outside the uninstaller, .chezmoiremove, and tests still runs
 // or documents the REA updater.
 
-// A claude CLI stand-in for a fix that removes the entry through Claude Code
-// (as the old rea-update.sh did): "mcp remove rea -s user" drops mcpServers.rea.
-const CLAUDE_CLI = (nodeBin) => '#!/bin/sh\necho "claude $*" >> "$CALLS"\n' +
-  'if [ "$1 $2 $3" = "mcp remove rea" ]; then\n' +
-  '  "' + nodeBin + '" -e \'const f=process.env.HOME+"/.claude.json",fs=require("fs");const o=JSON.parse(fs.readFileSync(f,"utf8"));if(!o.mcpServers||!o.mcpServers.rea)process.exit(1);delete o.mcpServers.rea;fs.writeFileSync(f,JSON.stringify(o))\'\n' +
-  'fi\n'
-
 const reaKeyLeft = (home) =>
   ['.claude.json', '.config/opencode/opencode.json'].filter((f) => existsSync(join(home, f)) && /"rea"\s*:/.test(readFileSync(join(home, f), 'utf8')))
 
@@ -381,13 +382,13 @@ const reaKeyLeft = (home) =>
 // name 26.13.1. Glob order puts 26.13.0 first. A Docker replay with the real
 // rea-agents 6.10.1 (same layout) retained both entries ("The rea-named
 // registration is not REA-owned"), npm-uninstalled REA everywhere, and exited 1
-// on the leftover check, on the first run and on every later apply.
-test('DEFECT: client entries written by the pinned Node, which is not first in glob order: still removed, exit 0', () =>
+// on the leftover check, on the first run and on every later apply. The script
+// now runs rea uninstall from every install, so the 26.13.1 run removes them.
+test('client entries written by the pinned Node, which is not first in glob order: still removed, exit 0', () =>
   withSandbox({ versions: ['25.8.0', '26.13.0', '26.13.1', '26.4.0'], withRea: ['26.13.0', '26.13.1', '26.4.0'], registeredIn: '26.13.1' }, (sb) => {
     const v = join(sb.home, '.asdf/installs/nodejs/26.13.1/bin')
     writeFileSync(join(sb.home, '.config/opencode/opencode.json'),
       JSON.stringify({ mcp: { parallel: { type: 'remote' }, servers: { rea: { type: 'local', command: [join(v, 'node'), join(v, 'rea'), 'mcp'], disabled: false } } } }, null, 2) + '\n')
-    exe(join(sb.bin, 'claude'), CLAUDE_CLI(process.execPath))
     const r = sb.run()
     assert.deepEqual(reaKeyLeft(sb.home), [], r.stdout + r.stderr)
     for (const ver of ['26.13.0', '26.13.1', '26.4.0']) assert.ok(!existsSync(join(sb.home, '.asdf/installs/nodejs', ver, 'bin/rea')), ver)
@@ -470,10 +471,26 @@ test('no tracked file outside the uninstaller, .chezmoiremove, and tests runs or
   // An exported tree (no .git) falls back to a walk of the source.
   const files = r.status === 0 && r.stdout.trim()
     ? r.stdout.trim().split('\n')
-    : spawnSync('find', ['.', '-type', 'f', '-not', '-path', './.git/*'], { cwd: SOURCE, encoding: 'utf8' }).stdout.trim().split('\n').map((f) => f.replace(/^\.\//, ''))
+    : spawnSync('find', ['.', '-type', 'f', '-not', '-path', './.git', '-not', '-path', './.git/*'], { cwd: SOURCE, encoding: 'utf8' }).stdout.trim().split('\n').map((f) => f.replace(/^\.\//, ''))
   assert.ok(files.length > 20, 'the scan found almost no files')
   const allowed = (f) => f === '.chezmoiremove' || f === TEMPLATE || f.startsWith('tests/')
   const hits = files.filter((f) => !allowed(f) && existsSync(join(SOURCE, f)))
     .filter((f) => /rea-update|rea-agents|rea setup|rea doctor|install-rea|mcp_servers\.rea/.test(readFileSync(join(SOURCE, f), 'utf8')))
   assert.deepEqual(hits, [])
 })
+
+// An entry written by a Node install that no longer has REA (a later pin
+// bump): no rea uninstall can remove it. The script must fail before any npm
+// uninstall, so every REA install stays for a later retry or a hand fix.
+test('an entry that no installed REA can remove: exit 1, and no npm uninstall ran', () =>
+  withSandbox({ versions: ['25.8.0', '26.13.0', '26.4.0'], registeredIn: '25.8.0' }, (sb) => {
+    for (const v of ['26.13.0', '26.4.0']) mkdirSync(join(sb.home, '.asdf/installs/nodejs', v, 'lib/node_modules/rea-agents'), { recursive: true })
+    const r = sb.run()
+    assert.equal(r.status, 1, r.stdout + r.stderr)
+    assert.deepEqual(sb.calls(), [UNINSTALL, UN('26.4.0')])
+    for (const v of ['26.13.0', '26.4.0']) {
+      assert.ok(existsSync(join(sb.home, '.asdf/installs/nodejs', v, 'bin/rea')), v + ' bin/rea')
+      assert.ok(existsSync(join(sb.home, '.asdf/installs/nodejs', v, 'lib/node_modules/rea-agents')), v + ' lib/node_modules/rea-agents')
+    }
+    assert.ok(r.stderr.includes('  an MCP entry named rea in ' + join(sb.home, '.claude.json')), r.stderr)
+  }))

@@ -3,8 +3,8 @@
 # one log (~/.cron/logs/update.log), one marker.
 #
 # It replaces eight jobs (brew, brew-cleanup, asdf, pipx, oh-my-zsh, codex, cf,
-# and one since retired) that each had a schedule and a log, and most of which
-# failed without a signal. Every step runs, also after an earlier step fails. A step whose tool
+# rea) that each had a schedule and a log, and most of which failed without a
+# signal. Every step runs, also after an earlier step fails. A step whose tool
 # is not installed is skipped.
 #
 # A failed step writes ~/.cron/logs/update.FAILED with the names of the failed

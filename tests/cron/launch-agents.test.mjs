@@ -74,7 +74,7 @@ const OLD_CRONTAB = {
   'docker-prune': '0 9 * * * { date; if docker info >/dev/null 2>&1; then docker builder prune -af --filter until=72h; docker image prune -af; else echo "docker not running; skipped"; fi; } > $HOME/.cron/logs/docker-prune.log 2>&1',
 }
 // The daily update job (dot_cron/executable_update.sh) replaced eight of the
-// old crontab's jobs (RETIRED).
+// old crontab's jobs: brew, brew-cleanup, asdf, pipx, oh-my-zsh, codex, cf, rea.
 const DAILY_AGENTS = {
   'update': {
     schedule: [{ Hour: 10, Minute: 0 }],
