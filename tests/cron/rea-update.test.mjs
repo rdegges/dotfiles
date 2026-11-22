@@ -41,6 +41,7 @@ const SETUP = 'rea setup --client claude_code --client opencode --yes --json'
 const STUBS = {
   npm: '#!/bin/sh\necho "npm $*" >> "$CALLS"\nexit "${STUB_NPM_RC:-0}"\n',
   asdf: '#!/bin/sh\necho "asdf $*" >> "$CALLS"\nexit 0\n',
+  claude: '#!/bin/sh\necho "claude $*" >> "$CALLS"\nexit "${STUB_CLAUDE_RC:-0}"\n',
   rea:
     '#!/bin/sh\n' +
     // Record whether stdin is a terminal-free empty stream for setup calls.
@@ -179,6 +180,74 @@ test('a forced npm failure through REA_UPDATE_PACKAGE leaves the marker; doctor 
   withSandbox({}, (sb) => {
     assertFailed(sb, sb.run({ STUB_NPM_RC: '1', REA_UPDATE_PACKAGE: 'rea-agents@0.0.0-nope' }), /rea-agents@0\.0\.0-nope/)
     assert.equal(sb.calls().some((c) => c.startsWith('rea doctor')), false)
+  }))
+
+// --- registrations left by an older asdf Node ------------------------------------
+// The sandbox PATH has no node, so the tests above never reach this step. These
+// add a `node` shim that runs the real one, and name the current install with
+// REA_NODE_PREFIX.
+
+function nodeBumpSandbox(fn) {
+  return withSandbox({ stubs: ['npm', 'asdf', 'rea', 'claude'] }, (sb) => {
+    const bin = join(sb.base, 'bin')
+    writeFileSync(join(bin, 'node'), `#!/bin/sh\nexec ${process.execPath} "$@"\n`)
+    chmodSync(join(bin, 'node'), 0o755)
+    const inst = (v) => join(sb.home, '.asdf', 'installs', 'nodejs', v)
+    const entry = (v) => [join(inst(v), 'bin', 'node'), join(inst(v), 'bin', 'rea'), 'mcp']
+    const claudeJson = join(sb.home, '.claude.json')
+    const openJson = join(sb.home, '.config', 'opencode', 'opencode.json')
+    mkdirSync(join(sb.home, '.config', 'opencode'), { recursive: true })
+    const write = (claudeCmd, openCmd) => {
+      writeFileSync(claudeJson, JSON.stringify({ other: 1, mcpServers: { rea: { command: claudeCmd[0], args: claudeCmd.slice(1) }, keep: { command: 'x' } } }))
+      writeFileSync(openJson, JSON.stringify({ mcp: { servers: { keep: { type: 'remote' }, rea: { type: 'local', command: openCmd } } } }))
+    }
+    return fn({ sb, inst, entry, write, claudeJson, openJson, open: () => JSON.parse(readFileSync(openJson, 'utf8')) })
+  })
+}
+
+test('Node bump: a rea entry in another asdf Node install is removed before setup, other servers stay', () =>
+  nodeBumpSandbox(({ sb, inst, entry, write, claudeJson, open }) => {
+    write(entry('1.0.0'), entry('1.0.0'))
+    const before = readFileSync(claudeJson, 'utf8')
+    const r = sb.run({ REA_NODE_PREFIX: inst('2.0.0') })
+    assert.equal(r.status, 0, r.stdout + r.stderr)
+    const calls = sb.calls()
+    assert.ok(calls.indexOf('claude mcp remove rea -s user') > -1, calls.join('\n'))
+    assert.ok(calls.indexOf('claude mcp remove rea -s user') < calls.indexOf(`${SETUP} stdin=0`), 'removal must come before setup')
+    assert.equal(readFileSync(claudeJson, 'utf8'), before, 'the script must never write ~/.claude.json itself')
+    assert.deepEqual(open(), { mcp: { servers: { keep: { type: 'remote' } } } })
+  }))
+
+test('Node bump: an entry in the current install is left alone', () =>
+  nodeBumpSandbox(({ sb, inst, entry, write, openJson }) => {
+    write(entry('2.0.0'), entry('2.0.0'))
+    const before = readFileSync(openJson, 'utf8')
+    const r = sb.run({ REA_NODE_PREFIX: inst('2.0.0') })
+    assert.equal(r.status, 0, r.stdout + r.stderr)
+    assert.ok(!sb.calls().some((c) => c.startsWith('claude ')), sb.calls().join('\n'))
+    assert.equal(readFileSync(openJson, 'utf8'), before)
+  }))
+
+test('Node bump: an entry outside asdf (not ours) is left alone, so setup still reports it', () =>
+  nodeBumpSandbox(({ sb, inst, write, openJson }) => {
+    write(['/opt/other/node', '/opt/other/rea', 'mcp'], ['/opt/other/node', '/opt/other/rea', 'mcp'])
+    const before = readFileSync(openJson, 'utf8')
+    const r = sb.run({ REA_NODE_PREFIX: inst('2.0.0'), STUB_SETUP_RC: '1' })
+    assertFailed(sb, r, /rea setup/)
+    assert.ok(!sb.calls().some((c) => c.startsWith('claude ')), sb.calls().join('\n'))
+    assert.equal(readFileSync(openJson, 'utf8'), before)
+  }))
+
+test('Node bump: a failed `claude mcp remove` or unreadable JSON does not stop the run; setup decides', () =>
+  nodeBumpSandbox(({ sb, inst, entry, write, openJson }) => {
+    write(entry('1.0.0'), entry('1.0.0'))
+    let r = sb.run({ REA_NODE_PREFIX: inst('2.0.0'), STUB_CLAUDE_RC: '1' })
+    assert.equal(r.status, 0, r.stdout + r.stderr)
+    assert.match(r.stdout, /could not check for registrations left by an older Node/)
+    writeFileSync(openJson, '{ not json')
+    r = sb.run({ REA_NODE_PREFIX: inst('2.0.0'), STUB_CLAUDE_RC: '0' })
+    assert.equal(r.status, 0, r.stdout + r.stderr)
+    assert.equal(readFileSync(openJson, 'utf8'), '{ not json')
   }))
 
 test('rea-update.sh: POSIX sh shebang, parses under sh -n', () => {
