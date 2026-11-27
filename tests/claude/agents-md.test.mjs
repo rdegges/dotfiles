@@ -567,7 +567,7 @@ for (const work of [false, true]) {
 
   test(`work=${work}: the rules that load in every session stay small`, () => {
     // Measured after the gate and worktree procedures moved to gate-protocol:
-    // about 8.9 KB for Claude on a personal Mac. The cap fails a change that
+    // about 9.2 KB for Claude on a personal Mac. The cap fails a change that
     // puts a procedure back in place of a pointer to a skill.
     // The darwin render is the one a personal Mac loads, and it is the
     // largest, so the cap must hold for it too, not only for the Linux default.
