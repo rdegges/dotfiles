@@ -1,6 +1,6 @@
 ---
 name: audit-media
-description: "Audit the home media library and fix what stops it from working well in Jellyfin, Infuse, and Seerr: file and folder names, audio and subtitle tracks, default-track flags, orphan subtitle files, metadata matches, Seerr sync, Bazarr gaps, and stuck or fake downloads in Sonarr, Radarr, and qBittorrent. Use when the user runs /audit-media, says they downloaded new media, or asks to make sure that the library works in Jellyfin, Infuse, or Seerr. Also cleans up series folders and matches, and finds leftovers of deleted media. Args: none (new media since the last audit), 'all' (whole library), 'series', 'leftovers', or a title or path."
+description: "Audit the home media library and fix what stops it from working well in Jellyfin, Infuse, and Seerr: file and folder names, audio and subtitle tracks, default-track flags, orphan subtitle files, metadata matches, Seerr sync, Bazarr gaps, and stuck or fake downloads in Sonarr, Radarr, qBittorrent, and SABnzbd. Use when the user runs /audit-media, says they downloaded new media, or asks to make sure that the library works in Jellyfin, Infuse, or Seerr. Also cleans up series folders and matches, and finds leftovers of deleted media. Args: none (new media since the last audit), 'all' (whole library), 'series', 'leftovers', or a title or path."
 ---
 
 # Audit media
@@ -20,6 +20,7 @@ show the wrong title, play the wrong audio, or miss subtitles.
 | Prowlarr | Indexers | Find the indexer that served a fake release. |
 | Bazarr | Subtitles | Search for missing subtitles. |
 | qBittorrent | Download client | Torrent states. Remove fake torrents and their files (through the Sonarr or Radarr queue). |
+| SABnzbd | Usenet download client | Job states in the queue and history, and the health of the usenet servers. Fake jobs are removed through the Sonarr or Radarr queue. |
 
 The host, the paths, the URLs, and the API keys are not in this skill. Step 1 finds them.
 
@@ -38,15 +39,16 @@ A full `all` run includes the `series` and `leftovers` checks.
 1. Read the memory and project notes for these facts:
    - The host that stores the media, and how to reach it.
    - The library root folders, and which Jellyfin library uses each one (movies, shows, anime).
-   - How the library path maps between the host, the Jellyfin container, Sonarr, Radarr, and qBittorrent, so that each command uses the path that exists where it runs.
+   - How the library path maps between the host, the Jellyfin container, Sonarr, Radarr, qBittorrent, and SABnzbd, so that each command uses the path that exists where it runs.
    - How to reach the API of each app in the stack, and where each API key is.
+   - The SABnzbd download folders. They come from memory, or from `get_config` for only the `misc` keys `complete_dir` and `download_dir` (`mode=get_config&section=misc&keyword=complete_dir`, and the same with `keyword=download_dir`), never the whole config: it holds the API keys.
    - How Infuse reaches the library: SMB (its own TMDB metadata) or a Jellyfin share (Jellyfin metadata).
    - Any helper scripts that already exist for these APIs.
    - The language preferences of the user. For example: "anime in Japanese with English subtitles".
 2. If a fact is not on record, ask the user one question that covers all the missing facts. Do not guess a host, a credential, or a path.
 3. Record new facts in memory when the audit is complete.
 
-Use read-only commands until Step 5. Run `ffprobe` from inside the Jellyfin container (`/usr/lib/jellyfin-ffmpeg/ffprobe`). Do not pull a Jellyfin image to get the tool.
+Use read-only commands until Step 5. SABnzbd API writes are GET calls; a GET is not read-only by itself. Run `ffprobe` from inside the Jellyfin container (`/usr/lib/jellyfin-ffmpeg/ffprobe`). Do not pull a Jellyfin image to get the tool.
 
 ## Step 2: List the files to audit
 
@@ -64,15 +66,17 @@ Use read-only commands until Step 5. Run `ffprobe` from inside the Jellyfin cont
 5. Get the original language of each title from Sonarr or Radarr (`originalLanguage`). Get the series type from Sonarr. A series of type `anime` uses the anime policy below, even when it is in the shows library.
 6. Read the Sonarr and Radarr queues, including status messages and the download state of each item.
 7. Read the qBittorrent torrent list: state, progress, category, and save path. Find the torrents that still hold a file in scope. Also read the client health: `dht_nodes` and `connection_status` from `/api/v2/transfer/info`, and the tracker messages (`/api/v2/torrents/trackers`) of at least two stuck torrents (all of them if fewer are stuck).
-8. Read the Seerr media list. Compare it with the Jellyfin movies and series by TMDB ID.
-9. Read the Bazarr "wanted" lists for the items in scope.
-10. For the `series` and `leftovers` checks, also read:
+8. Read SABnzbd with read modes only, and never with a `name=` parameter: with one, each of these modes becomes a write. Read the queue (`mode=queue`: each slot's `status`, `percentage`, `cat`, and `labels`; a `cat` of `*` or `None` means no category), the failed history (`mode=history&failed_only=1&limit=50`: each slot's `status`, `fail_message`, `category`, and `completed`; only failures inside the audit's scope window count), the server status (`mode=status&skip_dashboard=1`: each server's `servername`, `serveractive`, and `servererror`), and the warnings (`mode=warnings`: each warning's `text`).
+9. Read the Seerr media list. Compare it with the Jellyfin movies and series by TMDB ID.
+10. Read the Bazarr "wanted" lists for the items in scope.
+11. For the `series` and `leftovers` checks, also read:
     - Every Sonarr series: path, title, year, TVDB ID, TMDB ID, series type, and episode file counts.
     - Every Radarr movie: path, TMDB ID, and whether it has a file.
     - Every Jellyfin series and movie: path and provider IDs (with a `userId`).
     - The folders at the top level of each library root, and the count of video files in each folder at any depth.
     - The Sonarr and Radarr history events `episodeFileDeleted` and `movieFileDeleted`, and the import events (`downloadFolderImported`), for every item.
     - The files in the qBittorrent download folders, with sizes and link counts.
+    - The files in the SABnzbd download folders from Step 1, with sizes.
 
 ## Step 4: Find the faults
 
@@ -84,12 +88,12 @@ Examine every item for each fault in this table.
 | Sidecars | An orphan subtitle is a subtitle file that has no video in its folder whose base name it can belong to. A subtitle next to its video but with a different base name is a name fault, not an orphan: neither Jellyfin nor Infuse loads it, and it goes to the ask list. A subtitle file with no language code (`Movie.srt`) shows as "und" in Jellyfin. |
 | Jellyfin match | The item has no provider IDs. The matched title or year is wrong. Episodes have no metadata. |
 | Numbering | Sonarr uses TVDB episode order. Jellyfin uses TMDB by default. The two orders often differ for anime and old shows. Compare the episode counts per season. |
-| Audio | The file has no audio. The audio has no language tag. More than one audio track has the `default` flag. The default track does not agree with the track policy. |
+| Audio | The file has no audio. The only audio left is a commentary or audio-description track (a remux that filters by language can drop `zxx`, `mul`, or `mis` audio): this is missing main audio, never a default-flag fix; report it under "Needs your decision". The audio has no language tag. More than one audio track has the `default` flag. The default track does not agree with the track policy. |
 | Subtitles | A foreign subtitle has the `default` or `forced` flag. The audio is not in the language of the user, and the file has no subtitle in that language (embedded or sidecar). |
 | Format | The container is not MKV or MP4. The video codec is not H.264, HEVC, or AV1. Infuse plays these files, but Jellyfin must transcode them for the web UI. |
 | Fakes | A Sonarr or Radarr queue item whose download is complete or import-blocked holds a "video" smaller than 50 MB, or a folder with ads (`.txt`, `.jpg`, `.lnk`, `.exe`) and no real video. A library file under 50 MB, or an item that is still downloading, is a suspect only. |
 | Queue | A Sonarr or Radarr download is stuck at "import pending" or shows a warning. |
-| Downloads | A qBittorrent torrent is in the `error` or `missingFiles` state, is stalled while it gets metadata, or has no Sonarr or Radarr queue entry and no category. |
+| Downloads | A qBittorrent torrent is in the `error` or `missingFiles` state, is stalled while it gets metadata, or has no Sonarr or Radarr queue entry and no category. A SABnzbd job is `Failed` in the history, is `Paused` in the queue, or has no Sonarr or Radarr queue entry and no category. |
 | Seerr | An item is in Jellyfin but not "available" in Seerr. Seerr links to a Jellyfin item ID that no longer exists. An "available" item has no Sonarr or Radarr link. |
 
 Ignore these, because they cause no fault:
@@ -126,7 +130,7 @@ Deleted media can leave data in six places. Examine each one:
 | Jellyfin | An item whose path does not exist. A library scan usually removes it. |
 | Seerr | An item that shows as "available", but Jellyfin has no item with its TMDB ID. |
 | qBittorrent | A complete torrent in a Sonarr or Radarr category whose import is in the Sonarr or Radarr history, and whose imported library file no longer exists. It uses disk space for media that is no longer in the library. A link count of 1 alone does not prove this, because an import by copy also leaves a link count of 1. |
-| Download folders | Files or folders that no torrent and no queue item holds. |
+| Download folders | Files or folders that no torrent, no SABnzbd job, and no queue item holds. |
 
 Give the size of each leftover, and the total disk space that the cleanup can make free.
 
@@ -149,7 +153,7 @@ Use this policy to find the correct default tracks. If the user has a recorded l
 
 These fixes are easy to undo.
 
-- **Seeding guard.** Do this before each `mkvpropedit` edit (flags or language tags). If the link count of the file is more than 1, or a qBittorrent torrent still holds the file, do not edit the file. Put it under "Needs your decision", and give the cause: the edit changes the data of the seeding torrent, and a recheck downloads those pieces again and undoes the fix.
+- **Seeding guard.** Do this before each `mkvpropedit` edit (flags or language tags). If the link count of the file is more than 1, or a qBittorrent torrent still holds the file, do not edit the file. Put it under "Needs your decision", and give the cause: the edit changes the data of the seeding torrent, and a recheck downloads those pieces again and undoes the fix. A usenet import is a move with no seeding, so a file that only SABnzbd downloaded passes the guard.
 - **Default and forced flags on MKV files.** Use `mkvpropedit`. It edits only the header and takes seconds. The selector `track:N` is the ffprobe stream index + 1. If `mkvpropedit` is not installed, run it in a small throwaway container (`alpine` with `apk add mkvtoolnix`) that mounts the library.
 
   ```sh
@@ -162,7 +166,7 @@ These fixes are easy to undo.
 - **Missing language tags on MKV audio.** Use `mkvpropedit --set language=<code>`. Do this only when the language is certain: from the track title, or because the file has one audio track and the original language is known. If you are not sure, report it.
 - **Missing subtitles.** Start a Bazarr search for the item.
 - **Orphan subtitle files.** Move them to a holding folder outside the library, not to the trash. Write the folder path in the report.
-- **Fake downloads.** This covers only Sonarr or Radarr queue items whose download is complete or import-blocked. Remove the item from the Sonarr or Radarr queue with `removeFromClient=true` and `blocklist=true`. This deletes the torrent and its files from qBittorrent, and Sonarr or Radarr searches again. Name the Prowlarr indexer that served it in the report. A library file under 50 MB, or an item that is still downloading, goes under "Needs your decision". Never remove or blocklist it without an ask. If the client-fault rule at the end of this step applies, do not offer that ask for an item that is still downloading.
+- **Fake downloads.** This covers only Sonarr or Radarr queue items whose download is complete or import-blocked. Remove the item from the Sonarr or Radarr queue with `removeFromClient=true` and `blocklist=true`. This deletes the torrent and its files from qBittorrent, or the job from SABnzbd, and Sonarr or Radarr searches again. Name the Prowlarr indexer that served it in the report. A library file under 50 MB, or an item that is still downloading, goes under "Needs your decision". Never remove or blocklist it without an ask. If the client-fault rule at the end of this step applies, do not offer that ask for an item that is still downloading.
 - **Jellyfin metadata.** Refresh an item that has no match. Then start a library scan.
 - **Seerr sync.** After renames, run the Seerr `jellyfin-full-scan` job.
 - **Jellyfin series match from Sonarr.** If the Jellyfin series has a wrong match or no TMDB ID, apply the match with the exact TVDB or TMDB ID that Sonarr has (on Jellyfin: `/Items/RemoteSearch/Apply/{id}`). Do this only when Sonarr gives the ID. Pair the Jellyfin series with the Sonarr series by path, never by title. Then run the Seerr `jellyfin-full-scan` job.
@@ -183,7 +187,7 @@ These fixes are easy to undo.
 - Change Sonarr or Radarr quality profiles or custom formats, Prowlarr indexers, or Bazarr providers.
 - Restart a container while someone is watching. Read the Jellyfin active sessions first.
 
-The qBittorrent faults from the "Downloads" row are report-only. Put them under "Needs your decision". A stuck or stalled state does not prove that a release is dead. If `dht_nodes` is 0, `connection_status` is `disconnected`, or at least two stuck torrents share one tracker error, report the client fault and do not offer to remove or blocklist them. Marking a grab failed through `/history/failed` blocklists it and starts a re-search, so treat that as a removal.
+The qBittorrent and SABnzbd faults from the "Downloads" row are report-only. Put them under "Needs your decision". A stuck or stalled state does not prove that a release is dead. If `dht_nodes` is 0, `connection_status` is `disconnected`, or at least two stuck torrents share one tracker error, report the client fault and do not offer to remove or blocklist them. A usenet server connection or login error (a `servererror` in the server status, or a warning `text` that names a server) is a client fault too: report it, and do not offer to remove or blocklist failed SABnzbd jobs while it holds. Marking a grab failed through `/history/failed` blocklists it and starts a re-search, so treat that as a removal.
 
 ## Step 6: Make sure that the fixes worked
 
@@ -224,3 +228,4 @@ Record in memory: the date of this audit (it sets the next default scope), new f
 - Over SSH, `pkill -f <name>` and `ps | grep <name>` can match and stop your own SSH shell, because its command line contains the name.
 - A series folder that the user renamed by hand keeps its old path in Sonarr. Sonarr then reports the series as missing and can download it again. Change the path in Sonarr, not only on disk.
 - YTS clone groups publish fake files with ads in the folder. They show in Radarr as "Unable to determine if file is a sample".
+- A per-track Matroska `LANGUAGE` tag overrides the track header's language in ffprobe, and so in Jellyfin. A stale `LANGUAGE=und` reads as untagged, and `--set language` alone does not fix it. Confirm with `mkvmerge -J`, then remove that track's tags with `mkvpropedit --tags track:N:` (same selector rule). The seeding guard applies.

@@ -1,26 +1,30 @@
 // Structural and safety invariants for the audit-media skill.
 //
 // Run from the repo root (ffmpeg and mkvtoolnix are optional; without them the
-// mkvpropedit selector test skips):
+// mkvpropedit selector and track-tag tests skip):
 //   docker run --rm -v "$PWD":/w -w /w node:latest sh -c \
 //     'apt-get update -qq && apt-get install -y -qq ffmpeg mkvtoolnix >/dev/null && node --test tests/skills/'
 //
 // What a pass proves: the skill hardcodes the user's stack (Jellyfin as the
-// server and a primary player, Infuse as a primary player, Seerr for requests, qBittorrent as the
-// download client, and Sonarr, Radarr, Prowlarr, Bazarr as the *arr apps), with
+// server and a primary player, Infuse as a primary player, Seerr for requests, qBittorrent and
+// SABnzbd as the download clients, and Sonarr, Radarr, Prowlarr, Bazarr as the *arr apps), with
 // one row per app and no other server, player, request, or download app named;
 // it holds no IP, tailnet domain, URL, LAN host name, host:port, or API-key
 // shape (this repo is public), and, only when PRIVATE_HOSTS_FILE is set, none
 // of the host names listed in that file; it sends the agent to memory or the
 // user for them; it stays read-only before
-// Step 5; renames, deletes, remuxes, plugin and settings changes, and restarts
+// Step 5, and in Steps 1-4 it reads SABnzbd only through allow-listed read
+// calls, with the config read limited to two misc keys; SABnzbd faults are
+// report-only under the client-fault rule; renames, deletes, remuxes, plugin and settings changes, and restarts
 // sit behind an ask; the track policy keeps one default audio, at most one
 // default subtitle, and no forced foreign subtitle; Step 6 re-checks every fix
 // before "done". With ffmpeg and mkvtoolnix installed, it also proves the
 // skill's selector rule (mkvpropedit track:N = ffprobe stream index + 1) on a
-// real MKV with a font attachment. It says nothing about the live Jellyfin,
-// Seerr, or *arr APIs, or whether an agent obeys the text; that needs a
-// supervised run against the real library.
+// real MKV with a font attachment, and the track-tag pitfall on a real MKV: a
+// per-track LANGUAGE=und tag overrides the header language in ffprobe, and
+// mkvpropedit --tags track:N: removes it and keeps the global tags. It says
+// nothing about the live Jellyfin, Seerr, SABnzbd, or *arr APIs, or whether an
+// agent obeys the text; that needs a supervised run against the real library.
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -83,6 +87,7 @@ const STACK = {
   Prowlarr: /indexer/i,
   Bazarr: /subtitle/i,
   qBittorrent: /download client/i,
+  SABnzbd: /usenet download client/i,
 }
 
 test('stack table: exactly the user\'s apps, one row each, each with its role', () => {
@@ -101,13 +106,13 @@ test('Jellyfin and Infuse are the primary players; Jellyfin is also the server',
 })
 
 test('no app outside the stack is named (the skill is not generic)', () => {
-  const others = /\b(Plex|Emby|Kodi|VLC|Overseerr|Jellyseerr|Ombi|Transmission|Deluge|rTorrent|SABnzbd|NZBGet|Lidarr|Readarr|Whisparr|Jackett)\b/gi
+  const others = /\b(Plex|Emby|Kodi|VLC|Overseerr|Jellyseerr|Ombi|Transmission|Deluge|rTorrent|NZBGet|Lidarr|Readarr|Whisparr|Jackett)\b/gi
   assert.deepEqual(skill.match(others) ?? [], [])
 })
 
 test('description names every stack app the skill acts on, and the arg forms', () => {
   const d = frontmatter(skill).description
-  for (const app of ['Jellyfin', 'Infuse', 'Seerr', 'Sonarr', 'Radarr', 'qBittorrent', 'Bazarr']) {
+  for (const app of ['Jellyfin', 'Infuse', 'Seerr', 'Sonarr', 'Radarr', 'qBittorrent', 'SABnzbd', 'Bazarr']) {
     assert.ok(d.includes(app), `description does not name ${app}`)
   }
   assert.match(d, /\/audit-media/)
@@ -323,6 +328,48 @@ test('selector rule: mkvpropedit track:(ffprobe index + 1) edits that stream, wi
   assert.deepEqual(after.map((s) => s.type), before.map((s) => s.type), 'stream layout changed')
 })
 
+// --- The track-tag pitfall, on a real MKV --------------------------------------
+
+// Always runs, so the pitfall text the real-file test below checks cannot drift while it skips.
+test('track-tag pitfall text: confirm with mkvmerge -J, remove only that track\'s tags, never all tags', () => {
+  const pitfalls = section('Known pitfalls')
+  assert.ok(pitfalls.includes('`mkvmerge -J`'), 'pitfall does not name `mkvmerge -J`')
+  assert.ok(pitfalls.includes('`LANGUAGE=und`'), 'pitfall does not name `LANGUAGE=und`')
+  assert.ok(pitfalls.includes('`mkvpropedit --tags track:N:`'), 'pitfall does not name `mkvpropedit --tags track:N:`')
+  assert.ok(pitfalls.includes('`--set language` alone does not fix it'), 'pitfall does not say `--set language` alone does not fix it')
+  // `--tags all:` also deletes the global tags.
+  assert.ok(!skill.includes('--tags all:'), 'the skill names `--tags all:`')
+})
+
+// Its own tool list: this test also needs mkvmerge, and the selector test above must not skip for it.
+const tagTools = ['ffmpeg', 'ffprobe', 'mkvpropedit', 'mkvmerge']
+const tagSkip = tagTools.every(have) ? false : `${tagTools.filter((t) => !have(t)).join(', ')} not installed (see the run command at the top)`
+
+test('track-tag pitfall: a per-track LANGUAGE=und tag overrides the header in ffprobe; --tags track:N: removes it and keeps global tags', { skip: tagSkip }, () => {
+  const dir = mkdtempSync(join(tmpdir(), 'audit-media-'))
+  const file = join(dir, 'Title (2024).mkv')
+  const ff = spawnSync('ffmpeg', ['-v', 'error', '-f', 'lavfi', '-i', 'testsrc=d=1:s=64x64', '-f', 'lavfi', '-i', 'sine=d=1',
+    '-c:v', 'mpeg4', '-c:a', 'mp2', '-metadata:s:a:0', 'language=jpn', '-metadata', 'comment=keep-me', file], { encoding: 'utf8' })
+  assert.equal(ff.status, 0, ff.stderr)
+  const probe = () => JSON.parse(spawnSync('ffprobe', ['-v', 'error', '-show_streams', '-show_format', '-of', 'json', file], { encoding: 'utf8' }).stdout)
+  // Matroska tag names are upper case and ffprobe can report either case, so match keys without regard to case.
+  const tagValues = (tags, key) => Object.entries(tags ?? {}).filter(([k]) => k.toLowerCase() === key).map(([, v]) => v)
+  const audioLang = () => tagValues(probe().streams.find((s) => s.codec_type === 'audio').tags, 'language')
+  const track = probe().streams.find((s) => s.codec_type === 'audio').index + 1
+  const xml = join(dir, 'tags.xml')
+  writeFileSync(xml, '<?xml version="1.0"?><Tags><Tag><Targets/><Simple><Name>LANGUAGE</Name><String>und</String></Simple></Tag></Tags>')
+  const set = spawnSync('mkvpropedit', ['-q', file, '--tags', `track:${track}:${xml}`], { encoding: 'utf8' })
+  assert.equal(set.status, 0, set.stderr + set.stdout)
+  assert.deepEqual(audioLang(), ['und'], 'ffprobe does not report the per-track LANGUAGE tag over the header language')
+  const mm = spawnSync('mkvmerge', ['-J', file], { encoding: 'utf8' })
+  assert.equal(mm.status, 0, mm.stderr + mm.stdout)
+  assert.equal(JSON.parse(mm.stdout).tracks.find((t) => t.type === 'audio').properties.language, 'jpn')
+  const clear = spawnSync('mkvpropedit', ['-q', file, '--tags', `track:${track}:`], { encoding: 'utf8' })
+  assert.equal(clear.status, 0, clear.stderr + clear.stdout)
+  assert.deepEqual(audioLang(), ['jpn'])
+  assert.deepEqual(tagValues(probe().format.tags, 'comment'), ['keep-me'], 'the global tags did not survive')
+})
+
 // --- Proposals for the maker (do not fail the suite) --------------------------
 
 test('fake auto-removal covers only complete or import-blocked queue items; library files and active downloads need an ask', () => {
@@ -492,8 +539,8 @@ test('Step 6 checks moved folders and Seerr after a leftover cleanup', () => {
 // read-only, and that Step 5 refuses removal offers when they show a client fault.
 
 function clientFaultRule() {
-  const para = section('Step 5').split(/\n\s*\n/).find((p) => p.startsWith('The qBittorrent faults from the "Downloads" row'))
-  assert.ok(para, 'no "The qBittorrent faults from the Downloads row" paragraph in Step 5')
+  const para = section('Step 5').split(/\n\s*\n/).find((p) => p.startsWith('The qBittorrent and SABnzbd faults from the "Downloads" row are report-only.'))
+  assert.ok(para, 'no "The qBittorrent and SABnzbd faults from the Downloads row are report-only." paragraph in Step 5')
   return para.replace(/\s+/g, ' ')
 }
 
@@ -524,6 +571,7 @@ test('every health field the client-fault rule tests is collected in Step 3 (no 
   // A backticked word after "is " is a value (`disconnected`), not a field name.
   const used = [...clientFaultRule().matchAll(/(?<!is )`([a-z_]+)`/g)].map((m) => m[1])
   assert.ok(used.includes('dht_nodes'), `rule tests no backticked health field; saw ${used.join(', ')}`)
+  assert.ok(used.includes('servererror'), `rule tests no SABnzbd server field; saw ${used.join(', ')}`)
   for (const f of used) assert.ok(section('Step 3').includes(`\`${f}\``), `rule uses \`${f}\`, which Step 3 never reads`)
   assert.match(section('Step 3'), /tracker messages/)
 })
@@ -547,4 +595,68 @@ test('the Fake downloads ask path defers to the client-fault rule for items stil
   const fakes = bullets(subsection(section('Step 5'), 'Fix these without asking'))
     .find((b) => b.startsWith('**Fake downloads.**'))
   assert.match(fakes, /client-fault rule/)
+})
+
+// --- SABnzbd: allow-listed reads, report-only faults --------------------------
+//
+// SABnzbd writes are plain GET calls (mode=pause, mode=set_config, and a name=
+// parameter on a read mode), so the -X POST/PUT/DELETE guard cannot see them.
+// An allow-list of read modes catches writes that a deny-list would have to name.
+
+test('Steps 1-4 call SABnzbd only through allow-listed read modes, with no name= or value= parameter', () => {
+  const early = ['Step 1', 'Step 2', 'Step 3', 'Step 4'].map(section).join('\n')
+  const reads = new Set(['queue', 'history', 'status', 'warnings', 'get_config'])
+  for (const m of early.matchAll(/mode=([a-z_]+)/g)) assert.ok(reads.has(m[1]), `mode=${m[1]} is not an allow-listed SABnzbd read`)
+  for (const m of ['queue', 'history', 'status', 'warnings']) assert.match(early, new RegExp(`mode=${m}\\b`), `Steps 1-4 never read mode=${m}`)
+  assert.doesNotMatch(early, /\bname=\w/)
+  assert.doesNotMatch(early, /\bvalue=/)
+  // A bare get_config returns the whole config, API keys in clear text.
+  for (const m of early.matchAll(/mode=get_config/g)) {
+    assert.match(early.slice(m.index + m[0].length), /^&section=misc&keyword=(complete_dir|download_dir)\b/,
+      'a mode=get_config call is not limited to the misc keys complete_dir and download_dir')
+  }
+})
+
+test('Step 1: a GET is not read-only by itself, and the config read is two misc keys, never the whole config', () => {
+  const s1 = section('Step 1')
+  assert.match(s1, /SABnzbd API writes are GET calls; a GET is not read-only by itself/)
+  assert.ok(s1.includes('only the `misc` keys `complete_dir` and `download_dir`'), 'Step 1 does not limit get_config to the two misc keys')
+  assert.match(s1, /never the whole config/)
+})
+
+test('Step 3 reads the SABnzbd queue, failed history, server status, and warnings, with every field the faults use', () => {
+  const s3 = section('Step 3')
+  assert.ok(s3.includes('mode=history&failed_only=1&limit=50'), 'no bounded failed-history read')
+  assert.ok(s3.includes('mode=status&skip_dashboard=1'), 'no server-status read')
+  assert.ok(s3.includes('never with a `name=` parameter'), 'Step 3 does not ban the name= parameter')
+  for (const f of ['status', 'percentage', 'cat', 'labels', 'fail_message', 'category', 'completed', 'servername', 'serveractive', 'servererror', 'text']) {
+    assert.ok(s3.includes(`\`${f}\``), `Step 3 does not read \`${f}\``)
+  }
+})
+
+test('client-fault rule: a usenet server error blocks remove and blocklist offers for failed SABnzbd jobs', () => {
+  assert.match(clientFaultRule(), /do not offer to remove or blocklist failed SABnzbd jobs while it holds/)
+})
+
+test('Downloads row names the SABnzbd faults, and the Download folders leftover counts SABnzbd jobs', () => {
+  const downloads = section('Step 4').split('\n').find((l) => l.startsWith('| Downloads |'))
+  assert.match(downloads, /SABnzbd/)
+  assert.ok(downloads.includes('`Failed`'), 'Downloads row does not name `Failed`')
+  const body = subsection(section('Step 4'), 'Leftovers from deleted media')
+  assert.match(body, /^\| Download folders \| Files or folders that no torrent, no SABnzbd job, and no queue item holds\. \|$/m)
+  const rows = body.split('\n').filter((l) => l.startsWith('| ') && !l.startsWith('| Place |'))
+  assert.equal(rows.length, 6, `leftovers table has ${rows.length} rows, not 6`)
+})
+
+test('seeding guard: a file that only SABnzbd downloaded passes the guard', () => {
+  const guard = bullets(subsection(section('Step 5'), 'Fix these without asking'))
+    .find((b) => b.startsWith('**Seeding guard.**'))
+  assert.match(guard, /A usenet import is a move with no seeding, so a file that only SABnzbd downloaded passes the guard\./)
+})
+
+test('Audio row: only commentary or audio-description audio left is missing main audio, never a default-flag fix', () => {
+  const audio = section('Step 4').split('\n').find((l) => l.startsWith('| Audio |'))
+  assert.ok(audio.includes('`zxx`'), 'Audio row does not name `zxx`')
+  assert.match(audio, /never a default-flag fix/)
+  assert.match(audio, /report it under "Needs your decision"/)
 })
