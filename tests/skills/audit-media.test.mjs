@@ -418,7 +418,7 @@ test('track-tag pitfall on an mkvmerge-muxed file: --set language alone fails, -
   assert.deepEqual(tag(audio()[0], 'language'), ['jpn'])
 })
 
-test('PROPOSED CONTRACT: the track-tag pitfall says the removal also drops that track\'s statistics tags, and how to write them back', { todo: true }, () => {
+test('the track-tag pitfall says the removal also drops that track\'s statistics tags, and how to write them back', () => {
   assert.match(section('Known pitfalls'), /--add-track-statistics-tags/)
 })
 
@@ -624,6 +624,7 @@ test('every health field the client-fault rule tests is collected in Step 3 (no 
   const used = [...clientFaultRule().matchAll(/(?<!is )`([a-z_]+)`/g)].map((m) => m[1])
   assert.ok(used.includes('dht_nodes'), `rule tests no backticked health field; saw ${used.join(', ')}`)
   assert.ok(used.includes('servererror'), `rule tests no SABnzbd server field; saw ${used.join(', ')}`)
+  assert.match(clientFaultRule(), /queue-level `paused` of true/)
   for (const f of used) assert.ok(section('Step 3').includes(`\`${f}\``), `rule uses \`${f}\`, which Step 3 never reads`)
   assert.match(section('Step 3'), /tracker messages/)
 })
@@ -682,14 +683,14 @@ test('no step anywhere in the skill calls a SABnzbd write mode or passes name= o
   assert.doesNotMatch(skill, /\bvalue=/)
 })
 
-test('PROPOSED CONTRACT: the SABnzbd seeding-guard pass does not waive the link-count check', { todo: true }, () => {
+test('the SABnzbd seeding-guard pass does not waive the link-count check', () => {
   const guard = bullets(subsection(section('Step 5'), 'Fix these without asking'))
     .find((b) => b.startsWith('**Seeding guard.**'))
   const usenet = guard.split(/(?<=\.) /).find((s) => /SABnzbd/.test(s))
   assert.match(usenet, /link count/)
 })
 
-test('PROPOSED CONTRACT: the SABnzbd status read keeps only the listed fields (the response carries the API key)', { todo: true }, () => {
+test('the SABnzbd status read keeps only the listed fields (the response carries the API key)', () => {
   assert.match(section('Step 3'), /mode=status[^.]*(only these fields|drop|filter|never print|API key)/i)
 })
 
@@ -727,7 +728,7 @@ test('Downloads row names the SABnzbd faults, and the Download folders leftover 
 test('seeding guard: a file that only SABnzbd downloaded passes the guard', () => {
   const guard = bullets(subsection(section('Step 5'), 'Fix these without asking'))
     .find((b) => b.startsWith('**Seeding guard.**'))
-  assert.match(guard, /A usenet import is a move with no seeding, so a file that only SABnzbd downloaded passes the guard\./)
+  assert.match(guard, /A usenet import is a move with no seeding, so a file that only SABnzbd downloaded passes the guard when its link count is 1\./)
 })
 
 test('Audio row: only commentary or audio-description audio left is missing main audio, never a default-flag fix', () => {
