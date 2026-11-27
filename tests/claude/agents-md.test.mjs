@@ -34,12 +34,14 @@ const CLAUDE_ONLY = ['switch_browser', 'WebFetch', 'WebSearch', 'codex-computer-
 const DELEGATION = '## Delegation (work machine)'
 const WORK_TRACKING = '## Work tracking (work machine)'
 
-function render(target, work) {
+// extra merges more template data, e.g. { chezmoi: { os: 'darwin' } } for the
+// real personal Mac, which renders more than the default Linux container does.
+function render(target, work, extra = {}) {
   const home = mkdtempSync(join(tmpdir(), 'agents-md-'))
   try {
     const r = spawnSync(
       'chezmoi',
-      ['--source', SOURCE, '--destination', home, '--override-data', JSON.stringify({ work }), 'cat', join(home, target)],
+      ['--source', SOURCE, '--destination', home, '--override-data', JSON.stringify({ work, ...extra }), 'cat', join(home, target)],
       { encoding: 'utf8', env: { PATH: process.env.PATH, HOME: home } },
     )
     assert.ifError(r.error)
@@ -242,13 +244,16 @@ for (const work of [false, true]) {
     assert.ok(claude().includes('ask me before doing it in Chrome.\n'))
   })
 
-  // Outside the $claude block, so Codex gets it too (opencode through the
-  // byte-identity test in opencode-rules.test.mjs).
-  test(`work=${work}: the inline-script rule renders whole, once, in Claude and Codex`, () => {
+  // Outside the $claude block, so every reader gets it. opencode is checked
+  // directly too: the byte-identity test in opencode-rules.test.mjs would still
+  // pass if Codex and opencode both lost the bullet.
+  test(`work=${work}: the inline-script rule renders whole, once, in the Environment section of Claude, Codex, and opencode`, () => {
     const INLINE = "- Never inline a multi-line script in a quoted `ssh`, `docker`, or `bash -c` string: write it to a local file and feed it on stdin (`ssh -T host python3 - < f`, `docker exec -i c sh < f`), or upload it first (`ssh host 'cat > f' < f`).\n"
-    for (const t of [claude(), codex()]) {
-      assert.equal(t.split(INLINE).length - 1, 1, 'inline-script bullet is missing, reworded, or repeated')
-      assert.ok(t.indexOf('feed it on stdin') < t.indexOf('upload it first'))
+    for (const [name, t] of [['Claude', claude()], ['Codex', codex()], ['opencode', render('.config/opencode/AGENTS.md', work)]]) {
+      assert.equal(t.split(INLINE).length - 1, 1, `${name}: inline-script bullet is missing, reworded, or repeated`)
+      const env = t.match(/^## Environment\n([\s\S]*?)(?=^## )/m)
+      assert.ok(env, `${name}: no ## Environment section`)
+      assert.ok(env[1].includes(INLINE), `${name}: inline-script bullet is outside ## Environment`)
     }
   })
 }
@@ -564,10 +569,14 @@ for (const work of [false, true]) {
     // Measured after the gate and worktree procedures moved to gate-protocol:
     // about 8.9 KB for Claude on a personal Mac. The cap fails a change that
     // puts a procedure back in place of a pointer to a skill.
+    // The darwin render is the one a personal Mac loads, and it is the
+    // largest, so the cap must hold for it too, not only for the Linux default.
     const cap = work ? 12500 : 9500
     for (const t of ['.claude/CLAUDE.md', '.codex/AGENTS.md', '.config/opencode/AGENTS.md']) {
-      const n = Buffer.byteLength(render(t, work))
-      assert.ok(n <= cap, `${t} is ${n} bytes (cap ${cap})`)
+      for (const extra of [{}, { chezmoi: { os: 'darwin' } }]) {
+        const n = Buffer.byteLength(render(t, work, extra))
+        assert.ok(n <= cap, `${t} ${JSON.stringify(extra)} is ${n} bytes (cap ${cap})`)
+      }
     }
   })
 }
