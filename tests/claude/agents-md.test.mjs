@@ -34,12 +34,14 @@ const CLAUDE_ONLY = ['switch_browser', 'WebFetch', 'WebSearch', 'codex-computer-
 const DELEGATION = '## Delegation (work machine)'
 const WORK_TRACKING = '## Work tracking (work machine)'
 
-function render(target, work) {
+// extra merges more template data, e.g. { chezmoi: { os: 'darwin' } } for the
+// real personal Mac, which renders more than the default Linux container does.
+function render(target, work, extra = {}) {
   const home = mkdtempSync(join(tmpdir(), 'agents-md-'))
   try {
     const r = spawnSync(
       'chezmoi',
-      ['--source', SOURCE, '--destination', home, '--override-data', JSON.stringify({ work }), 'cat', join(home, target)],
+      ['--source', SOURCE, '--destination', home, '--override-data', JSON.stringify({ work, ...extra }), 'cat', join(home, target)],
       { encoding: 'utf8', env: { PATH: process.env.PATH, HOME: home } },
     )
     assert.ifError(r.error)
@@ -241,6 +243,19 @@ for (const work of [false, true]) {
     for (const t of [claude(), render('.config/opencode/AGENTS.md', work)]) assert.ok(!/Navia|Standing exception/.test(t), 'a render without the skill carries the Navia exception')
     assert.ok(claude().includes('ask me before doing it in Chrome.\n'))
   })
+
+  // Outside the $claude block, so every reader gets it. opencode is checked
+  // directly too: the byte-identity test in opencode-rules.test.mjs would still
+  // pass if Codex and opencode both lost the bullet.
+  test(`work=${work}: the inline-script rule renders whole, once, in the Environment section of Claude, Codex, and opencode`, () => {
+    const INLINE = "- Never inline a multi-line script in a quoted `ssh`, `docker`, or `bash -c` string: write it to a local file and feed it on stdin (`ssh -T host python3 - < f`, `docker exec -i c sh < f`), or upload it first (`ssh host 'cat > f' < f`).\n"
+    for (const [name, t] of [['Claude', claude()], ['Codex', codex()], ['opencode', render('.config/opencode/AGENTS.md', work)]]) {
+      assert.equal(t.split(INLINE).length - 1, 1, `${name}: inline-script bullet is missing, reworded, or repeated`)
+      const env = t.match(/^## Environment\n([\s\S]*?)(?=^## )/m)
+      assert.ok(env, `${name}: no ## Environment section`)
+      assert.ok(env[1].includes(INLINE), `${name}: inline-script bullet is outside ## Environment`)
+    }
+  })
 }
 
 // Gates. Codex runs no review gates: it gets one open-a-PR-and-stop rule where
@@ -249,7 +264,7 @@ const CODEX_PR_RULE = '- Never run review gates or merge a PR. Finish on a non-d
 const CLAUDE_GATES = [
   '`verification-gates` skill.\n- Non-trivial changes merge only when the `acceptance-gate` workflow (tester, then `red-team-reviewer`, then `bdfl`, in one call) returns APPROVE, or APPROVE WITH CONDITIONS once every condition has landed.',
   'Never run those gates one at a time.',
-  '\n- Every plan goes through the `bdfl` agent too. On every path, honor its verdict: never merge over REVISE or REJECT, and relay its guidance verbatim. Multi-PR work goes through the `planner` agent first.\n- A subagent that stops on a network or API error',
+  '\n- Every plan goes through the `bdfl` agent too, with or without a repo (host and account changes count), before the first write it covers; read-only probes may run first. On every path, honor its verdict: never merge over REVISE or REJECT, and relay its guidance verbatim. Multi-PR work goes through the `planner` agent first.\n- A subagent that stops on a network or API error',
   'Resume that same agent with `SendMessage` and ask it to continue. Never start a new agent for the same task: a new agent loses the context the old one built. If `SendMessage` cannot reach it (the agent ran inside a workflow, or you lack the tool), rerun it once and tell me the first run dropped. If the rerun also fails, stop and tell me.\n\n## Vault and sessions\n',
   "instead. Only exception: the tester agent's Docker Playwright runs as defined in tester.md (the viewport/color-scheme matrix, and the whole web pass when Chrome is unreachable); the stop-and-wait rule below does not apply to it. Reading a public page",
 ]
@@ -286,6 +301,14 @@ for (const work of [false, true]) {
     const cl = claude()
     for (const t of CLAUDE_GATES) assert.ok(cl.includes(t), `Claude render lacks ${JSON.stringify(t.slice(0, 60))}`)
     assert.ok(!cl.includes(CODEX_PR_RULE), 'Claude render contains the Codex PR rule')
+  })
+
+  test(`work=${work}: the bdfl plan rule covers repo-less plans, before the first write, after read-only probes`, () => {
+    const line = claude().split('\n').find((l) => l.startsWith('- Every plan goes through the `bdfl` agent too'))
+    assert.ok(line, 'Claude render lacks the bdfl plan rule')
+    assert.match(line, /before the first write it covers/)
+    assert.match(line, /with or without a repo \(host and account changes count\)/)
+    assert.match(line, /read-only probes may run first/)
   })
 
   test(`work=${work}: apply deletes ~/.codex/agents/*.toml and keeps the rest of ~/.codex`, () => {
@@ -544,12 +567,16 @@ for (const work of [false, true]) {
 
   test(`work=${work}: the rules that load in every session stay small`, () => {
     // Measured after the gate and worktree procedures moved to gate-protocol:
-    // about 8.9 KB for Claude on a personal Mac. The cap fails a change that
+    // about 9.2 KB for Claude on a personal Mac. The cap fails a change that
     // puts a procedure back in place of a pointer to a skill.
+    // The darwin render is the one a personal Mac loads, and it is the
+    // largest, so the cap must hold for it too, not only for the Linux default.
     const cap = work ? 12500 : 9500
     for (const t of ['.claude/CLAUDE.md', '.codex/AGENTS.md', '.config/opencode/AGENTS.md']) {
-      const n = Buffer.byteLength(render(t, work))
-      assert.ok(n <= cap, `${t} is ${n} bytes (cap ${cap})`)
+      for (const extra of [{}, { chezmoi: { os: 'darwin' } }]) {
+        const n = Buffer.byteLength(render(t, work, extra))
+        assert.ok(n <= cap, `${t} ${JSON.stringify(extra)} is ${n} bytes (cap ${cap})`)
+      }
     }
   })
 }
