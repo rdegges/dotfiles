@@ -22,7 +22,10 @@
 // skill's selector rule (mkvpropedit track:N = ffprobe stream index + 1) on a
 // real MKV with a font attachment, and the track-tag pitfall on a real MKV: a
 // per-track LANGUAGE=und tag overrides the header language in ffprobe, and
-// mkvpropedit --tags track:N: removes it and keeps the global tags. It says
+// mkvpropedit --tags track:N: removes it and keeps the global tags; on an
+// mkvmerge-muxed file, --set language alone does not fix it, and the removal
+// touches only that track (its statistics tags go with it). No step anywhere
+// calls a SABnzbd write mode. It says
 // nothing about the live Jellyfin, Seerr, SABnzbd, or *arr APIs, or whether an
 // agent obeys the text; that needs a supervised run against the real library.
 
@@ -370,6 +373,55 @@ test('track-tag pitfall: a per-track LANGUAGE=und tag overrides the header in ff
   assert.deepEqual(tagValues(probe().format.tags, 'comment'), ['keep-me'], 'the global tags did not survive')
 })
 
+// The test above builds its file with ffmpeg and never runs `--set language`, so it
+// cannot see two claims of the pitfall: that `--set language` alone does not fix the
+// fault, and that the removal touches only that track. Real releases are muxed by
+// mkvmerge, which writes per-track statistics tags (BPS, DURATION, ...); this test
+// also pins what the removal does to them, and that mkvpropedit can write them back
+// without the stale tag.
+test('track-tag pitfall on an mkvmerge-muxed file: --set language alone fails, --tags track:N: clears only that track', { skip: tagSkip }, () => {
+  const dir = mkdtempSync(join(tmpdir(), 'audit-media-'))
+  const src = join(dir, 'src.mkv')
+  const file = join(dir, 'Title (2024).mkv')
+  const ff = spawnSync('ffmpeg', ['-v', 'error', '-f', 'lavfi', '-i', 'testsrc=d=1:s=64x64', '-f', 'lavfi', '-i', 'sine=d=1',
+    '-f', 'lavfi', '-i', 'sine=d=1', '-map', '0', '-map', '1', '-map', '2', '-c:v', 'mpeg4', '-c:a', 'mp2',
+    '-metadata:s:a:0', 'language=jpn', '-metadata:s:a:1', 'language=eng', src], { encoding: 'utf8' })
+  assert.equal(ff.status, 0, ff.stderr)
+  const mux = spawnSync('mkvmerge', ['-q', '-o', file, src], { encoding: 'utf8' })
+  assert.equal(mux.status, 0, mux.stderr + mux.stdout)
+  const streams = () => JSON.parse(spawnSync('ffprobe', ['-v', 'error', '-show_streams', '-of', 'json', file], { encoding: 'utf8' }).stdout).streams
+  const tag = (s, key) => Object.entries(s.tags ?? {}).filter(([k]) => k.toLowerCase() === key.toLowerCase()).map(([, v]) => v)
+  const audio = () => streams().filter((s) => s.codec_type === 'audio')
+  const [jpn, eng] = audio().map((s) => s.index + 1)
+  assert.deepEqual(audio().map((s) => tag(s, 'language')), [['jpn'], ['eng']])
+  assert.ok(audio().every((s) => tag(s, 'BPS').length === 1), 'mkvmerge wrote no statistics tags; the premise of this test is gone')
+  const xml = join(dir, 'tags.xml')
+  writeFileSync(xml, '<?xml version="1.0"?><Tags><Tag><Targets/><Simple><Name>LANGUAGE</Name><String>und</String></Simple></Tag></Tags>')
+  const prop = (...args) => {
+    const r = spawnSync('mkvpropedit', ['-q', file, ...args], { encoding: 'utf8' })
+    assert.equal(r.status, 0, r.stderr + r.stdout)
+  }
+  prop('--tags', `track:${jpn}:${xml}`, '--tags', `track:${eng}:${xml}`)
+  assert.deepEqual(audio().map((s) => tag(s, 'language')), [['und'], ['und']])
+  // The pitfall: `--set language` alone does not fix it.
+  prop('--edit', `track:${jpn}`, '--set', 'language=jpn')
+  assert.deepEqual(tag(audio()[0], 'language'), ['und'], '`--set language` alone fixed the stale tag; the pitfall text is wrong')
+  // The fix removes that track's tags only.
+  prop('--tags', `track:${jpn}:`)
+  assert.deepEqual(audio().map((s) => tag(s, 'language')), [['jpn'], ['und']], 'the removal touched the other audio track')
+  assert.equal(tag(streams().find((s) => s.codec_type === 'video'), 'BPS').length, 1, 'the removal touched the video track tags')
+  // Observed cost: the statistics tags of that track go too.
+  assert.deepEqual(tag(audio()[0], 'BPS'), [], 'the removal kept the statistics tags (mkvtoolnix changed; revisit the pitfall)')
+  // They can be written back, and the stale tag does not come back with them.
+  prop('--add-track-statistics-tags')
+  assert.equal(tag(audio()[0], 'BPS').length, 1)
+  assert.deepEqual(tag(audio()[0], 'language'), ['jpn'])
+})
+
+test('PROPOSED CONTRACT: the track-tag pitfall says the removal also drops that track\'s statistics tags, and how to write them back', { todo: true }, () => {
+  assert.match(section('Known pitfalls'), /--add-track-statistics-tags/)
+})
+
 // --- Proposals for the maker (do not fail the suite) --------------------------
 
 test('fake auto-removal covers only complete or import-blocked queue items; library files and active downloads need an ask', () => {
@@ -612,9 +664,33 @@ test('Steps 1-4 call SABnzbd only through allow-listed read modes, with no name=
   assert.doesNotMatch(early, /\bvalue=/)
   // A bare get_config returns the whole config, API keys in clear text.
   for (const m of early.matchAll(/mode=get_config/g)) {
-    assert.match(early.slice(m.index + m[0].length), /^&section=misc&keyword=(complete_dir|download_dir)\b/,
+    // The call must end after the key: a trailing `&section=servers` or second keyword widens the read.
+    assert.match(early.slice(m.index + m[0].length), /^&section=misc&keyword=(complete_dir|download_dir)(?![\w&=])/,
       'a mode=get_config call is not limited to the misc keys complete_dir and download_dir')
   }
+})
+
+// The Steps 1-4 test above cannot see Steps 5-7. SABnzbd faults are report-only and
+// fakes leave SABnzbd through the Sonarr or Radarr queue, so no step may call a
+// SABnzbd write: a later step that adds one must change this test on purpose.
+test('no step anywhere in the skill calls a SABnzbd write mode or passes name= or value=', () => {
+  const reads = new Set(['queue', 'history', 'status', 'warnings', 'get_config'])
+  const modes = [...skill.matchAll(/mode=([A-Za-z_]+)/g)].map((m) => m[1])
+  assert.ok(modes.length >= 5, `only ${modes.length} mode= calls found; the scan is not seeing the SABnzbd reads`)
+  for (const m of modes) assert.ok(reads.has(m), `mode=${m} is not an allow-listed SABnzbd read`)
+  assert.doesNotMatch(skill, /\bname=\w/)
+  assert.doesNotMatch(skill, /\bvalue=/)
+})
+
+test('PROPOSED CONTRACT: the SABnzbd seeding-guard pass does not waive the link-count check', { todo: true }, () => {
+  const guard = bullets(subsection(section('Step 5'), 'Fix these without asking'))
+    .find((b) => b.startsWith('**Seeding guard.**'))
+  const usenet = guard.split(/(?<=\.) /).find((s) => /SABnzbd/.test(s))
+  assert.match(usenet, /link count/)
+})
+
+test('PROPOSED CONTRACT: the SABnzbd status read keeps only the listed fields (the response carries the API key)', { todo: true }, () => {
+  assert.match(section('Step 3'), /mode=status[^.]*(only these fields|drop|filter|never print|API key)/i)
 })
 
 test('Step 1: a GET is not read-only by itself, and the config read is two misc keys, never the whole config', () => {
